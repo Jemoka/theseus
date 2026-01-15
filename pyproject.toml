@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "datasets>=4.5.0",
+    "numpy>=2.4.1",
+]
 
 [dependency-groups]
 dev = [
@@ -31,5 +34,8 @@ docstring-code-line-length = 20
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-exclude = ["tests", "examples", "src/astra_rl/ext"]
+exclude = ["tests", "examples"]
 
+[[tool.mypy.overrides]]
+module = "huggingface_hub.*"
+ignore_missing_imports = true
