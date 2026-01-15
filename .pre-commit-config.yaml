@@ -1,0 +1,22 @@
+repos:
+  # Lint and format Python code
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.2
+    hooks:
+      - id: ruff-check
+        types_or: [ python, pyi ]
+        args: [ --fix ]
+      - id: ruff-format
+        types_or: [ python, pyi ]
+  # Type check Python code
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.16.1
+    hooks:
+      -  id: mypy
+         additional_dependencies: []
+         args: [
+           "--python-version=3.11",
+           "--strict",
+           "--ignore-missing-imports"
+         ]
+         exclude: ^(examples|tests|src/astra_rl/ext)/
