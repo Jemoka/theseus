@@ -13,10 +13,10 @@ repos:
     rev: v1.16.1
     hooks:
       -  id: mypy
-         additional_dependencies: []
+         additional_dependencies: ["pydantic"]
          args: [
            "--python-version=3.11",
            "--strict",
            "--ignore-missing-imports"
          ]
-         exclude: ^(examples|tests|src/astra_rl/ext)/
+         exclude: ^(examples/|tests/|scratchpad\.py$)

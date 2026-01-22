@@ -6,7 +6,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "datasets>=4.5.0",
+    "loguru>=0.7.3",
     "numpy>=2.4.1",
+    "pydantic>=2.12.5",
+    "rich>=14.2.0",
+    "torchax>=0.0.11",
 ]
 
 [dependency-groups]
@@ -19,6 +23,18 @@ dev = [
     "pre-commit>=4.2.0",
     "mypy>=1.16.1",
 ]
+cuda = [
+    "jax[cuda13]>=0.4.23"
+]
+tpu = [
+    "jax[tpu]>=0.4.23"
+]
+cpu = [
+    "jax>=0.4.23",
+]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.ruff]
 line-length = 88
@@ -31,6 +47,7 @@ docstring-code-format = true
 docstring-code-line-length = 20
 
 [tool.mypy]
+plugins = ['pydantic.mypy']
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
