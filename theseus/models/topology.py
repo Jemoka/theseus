@@ -11,12 +11,14 @@ from jax.sharding import Mesh
 from typing import Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
-from theseus.models import Axis
+from theseus.models.axis import Axis
+from theseus.models.chip import Chip
 
 
 class Topology(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    chip: Annotated[Chip, Field(description="what device is used")]
     device_count: Annotated[int, Field(description="number of devices across cluster")]
     local_device_count: Annotated[int, Field(description="number of devices locally")]
     process_count: Annotated[
@@ -39,7 +41,7 @@ class Topology(BaseModel):
     ]
 
     @classmethod
-    def new(cls, shard_into: int = 1) -> "Topology":
+    def new(cls, chip: Chip, shard_into: int = 1) -> "Topology":
         """Create a Topology instance based on the current JAX device configuration.
 
         Args:
@@ -62,6 +64,7 @@ class Topology(BaseModel):
         assert local_replicas * jax.process_count() == replicas
 
         return cls(
+            chip=chip,
             device_count=mesh.size,
             local_device_count=local,
             process_count=jax.process_count(),

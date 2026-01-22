@@ -1,38 +1,49 @@
 """
-Hardware information.
+Cluster information.
 """
 
-from pydantic import BaseModel, Field
 from typing import Annotated
+from pydantic import BaseModel, Field, model_validator
+
+from theseus.models.chip import Chip
 
 
-class Chip(BaseModel):
-    name: Annotated[str, Field(description="name of hardware")]
-    display_name: Annotated[
-        str, Field(description="display name for hardware for logs")
+class Cluster(BaseModel):
+    name: str
+
+
+class HardwareRequest(BaseModel):
+    """
+    Minimal, intent-level hardware request.
+
+    Assumptions:
+      - Storage is uniform across hosts (distributed FS).
+      - Interconnects / topology are cluster concerns.
+    """
+
+    chip: Annotated[
+        Chip,
+        Field(description="chip type"),
     ]
-    memory: Annotated[int, Field(description="number of bytes of memory available")]
+    min_chips: Annotated[
+        int,
+        Field(ge=1, description="minimum number of chips requested"),
+    ]
+    preferred_hosts: Annotated[
+        list[Cluster],
+        Field(default_factory=list, description="hosts to prefer"),
+    ]
+    forbidden_hosts: Annotated[
+        list[str],
+        Field(default_factory=list, description="hosts to avoid"),
+    ]
 
+    @model_validator(mode="after")
+    def _validate(self) -> "HardwareRequest":
+        overlap = set(self.preferred_hosts) & set(self.forbidden_hosts)
+        if overlap:
+            raise ValueError(
+                f"Hosts cannot be both preferred and forbidden: {sorted([i.name for i in overlap])}"
+            )
 
-SUPPORTED_HARDWARE = {
-    "h200": Chip(
-        name="h200",
-        display_name="Nvidia H200",
-        memory=int(143.8 * 1024**3),  # 143.8 GB
-    ),
-    "h100": Chip(
-        name="h100",
-        display_name="Nvidia H100",
-        memory=int(80 * 1024**3),  # 80 GB
-    ),
-    "a100-sxm4-80gb": Chip(
-        name="a100-sxm4-80gb",
-        display_name="Nvidia A100 SXM4 80GB",
-        memory=int(80 * 1024**3),  # 80 GB
-    ),
-    "a100-pcie-40gb": Chip(
-        name="a100-pcie-40gb",
-        display_name="Nvidia A100 PCIe 40GB",
-        memory=int(40 * 1024**3),  # 40 GB
-    ),
-}
+        return self

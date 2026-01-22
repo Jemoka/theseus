@@ -1,0 +1,119 @@
+import os
+import random
+
+from abc import abstractmethod
+from pydantic import BaseModel
+from loguru import logger
+from typing import Generic, TypeVar, Dict, Any, Tuple
+
+import jax
+import json
+import numpy as np
+import orbax.checkpoint as ocp
+from jax.experimental import multihost_utils
+
+from theseus.models import _BaseJob, ExecutionSpec, PyTree
+
+C = TypeVar("C", bound=BaseModel)
+
+
+class Job(_BaseJob, Generic[C]):
+    def __init__(self, args: C, spec: ExecutionSpec):
+        self.args = args
+        self.spec = spec
+        self.key = jax.random.PRNGKey(0)
+
+    def main_process(self) -> bool:
+        res: bool = jax.process_index() == 0
+        return res
+
+    @abstractmethod
+    def run(self) -> None:
+        """Run the job, assuming all hosts have setup"""
+        raise NotImplementedError()
+
+    def __call__(self) -> None:
+        logger.debug(f"JOB {self.spec.name} | pre-start sync")
+        multihost_utils.sync_global_devices(f"{self.spec.name}:start")
+        logger.debug(f"JOB {self.spec.name} | syncronized, starting")
+        self.run()
+        logger.debug(f"JOB {self.spec.name} | finishd, waiting for everyone...")
+        multihost_utils.sync_global_devices(f"{self.spec.name}:finish")
+        self.finish()
+
+    def finish(self) -> None: ...
+
+    def get_tree_and_metadata(
+        self, path: str, template_tree: PyTree[Any]
+    ) -> Tuple[PyTree[Any], Dict[str, Any]]:
+        try:
+            rng_state = np.load(os.path.join(path, "rng.npy"), allow_pickle=True).item()
+            random.setstate(rng_state["python_random"])
+            np.random.set_state(rng_state["numpy_random"])
+            self.key = jax.random.PRNGKey(rng_state["jax_random"])
+        except EOFError:
+            self.key = jax.random.PRNGKey(0)
+
+        # Load checkpoint using Orbax
+        checkpointer = ocp.StandardCheckpointer()
+        restored = checkpointer.restore(
+            os.path.join(path, "checkpoint"), target=template_tree
+        )
+
+        # Load config
+        with open(os.path.join(path, "config.json"), "r") as df:
+            data = json.load(df)
+
+        return restored, data
+
+    def save_tree_and_metadata(
+        self, path: str, tree: PyTree[Any], metadata: Dict[str, Any]
+    ) -> None:
+        logger.debug("CHECKPOINT | saving checkpoint at {}", path)
+
+        multihost_utils.sync_global_devices("save:pre")
+
+        # Write directly to shared filesystem path (multi-host safe)
+        if self.main_process():
+            os.makedirs(path, exist_ok=True)
+            logger.debug("CHECKPOINT | created checkpoint directory")
+
+            # Save random state
+            rng_state = {
+                "python_random": random.getstate(),
+                "numpy_random": np.random.get_state(),
+                "jax_random": int(self.key[0]),  # Save seed
+            }
+            np.save(os.path.join(path, "rng.npy"), rng_state)
+            logger.debug("CHECKPOINT | saved random state")
+
+            # Save config
+            with open(os.path.join(path, "config.json"), "w") as df:
+                json.dump(
+                    metadata,
+                    df,
+                )
+            logger.debug("CHECKPOINT | saved configuration")
+
+        multihost_utils.sync_global_devices("save:mid")
+
+        # Save checkpoint - convert host-local arrays to global arrays for multi-host
+        # This handles replicated scalars like 'step' that have SingleDeviceSharding
+        checkpointer = ocp.StandardCheckpointer()
+
+        # Convert any host-local arrays to globally replicated arrays
+        def make_global_array(x: PyTree[Any]) -> PyTree[Any]:
+            if isinstance(x, jax.Array):
+                # If it's a host-local single-device array, make it globally replicated
+                if len(x.sharding.device_set) == 1:
+                    broadcasted: PyTree[Any] = multihost_utils.broadcast_one_to_all(x)
+                    return broadcasted
+            return x
+
+        state_to_save = jax.tree_util.tree_map(make_global_array, tree)
+
+        checkpointer.save(os.path.join(path, "checkpoint"), state_to_save, force=True)
+        checkpointer.wait_until_finished()
+        logger.debug("CHECKPOINT | saved training state")
+
+        multihost_utils.sync_global_devices("save:post")
