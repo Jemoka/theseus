@@ -17,20 +17,17 @@ from theseus.base import _BaseJob, ExecutionSpec, PyTree
 C = TypeVar("C", bound=BaseModel)
 
 
-class Job(_BaseJob, Generic[C]):
+class BasicJob(_BaseJob, Generic[C]):
     def __init__(self, args: C, spec: ExecutionSpec):
         self.args = args
         self.spec = spec
-        self.key = jax.random.PRNGKey(0)
-
-    def main_process(self) -> bool:
-        res: bool = jax.process_index() == 0
-        return res
 
     @abstractmethod
     def run(self) -> None:
         """Run the job, assuming all hosts have setup"""
         raise NotImplementedError()
+
+    def finish(self) -> None: ...
 
     def __call__(self) -> None:
         logger.debug(f"JOB {self.spec.name} | pre-start sync")
@@ -41,7 +38,15 @@ class Job(_BaseJob, Generic[C]):
         multihost_utils.sync_global_devices(f"{self.spec.name}:finish")
         self.finish()
 
-    def finish(self) -> None: ...
+
+class CheckpointedJob(BasicJob[C], Generic[C]):
+    def __init__(self, args: C, spec: ExecutionSpec):
+        super().__init__(args, spec)
+        self.key = jax.random.PRNGKey(0)
+
+    def main_process(self) -> bool:
+        res: bool = jax.process_index() == 0
+        return res
 
     def get_tree_and_metadata(
         self, path: str, template_tree: PyTree[Any]

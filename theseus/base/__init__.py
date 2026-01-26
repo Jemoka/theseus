@@ -2,6 +2,7 @@ from .axis import Axis as Axis
 from .topology import Topology as Topology
 from .chip import Chip, SUPPORTED_CHIPS
 from .job import _BaseJob, JobSpec, ExecutionSpec
+from .hardware import local
 
 from typing import TypeVar, TypeAlias
 
@@ -19,4 +20,5 @@ __all__ = [
     "JobSpec",
     "ExecutionSpec",
     "PyTree",
+    "local",
 ]

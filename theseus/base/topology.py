@@ -44,10 +44,10 @@ class Topology(BaseModel):
     def new(cls, chip: Chip, shard_into: int = 1) -> "Topology":
         """Create a Topology instance based on the current JAX device configuration.
 
-        Args:
-            shard_into (int): Number of shards to divide the devices into; note this isn't
-                            the SPMD axis, and instead is the number of tensor parallel shards.
-                            The SPMD axis will be determined automatically based on the number of devices.
+        spec       Args:
+                   shard_into (int): Number of shards to divide the devices into; note this isn't
+                                   the SPMD axis, and instead is the number of tensor parallel shards.
+                                   The SPMD axis will be determined automatically based on the number of devices.
 
         """
         devs = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
