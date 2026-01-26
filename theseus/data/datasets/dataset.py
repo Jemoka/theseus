@@ -47,9 +47,6 @@ class StreamingDataset(ABC, Generic[C]):
     @abstractmethod
     def __iter__(self) -> Iterator[C]: ...
 
-    def __len__(self) -> int:
-        raise NotImplementedError("This dataset does not support __len__")
-
 
 StreamingStringDataset = StreamingDataset[str]
 StreamingChatTemplateDataset = StreamingDataset[ChatTemplate]

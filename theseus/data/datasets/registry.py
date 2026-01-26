@@ -6,7 +6,7 @@ from theseus.data.datasets.sst2 import SST2
 from theseus.data.datasets.winogrande import Winogrande
 
 DATASETS = {
-    "fw": FineWeb,
+    "fineweb": FineWeb,
     "mnli": MNLI,
     "qqp": QQP,
     "siqa": SIQA,

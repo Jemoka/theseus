@@ -33,4 +33,9 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         display_name="Nvidia A100 PCIe 40GB",
         memory=int(40 * 1024**3),
     ),
+    "a6000": Chip(
+        name="a6000",
+        display_name="Nvidia RTX A6000",
+        memory=int(48 * 1024**3),
+    ),
 }

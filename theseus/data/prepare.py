@@ -1,10 +1,11 @@
 import os
 import json
 import random
+import time
 from typing import Optional, Union, cast, Any
-from tqdm import tqdm
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from loguru import logger
 
 from theseus.jobs import BasicJob
 from theseus.data.datasets import (
@@ -30,6 +31,16 @@ class PrepareDatasetConfigBase(BaseModel):
     )
     val_pct: float = Field(default=0.05, description="Validation split percentage")
     seed: int = Field(default=2357, description="Random seed for splitting")
+
+    @field_validator("name")
+    @classmethod
+    def validate_dataset_name(cls, v: str) -> str:
+        if v not in DATASETS:
+            available = ", ".join(sorted(DATASETS.keys()))
+            raise ValueError(
+                f"Dataset '{v}' not found in registry. Available datasets: {available}"
+            )
+        return v
 
 
 class PrepareDatasetConfig(PrepareDatasetConfigBase):
@@ -74,6 +85,33 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
         output_path = data_dir / output_name
         output_path.mkdir(parents=True, exist_ok=True)
 
+        # Check if already complete
+        shape_json_path = output_path / "shape.json"
+        if shape_json_path.exists():
+            with open(shape_json_path) as f:
+                existing_shapes = json.load(f)
+
+            # Check if all files exist and have correct shapes
+            all_complete = True
+            for split_name, shape in existing_shapes.items():
+                tokens_file = output_path / f"{split_name}.bin"
+                mask_file = output_path / f"{split_name}.bin.mask"
+
+                if not (tokens_file.exists() and mask_file.exists()):
+                    all_complete = False
+                    break
+
+                # Verify file sizes match expected shape
+                expected_size = shape[0] * shape[1] * np.uint32().itemsize
+                if tokens_file.stat().st_size != expected_size:
+                    all_complete = False
+                    break
+
+            if all_complete:
+                logger.info(f"Dataset already prepared at {output_path}")
+                logger.info(f"Shapes: {existing_shapes}")
+                return
+
         # Get dataset from registry
         dataset_cls: Any = DATASETS[args.name]
         dataset: Union[ChatTemplateDataset, StringDataset] = dataset_cls(
@@ -113,6 +151,9 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
             max_length = 0
             min_length = float("inf")
 
+            start_time = time.time()
+            log_interval = max(1, num_samples // 20)  # Log ~20 times per split
+
             # Create memmap files
             tokens_filename = os.path.join(output_path, f"{split_name}.bin")
             mask_filename = os.path.join(output_path, f"{split_name}.bin.mask")
@@ -131,10 +172,10 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
                 shape=(num_samples, args.block_size),
             )
 
+            logger.info(f"Processing {split_name} split: {num_samples} samples")
+
             # Process each example
-            for arr_idx, dataset_idx in enumerate(
-                tqdm(split_indices, desc=f"writing {split_name}.bin")
-            ):
+            for arr_idx, dataset_idx in enumerate(split_indices):
                 item = dataset[dataset_idx]
 
                 # Encode based on type
@@ -171,6 +212,19 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
                     mask = [False] * padding_len + [True] * seq_len
                     mask_arr[arr_idx] = np.array(mask, dtype=np.bool_)
 
+                # Periodic logging
+                if (arr_idx + 1) % log_interval == 0:
+                    elapsed = time.time() - start_time
+                    rate = (arr_idx + 1) / elapsed
+                    avg_len = total_length / (arr_idx + 1)
+                    total_tokens = (arr_idx + 1) * args.block_size
+                    logger.info(
+                        f"[{split_name}] {arr_idx + 1}/{num_samples} samples "
+                        f"({100 * (arr_idx + 1) / num_samples:.1f}%) | "
+                        f"{rate:.1f} samples/s | {total_tokens:,} tokens | "
+                        f"avg_len={avg_len:.1f}"
+                    )
+
             # Flush to disk
             tokens_arr.flush()
             mask_arr.flush()
@@ -178,24 +232,26 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
             # Track shape
             shapes[split_name] = [num_samples, args.block_size]
 
-            # Print statistics
+            # Log statistics
             avg_length = total_length / num_samples if num_samples > 0 else 0
-            print(f"\n{split_name.upper()} STATISTICS:")
-            print(f"  Total samples: {num_samples}")
-            print(f"  Shape: ({num_samples}, {args.block_size})")
-            print(
+            logger.info(f"{split_name.upper()} STATISTICS:")
+            logger.info(f"  Total samples: {num_samples}")
+            logger.info(f"  Shape: ({num_samples}, {args.block_size})")
+            logger.info(
                 f"  Truncated: {num_truncated} ({100 * num_truncated / num_samples:.2f}%)"
             )
-            print(f"  Padded: {num_padded} ({100 * num_padded / num_samples:.2f}%)")
-            print(f"  Exact fit: {num_samples - num_truncated - num_padded}")
-            print(
+            logger.info(
+                f"  Padded: {num_padded} ({100 * num_padded / num_samples:.2f}%)"
+            )
+            logger.info(f"  Exact fit: {num_samples - num_truncated - num_padded}")
+            logger.info(
                 f"  Sequence lengths - Min: {min_length}, Max: {max_length}, Avg: {avg_length:.2f}"
             )
 
         # Write shape.json
         with open(os.path.join(output_path, "shape.json"), "w") as f:
             json.dump(shapes, f, indent=4)
-        print(f"\nWrote shape.json to {output_path}: {shapes}")
+        logger.info(f"Wrote shape.json to {output_path}: {shapes}")
 
 
 class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
@@ -242,19 +298,74 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
         val_filename = os.path.join(output_path, "val.bin")
         dtype = np.uint32  # Use uint32 for cl100k
 
-        # Start with initial size and grow as needed
-        initial_size = 1_000_000
-        train_arr = np.memmap(
-            train_filename, dtype=dtype, mode="w+", shape=(initial_size,)
-        )
-        val_arr = np.memmap(val_filename, dtype=dtype, mode="w+", shape=(initial_size,))
-
+        # Check for existing data and resume if needed
         train_idx = 0
         val_idx = 0
+        samples_to_skip = 0
+
+        if os.path.exists(train_filename) and os.path.exists(val_filename):
+            logger.info("Found existing data files, checking for resume point...")
+
+            # Find last non-zero position in train file using binary search
+            train_resume_idx = self._find_last_nonzero(train_filename, dtype)
+            val_resume_idx = self._find_last_nonzero(val_filename, dtype)
+
+            if train_resume_idx > 0 or val_resume_idx > 0:
+                train_idx = train_resume_idx
+                val_idx = val_resume_idx
+
+                # Estimate samples processed based on ratio
+                # This is approximate - we use the val_pct to estimate
+                total_tokens = train_idx + val_idx
+                samples_to_skip = int(total_tokens * 0.1)  # Conservative estimate
+
+                logger.info(
+                    f"Resuming from train_idx={train_idx:,}, val_idx={val_idx:,}"
+                )
+                logger.info(f"Skipping approximately {samples_to_skip:,} samples")
+
+                # Truncate files to resume point
+                with open(train_filename, "r+b") as f:
+                    f.truncate(train_idx * dtype().itemsize)
+                with open(val_filename, "r+b") as f:
+                    f.truncate(val_idx * dtype().itemsize)
+
+        # Start with initial size and grow as needed
+        initial_size = max(1_000_000, train_idx + 1_000_000)
+        train_arr = np.memmap(
+            train_filename,
+            dtype=dtype,
+            mode="r+" if train_idx > 0 else "w+",
+            shape=(initial_size,),
+        )
+        val_initial_size = max(1_000_000, val_idx + 1_000_000)
+        val_arr = np.memmap(
+            val_filename,
+            dtype=dtype,
+            mode="r+" if val_idx > 0 else "w+",
+            shape=(val_initial_size,),
+        )
+
+        # Logging state
+        start_time = time.time()
+        last_log_time = start_time
+        log_interval = 1000  # Log every 1000 samples
+        last_log_sample = 0
+        last_log_train_idx = train_idx
+        last_log_val_idx = val_idx
+
+        logger.info("Processing streaming dataset...")
+        if samples_to_skip > 0:
+            logger.info(f"Resuming from {samples_to_skip:,} samples")
 
         # Iterate through dataset
         sample_count = 0
-        for item in tqdm(dataset, desc="processing dataset"):
+        for item in dataset:
+            # Skip already processed samples
+            if sample_count < samples_to_skip:
+                sample_count += 1
+                continue
+
             # Limit samples if specified
             if args.max_samples is not None and sample_count >= args.max_samples:
                 break
@@ -308,6 +419,38 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
                 if train_idx % 100_000 == 0:
                     train_arr.flush()
 
+            # Periodic logging
+            if sample_count % log_interval == 0:
+                current_time = time.time()
+                elapsed_total = current_time - start_time
+                elapsed_since_log = current_time - last_log_time
+
+                samples_since_log = sample_count - last_log_sample
+                train_tokens_since_log = train_idx - last_log_train_idx
+                val_tokens_since_log = val_idx - last_log_val_idx
+                tokens_since_log = train_tokens_since_log + val_tokens_since_log
+
+                sample_rate = (
+                    samples_since_log / elapsed_since_log
+                    if elapsed_since_log > 0
+                    else 0
+                )
+                token_rate = (
+                    tokens_since_log / elapsed_since_log if elapsed_since_log > 0 else 0
+                )
+
+                logger.info(
+                    f"[{sample_count:,} samples] "
+                    f"{sample_rate:.1f} samples/s | {token_rate:,.0f} tokens/s | "
+                    f"train: {train_idx:,} tokens | val: {val_idx:,} tokens | "
+                    f"elapsed: {elapsed_total:.1f}s"
+                )
+
+                last_log_time = current_time
+                last_log_sample = sample_count
+                last_log_train_idx = train_idx
+                last_log_val_idx = val_idx
+
         # Trim train file to actual size
         train_arr.flush()
         train_arr._mmap.close()
@@ -324,6 +467,48 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
         with open(val_filename, "r+b") as f:
             f.truncate(val_idx * dtype().itemsize)
 
-        print(f"\nDone! Created in {output_path}:")
-        print(f"  train.bin: {train_idx:,} tokens")
-        print(f"  val.bin: {val_idx:,} tokens")
+        logger.info(f"Done! Created in {output_path}:")
+        logger.info(f"  train.bin: {train_idx:,} tokens")
+        logger.info(f"  val.bin: {val_idx:,} tokens")
+
+    def _find_last_nonzero(self, filepath: str, dtype: type) -> int:
+        """
+        Find the last non-zero position in a memmap file using binary search.
+        Returns the index of the last non-zero element + 1 (i.e., the write position).
+        """
+        if not os.path.exists(filepath):
+            return 0
+
+        filesize = os.path.getsize(filepath)
+        if filesize == 0:
+            return 0
+
+        data = np.memmap(filepath, dtype=dtype, mode="r")
+
+        # If file is very small or first element is zero, start from beginning
+        if len(data) == 0 or data[0] == 0:
+            del data
+            return 0
+
+        # Binary search for last non-zero position
+        lo = 0
+        hi = len(data) - 1
+
+        while lo < hi:
+            mid = ((hi - lo) // 2) + lo
+
+            # Check if we're in a run of zeros
+            if mid > 0 and data[mid] == 0 and data[mid - 1] == 0:
+                hi = mid
+            elif data[mid] != 0:
+                lo = mid + 1
+            else:
+                # Linear search backwards to find exact boundary
+                while mid > 0 and data[mid] == 0:
+                    mid -= 1
+                lo = mid + 1
+                break
+
+        result = lo
+        del data
+        return result

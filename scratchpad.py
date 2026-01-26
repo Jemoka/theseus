@@ -1,5 +1,9 @@
-from theseus.base import SUPPORTED_CHIPS
-from theseus.training.utils import estimate_max_batch_size
+from theseus.base import local, ExecutionSpec
+from theseus.data import PreparePretrainingDatasetConfig, PreparePretrainingDatasetJob
 
-h200 = SUPPORTED_CHIPS["h200"]
-estimate_max_batch_size(1_900_000_000, 512, h200)
+hardware = local("/Users/houjun/theseus/theseus-prod-fs", "/Users/houjun/Worktrees")
+spec = ExecutionSpec(name="test", hardware=hardware, distributed=False)
+config = PreparePretrainingDatasetConfig(name="fineweb")
+spec.model_dump()
+job = PreparePretrainingDatasetJob(config, spec)
+job()

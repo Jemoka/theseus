@@ -10,5 +10,5 @@ class FineWeb(StreamingPretrainingDataset):
         )
 
     def __iter__(self) -> Iterator[str]:
-        it: Iterator[str] = self.ds["text"]
-        return it
+        for i in self.ds["text"]:
+            yield i
