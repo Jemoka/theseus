@@ -1,3 +1,3 @@
-from .job import CheckpointedJob
+from .job import CheckpointedJob, BasicJob
 
-__all__ = ["CheckpointedJob"]
+__all__ = ["CheckpointedJob", "BasicJob"]

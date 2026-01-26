@@ -1,22 +1,22 @@
-# from dataclasses import dataclass
-# from typing import Union, List
+from dataclasses import dataclass
+from typing import Union, List, Any
 
-# from theseus.data.datasets import Dataset, StreamingDataset
-
-
-# @dataclass
-# class RecipeEntry:
-#     dataset: Union[Dataset, StreamingDataset]
-#     split: float
+from theseus.data.datasets import Dataset, StreamingDataset
 
 
-# Recipe = List[RecipeEntry]
+@dataclass
+class RecipeEntry:
+    dataset: Union[Dataset[Any], StreamingDataset[Any]]
+    split: float
 
 
-# # from theseus.base import local, ExecutionSpec
+Recipe = List[RecipeEntry]
 
-# # spec = ExecutionSpec(
-# #     name="tokenize",
-# #     hardware=local("/Users/houjun/theseus/theseus-prod-fs", "/Users/houjun/Worktrees/"),
-# #     distributed=False,
-# # )
+
+# from theseus.base import local, ExecutionSpec
+
+# spec = ExecutionSpec(
+#     name="tokenize",
+#     hardware=local("/Users/houjun/theseus/theseus-prod-fs", "/Users/houjun/Worktrees/"),
+#     distributed=False,
+# )

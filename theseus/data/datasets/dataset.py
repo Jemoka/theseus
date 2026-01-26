@@ -4,13 +4,7 @@ from dataclasses import dataclass, field
 
 C = TypeVar("C")
 
-
-class Dataset(ABC, Generic[C]):
-    @abstractmethod
-    def __getitem__(self, indx: int) -> C: ...
-
-    @abstractmethod
-    def __len__(self) -> int: ...
+####### chat infrastructure #######
 
 
 @dataclass
@@ -22,8 +16,31 @@ class ChatTurn:
 
 ChatTemplate = List[ChatTurn]
 
+####### dataset #######
+
+
+class Dataset(ABC, Generic[C]):
+    @abstractmethod
+    def __getitem__(self, indx: int) -> C: ...
+
+    @abstractmethod
+    def __len__(self) -> int: ...
+
+
 StringDataset = Dataset[str]
 ChatTemplateDataset = Dataset[ChatTemplate]
+
+
+class PretrainingDataset(StringDataset):
+    """
+    Pretraining dataset, identical to Dataset[str] but is tokenized differently.
+    Specifically, this dataset is tokenized irrespective of item boundaries.
+    """
+
+    ...
+
+
+####### streaming datasets #######
 
 
 class StreamingDataset(ABC, Generic[C]):
@@ -36,3 +53,12 @@ class StreamingDataset(ABC, Generic[C]):
 
 StreamingStringDataset = StreamingDataset[str]
 StreamingChatTemplateDataset = StreamingDataset[ChatTemplate]
+
+
+class StreamingPretrainingDataset(StreamingStringDataset):
+    """
+    Pretraining dataset, identical to Dataset[str] but is tokenized differently.
+    Specifically, this dataset is tokenized irrespective of item boundaries.
+    """
+
+    ...

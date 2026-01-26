@@ -22,6 +22,10 @@ class BasicJob(_BaseJob, Generic[C]):
         self.args = args
         self.spec = spec
 
+    def main_process(self) -> bool:
+        res: bool = jax.process_index() == 0
+        return res
+
     @abstractmethod
     def run(self) -> None:
         """Run the job, assuming all hosts have setup"""
@@ -43,10 +47,6 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
     def __init__(self, args: C, spec: ExecutionSpec):
         super().__init__(args, spec)
         self.key = jax.random.PRNGKey(0)
-
-    def main_process(self) -> bool:
-        res: bool = jax.process_index() == 0
-        return res
 
     def get_tree_and_metadata(
         self, path: str, template_tree: PyTree[Any]
