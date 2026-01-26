@@ -1,7 +1,8 @@
 from typing import Optional
+import re
 import tiktoken
 
-from theseus.data.datasets import ChatTemplate
+from theseus.data.datasets import ChatTemplate, ChatTurn
 
 
 def get_chatml_encoder() -> tiktoken.Encoding:
@@ -37,18 +38,52 @@ def encode_chat_template(
     <|im_start|>assistant
     {message}<|im_end|>
     """
-    tokens = []
+    # Build the full string first
+    parts = []
 
     # Add system prompt if provided
     if system_prompt:
-        tokens.extend(encoder.encode("<|im_start|>system\n"))
-        tokens.extend(encoder.encode(system_prompt))
-        tokens.extend(encoder.encode("<|im_end|>\n"))
+        parts.append("<|im_start|>system\n")
+        parts.append(system_prompt)
+        parts.append("<|im_end|>\n")
 
     # Add each turn
     for turn in template:
-        tokens.extend(encoder.encode(f"<|im_start|>{turn.role}\n"))
-        tokens.extend(encoder.encode(turn.message))
-        tokens.extend(encoder.encode("<|im_end|>\n"))
+        parts.append(f"<|im_start|>{turn.role}\n")
+        parts.append(turn.message)
+        parts.append("<|im_end|>\n")
+
+    # Concatenate and tokenize all at once
+    full_text = "".join(parts)
+    tokens: list[int] = encoder.encode(full_text, allowed_special="all")
 
     return tokens
+
+
+def decode_chat_template(
+    tokens: list[int],
+    encoder: tiktoken.Encoding,
+) -> ChatTemplate:
+    """
+    Decode tokens back into a ChatTemplate.
+
+    Parses chatml format:
+    <|im_start|>role
+    message<|im_end|>
+    """
+    # Decode tokens to text
+    text = encoder.decode(tokens)
+
+    # Parse chatml format
+    # Pattern: <|im_start|>role\nmessage<|im_end|>
+    pattern = r"<\|im_start\|>(.*?)\n(.*?)<\|im_end\|>"
+    matches = re.findall(pattern, text, re.DOTALL)
+
+    # Build ChatTemplate, skipping system messages
+    template = []
+    for role, message in matches:
+        role = role.strip()
+        message = message.strip()
+        template.append(ChatTurn(role=role, message=message))
+
+    return template
