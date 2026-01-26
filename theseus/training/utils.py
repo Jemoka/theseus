@@ -2,7 +2,7 @@
 Small utilities useful during training.
 """
 
-from theseus.models import Topology
+from theseus.base import Topology
 
 
 def find_accumulation_steps(

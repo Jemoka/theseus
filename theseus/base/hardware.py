@@ -5,7 +5,7 @@ Cluster information.
 from typing import Annotated
 from pydantic import BaseModel, Field, model_validator
 
-from theseus.models.chip import Chip
+from theseus.base.chip import Chip
 
 
 class Cluster(BaseModel):

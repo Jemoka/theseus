@@ -1,4 +1,4 @@
-from theseus.models import SUPPORTED_CHIPS
+from theseus.base import SUPPORTED_CHIPS
 from theseus.training.utils import estimate_max_batch_size
 
 h200 = SUPPORTED_CHIPS["h200"]

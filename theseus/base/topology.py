@@ -11,8 +11,8 @@ from jax.sharding import Mesh
 from typing import Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
-from theseus.models.axis import Axis
-from theseus.models.chip import Chip
+from theseus.base.axis import Axis
+from theseus.base.chip import Chip
 
 
 class Topology(BaseModel):

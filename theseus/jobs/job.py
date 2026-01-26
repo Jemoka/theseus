@@ -12,7 +12,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 from jax.experimental import multihost_utils
 
-from theseus.models import _BaseJob, ExecutionSpec, PyTree
+from theseus.base import _BaseJob, ExecutionSpec, PyTree
 
 C = TypeVar("C", bound=BaseModel)
 

@@ -6,8 +6,8 @@ from abc import ABC
 from typing import Type, Any, Optional
 from pydantic import BaseModel, Field, ImportString, field_validator
 
-from theseus.models.topology import Topology
-from theseus.models.hardware import HardwareRequest
+from theseus.base.topology import Topology
+from theseus.base.hardware import HardwareRequest
 
 
 class JobSpec(BaseModel):
