@@ -1,7 +1,7 @@
 import os
 import random
 
-from abc import abstractmethod
+from abc import abstractmethod, abstractproperty
 from pydantic import BaseModel
 from loguru import logger
 from typing import Generic, TypeVar, Dict, Any, Tuple
@@ -26,6 +26,11 @@ class BasicJob(_BaseJob, Generic[C]):
         res: bool = jax.process_index() == 0
         return res
 
+    @abstractproperty
+    def done(self) -> bool:
+        """Check if job is already complete (idempotency check)"""
+        raise NotImplementedError()
+
     @abstractmethod
     def run(self) -> None:
         """Run the job, assuming all hosts have setup"""
@@ -34,6 +39,10 @@ class BasicJob(_BaseJob, Generic[C]):
     def finish(self) -> None: ...
 
     def __call__(self) -> None:
+        if self.done:
+            logger.info(f"JOB {self.spec.name} | already done, skipping")
+            return
+        logger.info(f"JOB {self.spec.name} | starting")
         logger.debug(f"JOB {self.spec.name} | pre-start sync")
         multihost_utils.sync_global_devices(f"{self.spec.name}:start")
         logger.debug(f"JOB {self.spec.name} | syncronized, starting")
@@ -48,9 +57,35 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         super().__init__(args, spec)
         self.key = jax.random.PRNGKey(0)
 
+    def _get_checkpoint_path(self, suffix: str) -> str:
+        """
+        Compute checkpoint path based on process index, project, group, and job name.
+
+        Directory structure: checkpoints_dir/project/group/job_name/suffix/
+        - project: defaults to "misc" if None
+        - group: defaults to "default" if None or empty string
+        - job_name: required (self.spec.name)
+        - suffix: provided by caller (e.g., "step_1000", "final")
+        """
+        process_index = jax.process_index()
+        checkpoint_dir = self.spec.hardware.hosts[process_index].cluster.checkpoints_dir
+
+        # Handle project: use default "theseus" if None
+        project = self.spec.project or "misc"
+
+        # Handle group: use "default" if None or empty string
+        group = self.spec.group if self.spec.group else "default"
+
+        # Build path: checkpoints_dir/project/group/job_name/suffix/
+        path = checkpoint_dir / project / group / self.spec.name / suffix
+
+        return str(path)
+
     def get_tree_and_metadata(
-        self, path: str, template_tree: PyTree[Any]
+        self, suffix: str, template_tree: PyTree[Any]
     ) -> Tuple[PyTree[Any], Dict[str, Any]]:
+        path = self._get_checkpoint_path(suffix)
+
         try:
             rng_state = np.load(os.path.join(path, "rng.npy"), allow_pickle=True).item()
             random.setstate(rng_state["python_random"])
@@ -72,8 +107,9 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         return restored, data
 
     def save_tree_and_metadata(
-        self, path: str, tree: PyTree[Any], metadata: Dict[str, Any]
+        self, suffix: str, tree: PyTree[Any], metadata: Dict[str, Any]
     ) -> None:
+        path = self._get_checkpoint_path(suffix)
         logger.debug("CHECKPOINT | saving checkpoint at {}", path)
 
         multihost_utils.sync_global_devices("save:pre")

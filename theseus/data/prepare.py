@@ -72,6 +72,55 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
     Creates .bin and .bin.mask files for train/val splits.
     """
 
+    @property
+    def done(self) -> bool:
+        """Check if dataset preparation is complete with the same config"""
+        args = self.args
+
+        # Construct output path
+        data_dir = self.spec.hardware.hosts[0].cluster.data_dir
+        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
+        output_path = data_dir / output_name
+
+        # Check if config.json exists
+        config_path = output_path / "config.json"
+        if not config_path.exists():
+            return False
+
+        try:
+            # Load and compare config
+            with open(config_path) as f:
+                saved_config = json.load(f)
+
+            current_config = args.model_dump()
+            if saved_config != current_config:
+                return False
+
+            # Check if shape.json exists
+            shape_json_path = output_path / "shape.json"
+            if not shape_json_path.exists():
+                return False
+
+            with open(shape_json_path) as f:
+                existing_shapes = json.load(f)
+
+            # Check if all files exist and have correct shapes
+            for split_name, shape in existing_shapes.items():
+                tokens_file = output_path / f"{split_name}.bin"
+                mask_file = output_path / f"{split_name}.bin.mask"
+
+                if not (tokens_file.exists() and mask_file.exists()):
+                    return False
+
+                # Verify file sizes match expected shape
+                expected_size = shape[0] * shape[1] * np.uint32().itemsize
+                if tokens_file.stat().st_size != expected_size:
+                    return False
+
+            return True
+        except Exception:
+            return False
+
     def run(self) -> None:
         args = self.args
 
@@ -86,31 +135,13 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
         output_path.mkdir(parents=True, exist_ok=True)
 
         # Check if already complete
-        shape_json_path = output_path / "shape.json"
-        if shape_json_path.exists():
+        if self.done:
+            logger.info(f"Dataset already prepared at {output_path}")
+            shape_json_path = output_path / "shape.json"
             with open(shape_json_path) as f:
                 existing_shapes = json.load(f)
-
-            # Check if all files exist and have correct shapes
-            all_complete = True
-            for split_name, shape in existing_shapes.items():
-                tokens_file = output_path / f"{split_name}.bin"
-                mask_file = output_path / f"{split_name}.bin.mask"
-
-                if not (tokens_file.exists() and mask_file.exists()):
-                    all_complete = False
-                    break
-
-                # Verify file sizes match expected shape
-                expected_size = shape[0] * shape[1] * np.uint32().itemsize
-                if tokens_file.stat().st_size != expected_size:
-                    all_complete = False
-                    break
-
-            if all_complete:
-                logger.info(f"Dataset already prepared at {output_path}")
-                logger.info(f"Shapes: {existing_shapes}")
-                return
+            logger.info(f"Shapes: {existing_shapes}")
+            return
 
         # Get dataset from registry
         dataset_cls: Any = DATASETS[args.name]
@@ -253,12 +284,65 @@ class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
             json.dump(shapes, f, indent=4)
         logger.info(f"Wrote shape.json to {output_path}: {shapes}")
 
+        # Write config.json for idempotency checking
+        with open(os.path.join(output_path, "config.json"), "w") as f:
+            json.dump(args.model_dump(), f, indent=4)
+        logger.info(f"Wrote config.json to {output_path}")
+
 
 class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
     """
     Prepare pretraining datasets with streaming support.
     Creates train.bin and val.bin files with variable-length sequences.
     """
+
+    @property
+    def done(self) -> bool:
+        """
+        Check if dataset preparation is complete with the same config.
+        For streaming datasets, we can only verify completion if max_samples is set.
+        """
+        args = self.args
+
+        # If max_samples is not set, streaming job is never truly "done"
+        if args.max_samples is None:
+            return False
+
+        # Construct output path
+        data_dir = self.spec.hardware.hosts[0].cluster.data_dir
+        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
+        output_path = data_dir / output_name
+
+        # Check if config.json exists and matches
+        config_path = output_path / "config.json"
+        if not config_path.exists():
+            return False
+
+        try:
+            # Load and compare config
+            with open(config_path) as f:
+                saved_config = json.load(f)
+
+            current_config = args.model_dump()
+            if saved_config != current_config:
+                return False
+
+            train_filename = output_path / "train.bin"
+            val_filename = output_path / "val.bin"
+
+            # Check if files exist
+            if not (train_filename.exists() and val_filename.exists()):
+                return False
+
+            # For streaming datasets with max_samples, check if files are non-empty
+            # We can't easily verify exact completion without processing, so we check for non-zero size
+            train_size = train_filename.stat().st_size
+            val_size = val_filename.stat().st_size
+
+            # Files should have data (at least some tokens)
+            return train_size > 0 and val_size > 0
+        except Exception:
+            return False
 
     def run(self) -> None:
         args = self.args
@@ -470,6 +554,11 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
         logger.info(f"Done! Created in {output_path}:")
         logger.info(f"  train.bin: {train_idx:,} tokens")
         logger.info(f"  val.bin: {val_idx:,} tokens")
+
+        # Write config.json for idempotency checking
+        with open(os.path.join(output_path, "config.json"), "w") as f:
+            json.dump(args.model_dump(), f, indent=4)
+        logger.info(f"Wrote config.json to {output_path}")
 
     def _find_last_nonzero(self, filepath: str, dtype: type) -> int:
         """
