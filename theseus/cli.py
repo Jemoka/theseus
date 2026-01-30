@@ -80,11 +80,15 @@ def jobs() -> None:
 @click.option(  # type: ignore[misc]
     "-p", "--previous", default=None, help="Previous YAML config to use as base"
 )
-def generate(job: str, out_yaml: str, previous: str | None) -> None:
+@click.argument("overrides", nargs=-1)  # type: ignore[misc]
+def generate(
+    job: str, out_yaml: str, previous: str | None, overrides: tuple[str, ...]
+) -> None:
     """Generate a configuration YAML for a job.
 
     JOB: Name of the job to generate config for
     OUT_YAML: Output path for the generated YAML config
+    OVERRIDES: Optional config overrides in key=value format
     """
     # Validate job exists
     if job not in JOBS:
@@ -107,6 +111,11 @@ def generate(job: str, out_yaml: str, previous: str | None) -> None:
         # Merge only fields that exist in the new config
         config = OmegaConf.merge(config, OmegaConf.masked_copy(prev_config, config))
 
+    # Apply CLI overrides
+    if overrides:
+        cfg_cli = OmegaConf.from_dotlist(list(overrides))
+        config = OmegaConf.merge(config, cfg_cli)
+
     # Validate that output path parent exists
     out_path = Path(out_yaml)
     if not out_path.parent.exists():
@@ -121,6 +130,11 @@ def generate(job: str, out_yaml: str, previous: str | None) -> None:
 
     # Print the output prettily
     console.print()
+    if overrides:
+        console.print("[yellow]Applied overrides:[/yellow]")
+        for override in overrides:
+            console.print(f"[yellow]  • {override}[/yellow]")
+        console.print()
     console.print(f"[green]Generated config for job '{job}':[/green]")
     console.print(
         Syntax(yaml_str, "yaml", line_numbers=True, background_color="default")
