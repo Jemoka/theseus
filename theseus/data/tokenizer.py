@@ -42,7 +42,7 @@ def encode_chat_template(
     parts = []
 
     # Add system prompt if provided
-    if system_prompt:
+    if system_prompt and system_prompt != "":
         parts.append("<|im_start|>system\n")
         parts.append(system_prompt)
         parts.append("<|im_end|>\n")

@@ -49,14 +49,14 @@ class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
     block_size: int = field("architecture/block_size", default=512)
     pad_token: int = field("tokenization/pad_token", default=0)
     num_proc: int = field("num_proc", default=8)
-    system_prompt: Optional[str] = field("tokenization/system_prompt", default=None)
+    system_prompt: str = field("tokenization/system_prompt", default="")
 
 
 @dataclass
 class TokenizePretrainingDatasetConfig(TokenizeDatasetConfigBase):
     """Config for tokenizing pretraining datasets with streaming"""
 
-    max_samples: Optional[int] = field("max_samples", default=None)
+    max_samples: int = field("max_samples", default=-1)
 
 
 # ========== Dataset Preparation Jobs ==========
@@ -302,47 +302,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
         Check if dataset preparation is complete with the same config.
         For streaming datasets, we can only verify completion if max_samples is set.
         """
-        args = self.args
-
-        # If max_samples is not set, streaming job is never truly "done"
-        if args.max_samples is None:
-            return False
-
-        # Construct output path
-        data_dir = self.spec.hardware.hosts[0].cluster.data_dir
-        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
-        output_path = data_dir / output_name
-
-        # Check if config.json exists and matches
-        config_path = output_path / "config.json"
-        if not config_path.exists():
-            return False
-
-        try:
-            # Load and compare config
-            with open(config_path) as f:
-                saved_config = json.load(f)
-
-            current_config = asdict(args)
-            if saved_config != current_config:
-                return False
-
-            train_filename = output_path / "train.bin"
-            val_filename = output_path / "val.bin"
-
-            # Check if files exist
-            if not (train_filename.exists() and val_filename.exists()):
-                return False
-
-            # For streaming datasets with max_samples, check if files are non-empty
-            # We can't easily verify exact completion without processing, so we check for non-zero size
-            train_size = train_filename.stat().st_size
-            val_size = val_filename.stat().st_size
-
-            # Files should have data (at least some tokens)
-            return train_size > 0 and val_size > 0
-        except Exception:
-            return False
+        return False
 
     def run(self) -> None:
         args = self.args
@@ -451,7 +411,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
                 continue
 
             # Limit samples if specified
-            if args.max_samples is not None and sample_count >= args.max_samples:
+            if args.max_samples >= 0 and sample_count >= args.max_samples:
                 break
             sample_count += 1
 
