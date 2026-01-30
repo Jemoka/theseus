@@ -127,3 +127,33 @@ def build(*classes: Any) -> OmegaConf:
 
     types, defaults = generate_canonical_config(*classes)
     return build_default_config(types, defaults)
+
+
+def hydrate(cls: Any, config: OmegaConf) -> Any:
+    """Hydrates a dataclass instance from an OmegaConf configuration.
+
+    Args:
+        class (DataclassInstance | type[DataclassInstance]): Dataclass type to instantiate.
+        config (OmegaConf): OmegaConf configuration.
+
+    Returns:
+        DataclassInstance: Instantiated dataclass with values from config.
+    """
+
+    flat_config: Dict[str, Any] = {}
+    for k, v in OmegaConf.to_container(config, resolve=True).items():
+        if isinstance(v, dict):
+            for sub_k, sub_v in OmegaConf.to_container(
+                OmegaConf.create(v), resolve=True
+            ).items():
+                flat_config[f"{k}/{sub_k}"] = sub_v
+        else:
+            flat_config[k] = v
+
+    init_kwargs: Dict[str, Any] = {}
+    for fld in fields(cls):
+        key = fld.metadata.get("th_config_field")
+        if key is not None and key in flat_config:
+            init_kwargs[fld.name] = flat_config[key]
+
+    return cls(**init_kwargs)

@@ -2,7 +2,7 @@ import os
 import json
 import random
 import time
-from typing import Optional, Union, cast, Any
+from typing import Union, cast, Any
 from dataclasses import dataclass, asdict
 import numpy as np
 from loguru import logger
@@ -27,8 +27,8 @@ from theseus.data.tokenizer import get_chatml_encoder, encode_chat_template
 class TokenizeDatasetConfigBase:
     """Base config for dataset tokenization"""
 
-    name: str = field("name")
-    suffix: Optional[str] = field("suffix", default=None)
+    name: str = field("data/dataset")
+    suffix: str = field("data/suffix", default="")
     val_pct: float = field("tokenization/val_pct", default=0.05)
     seed: int = field("tokenization/seed", default=2357)
 
@@ -45,10 +45,10 @@ class TokenizeDatasetConfigBase:
 class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
     """Config for tokenizing non-pretraining datasets with fixed block size"""
 
-    split: str = field("split", default="train")
+    split: str = field("data/split", default="train")
     block_size: int = field("architecture/block_size", default=512)
     pad_token: int = field("tokenization/pad_token", default=0)
-    num_proc: int = field("num_proc", default=8)
+    num_proc: int = field("system/num_proc", default=8)
     system_prompt: str = field("tokenization/system_prompt", default="")
 
 
@@ -56,7 +56,7 @@ class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
 class TokenizePretrainingDatasetConfig(TokenizeDatasetConfigBase):
     """Config for tokenizing pretraining datasets with streaming"""
 
-    max_samples: int = field("max_samples", default=-1)
+    max_samples: int = field("data/max_samples", default=-1)
 
 
 # ========== Dataset Preparation Jobs ==========
@@ -77,7 +77,7 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
 
         # Construct output path
         data_dir = self.spec.hardware.hosts[0].cluster.data_dir
-        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
+        output_name = args.name if args.suffix == "" else f"{args.name}_{args.suffix}"
         output_path = data_dir / output_name
 
         # Check if config.json exists
@@ -128,7 +128,7 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
 
         # Construct output path
         data_dir = self.spec.hardware.hosts[0].cluster.data_dir
-        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
+        output_name = args.name if args.suffix == "" else f"{args.name}_{args.suffix}"
         output_path = data_dir / output_name
         output_path.mkdir(parents=True, exist_ok=True)
 
@@ -313,7 +313,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
 
         # Construct output path
         data_dir = self.spec.hardware.hosts[0].cluster.data_dir
-        output_name = args.name if args.suffix is None else f"{args.name}_{args.suffix}"
+        output_name = args.name if args.suffix == "" else f"{args.name}_{args.suffix}"
         output_path = data_dir / output_name
         output_path.mkdir(parents=True, exist_ok=True)
 
