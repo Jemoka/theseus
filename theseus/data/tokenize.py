@@ -3,11 +3,12 @@ import json
 import random
 import time
 from typing import Optional, Union, cast, Any
+from dataclasses import dataclass, asdict
 import numpy as np
-from pydantic import BaseModel, Field, field_validator
 from loguru import logger
 
-from theseus.jobs import BasicJob
+from theseus.job import BasicJob
+from theseus.config import field
 from theseus.data.datasets import (
     DATASETS,
     ChatTemplate,
@@ -19,54 +20,49 @@ from theseus.data.datasets import (
 from theseus.data.tokenizer import get_chatml_encoder, encode_chat_template
 
 
-# ========== Pydantic Configs ==========
+# ========== Dataclass Configs ==========
 
 
-class TokenizeDatasetConfigBase(BaseModel):
-    """Base config for dataset preparation"""
+@dataclass
+class TokenizeDatasetConfigBase:
+    """Base config for dataset tokenization"""
 
-    name: str = Field(description="Name of dataset in DATASETS registry")
-    suffix: Optional[str] = Field(
-        default=None, description="Optional suffix for output directory name"
-    )
-    val_pct: float = Field(default=0.05, description="Validation split percentage")
-    seed: int = Field(default=2357, description="Random seed for splitting")
+    name: str = field("name")
+    suffix: Optional[str] = field("suffix", default=None)
+    val_pct: float = field("tokenization/val_pct", default=0.05)
+    seed: int = field("tokenization/seed", default=2357)
 
-    @field_validator("name")
-    @classmethod
-    def validate_dataset_name(cls, v: str) -> str:
-        if v not in DATASETS:
+    def __post_init__(self) -> None:
+        """Validate dataset name"""
+        if self.name not in DATASETS:
             available = ", ".join(sorted(DATASETS.keys()))
             raise ValueError(
-                f"Dataset '{v}' not found in registry. Available datasets: {available}"
+                f"Dataset '{self.name}' not found in registry. Available datasets: {available}"
             )
-        return v
 
 
+@dataclass
 class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
-    """Config for preparing non-pretraining datasets with fixed block size"""
+    """Config for tokenizing non-pretraining datasets with fixed block size"""
 
-    split: str = Field(default="train", description="Dataset split to use")
-    block_size: int = Field(default=512, description="Fixed sequence length")
-    pad_token: int = Field(default=0, description="Token ID for padding")
-    num_proc: int = Field(default=8, description="Number of processes for mapping")
-    system_prompt: Optional[str] = Field(
-        default=None, description="System prompt for chat datasets"
-    )
+    split: str = field("split", default="train")
+    block_size: int = field("architecture/block_size", default=512)
+    pad_token: int = field("tokenization/pad_token", default=0)
+    num_proc: int = field("num_proc", default=8)
+    system_prompt: Optional[str] = field("tokenization/system_prompt", default=None)
 
 
-class PreparePretrainingDatasetConfig(TokenizeDatasetConfigBase):
-    """Config for preparing pretraining datasets with streaming"""
+@dataclass
+class TokenizePretrainingDatasetConfig(TokenizeDatasetConfigBase):
+    """Config for tokenizing pretraining datasets with streaming"""
 
-    max_samples: Optional[int] = Field(
-        default=None, description="Max samples to process (None for all)"
-    )
+    max_samples: Optional[int] = field("max_samples", default=None)
 
 
 # ========== Dataset Preparation Jobs ==========
 
 
-class PrepareDatasetJob(BasicJob[TokenizeDatasetConfig]):
+class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
     """
     Prepare non-pretraining datasets with fixed block size.
     Creates .bin and .bin.mask files for train/val splits.
@@ -94,7 +90,7 @@ class PrepareDatasetJob(BasicJob[TokenizeDatasetConfig]):
             with open(config_path) as f:
                 saved_config = json.load(f)
 
-            current_config = args.model_dump()
+            current_config = asdict(args)
             if saved_config != current_config:
                 return False
 
@@ -288,17 +284,17 @@ class PrepareDatasetJob(BasicJob[TokenizeDatasetConfig]):
 
         # Write config.json for idempotency checking
         with open(os.path.join(output_path, "config.json"), "w") as f:
-            json.dump(args.model_dump(), f, indent=4)
+            json.dump(asdict(args), f, indent=4)
         logger.info(f"Wrote config.json to {output_path}")
 
 
-class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
+class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
     """
     Prepare pretraining datasets with streaming support.
     Creates train.bin and val.bin files with variable-length sequences.
     """
 
-    config = PreparePretrainingDatasetConfig
+    config = TokenizePretrainingDatasetConfig
 
     @property
     def done(self) -> bool:
@@ -327,7 +323,7 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
             with open(config_path) as f:
                 saved_config = json.load(f)
 
-            current_config = args.model_dump()
+            current_config = asdict(args)
             if saved_config != current_config:
                 return False
 
@@ -561,7 +557,7 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
 
         # Write config.json for idempotency checking
         with open(os.path.join(output_path, "config.json"), "w") as f:
-            json.dump(args.model_dump(), f, indent=4)
+            json.dump(asdict(args), f, indent=4)
         logger.info(f"Wrote config.json to {output_path}")
 
     def _find_last_nonzero(self, filepath: str, dtype: type) -> int:

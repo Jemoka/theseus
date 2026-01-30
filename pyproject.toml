@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=4.5.0",
     "loguru>=0.7.3",
     "numpy>=2.4.1",
+    "omegaconf>=2.3.0",
     "orbax>=0.1.9",
     "pydantic>=2.12.5",
     "rich>=14.2.0",
