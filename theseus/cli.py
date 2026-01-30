@@ -53,7 +53,7 @@ def jobs() -> None:
         console.print("\n[yellow]No jobs registered[/yellow]\n")
         return
 
-    table = Table(title="Available Jobs", show_header=True, header_style="bold green")
+    table = Table(show_header=True, header_style="bold green")
     table.add_column("Job Name", style="cyan", no_wrap=True)
     table.add_column("Description", style="white")
 
@@ -81,7 +81,7 @@ def jobs() -> None:
     "-p", "--previous", default=None, help="Previous YAML config to use as base"
 )
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
-def generate(
+def configure(
     job: str, out_yaml: str, previous: str | None, overrides: tuple[str, ...]
 ) -> None:
     """Generate a configuration YAML for a job.
@@ -116,6 +116,9 @@ def generate(
         cfg_cli = OmegaConf.from_dotlist(list(overrides))
         config = OmegaConf.merge(config, cfg_cli)
 
+    # Add job name to config
+    config.job = job
+
     # Validate that output path parent exists
     out_path = Path(out_yaml)
     if not out_path.parent.exists():
@@ -144,25 +147,45 @@ def generate(
 
 
 @theseus.command()  # type: ignore[misc]
-@click.argument("job")  # type: ignore[misc]
 @click.argument("yaml_path")  # type: ignore[misc]
 @click.argument("out_path")  # type: ignore[misc]
+@click.option(
+    "-j", "--job", default=None, help="Job name (read from YAML if not specified)"
+)  # type: ignore[misc]
 @click.option("--help-config", is_flag=True, help="Show config schema for the job")  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
-    job: str,
     yaml_path: str,
     out_path: str,
+    job: str | None,
     help_config: bool,
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
 
-    JOB: Name of the job to run
     YAML_PATH: Path to the configuration YAML file
     OUT_PATH: Output path for job results
     OVERRIDES: Optional config overrides in key=value format
     """
+    # Load config file
+    if not Path(yaml_path).exists():
+        console.print(f"\n[red]Error: Config file '{yaml_path}' not found[/red]\n")
+        sys.exit(1)
+
+    cfg = OmegaConf.load(yaml_path)
+
+    # Get job name from option or config
+    if job is None:
+        if "job" not in cfg:
+            console.print(
+                "\n[red]Error: No job specified and 'job' not found in config[/red]"
+            )
+            console.print(
+                "[yellow]Use -j/--job option or add 'job: <name>' to your YAML[/yellow]\n"
+            )
+            sys.exit(1)
+        job = cfg.job
+
     # Validate job exists
     if job not in JOBS:
         console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
@@ -182,13 +205,6 @@ def run(
         )
         console.print()
         return
-
-    # Load config file
-    if not Path(yaml_path).exists():
-        console.print(f"\n[red]Error: Config file '{yaml_path}' not found[/red]\n")
-        sys.exit(1)
-
-    cfg = OmegaConf.load(yaml_path)
 
     # Apply CLI overrides
     if overrides:

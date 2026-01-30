@@ -29,8 +29,8 @@ class TokenizeDatasetConfigBase:
 
     name: str = field("data/dataset")
     suffix: str = field("data/suffix", default="")
-    val_pct: float = field("tokenization/val_pct", default=0.05)
-    seed: int = field("tokenization/seed", default=2357)
+    val_pct: float = field("data/val_pct", default=0.05)
+    seed: int = field("data/seed", default=2357)
 
     def __post_init__(self) -> None:
         """Validate dataset name"""
@@ -47,9 +47,9 @@ class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
 
     split: str = field("data/split", default="train")
     block_size: int = field("architecture/block_size", default=512)
-    pad_token: int = field("tokenization/pad_token", default=0)
+    pad_token: int = field("data/pad_token", default=0)
     num_proc: int = field("system/num_proc", default=8)
-    system_prompt: str = field("tokenization/system_prompt", default="")
+    system_prompt: str = field("data/system_prompt", default="")
 
 
 @dataclass
