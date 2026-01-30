@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.1.0",
-    "datasets>=4.5.0",
+    "jsonlines>=4.0.0",
     "loguru>=0.7.3",
     "numpy>=2.4.1",
     "omegaconf>=2.3.0",
@@ -39,6 +39,17 @@ tpu = [
 ]
 cpu = [
     "jax>=0.4.23",
+]
+fever = [
+    "wikipedia>=1.4.0",
+]
+data = [
+    "datasets>=4.5.0",
+    {include-group = "fever"},
+]
+all = [
+    {include-group = "dev"},
+    {include-group = "data"},
 ]
 
 [tool.uv]
