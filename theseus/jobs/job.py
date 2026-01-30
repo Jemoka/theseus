@@ -2,9 +2,8 @@ import os
 import random
 
 from abc import abstractmethod, abstractproperty
-from pydantic import BaseModel
 from loguru import logger
-from typing import Generic, TypeVar, Dict, Any, Tuple
+from typing import Generic, TypeVar, Dict, Any, Tuple, Type, Self
 
 import jax
 import json
@@ -13,11 +12,14 @@ import orbax.checkpoint as ocp
 from jax.experimental import multihost_utils
 
 from theseus.base import _BaseJob, ExecutionSpec, PyTree
+from theseus.base import local
 
-C = TypeVar("C", bound=BaseModel)
+C = TypeVar("C")
 
 
 class BasicJob(_BaseJob, Generic[C]):
+    config: Type[C]
+
     def __init__(self, args: C, spec: ExecutionSpec):
         self.args = args
         self.spec = spec
@@ -50,6 +52,12 @@ class BasicJob(_BaseJob, Generic[C]):
         logger.debug(f"JOB {self.spec.name} | finishd, waiting for everyone...")
         multihost_utils.sync_global_devices(f"{self.spec.name}:finish")
         self.finish()
+
+    @classmethod
+    def local(cls, config: C, root_dir: str) -> Self:
+        hardware = local(root_dir, "-")
+        spec = ExecutionSpec(name="local", hardware=hardware, distributed=False)
+        return cls(config, spec)
 
 
 class CheckpointedJob(BasicJob[C], Generic[C]):

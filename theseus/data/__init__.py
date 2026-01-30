@@ -6,6 +6,7 @@ from .prepare import (
     PreparePretrainingDatasetJob,
 )
 from .datasets import DATASETS
+from .tokenizer import get_chatml_encoder, encode_chat_template, decode_chat_template
 
 __all__ = [
     "PrepareDatasetConfig",
@@ -14,4 +15,7 @@ __all__ = [
     "PreparePretrainingDatasetConfig",
     "PreparePretrainingDatasetJob",
     "DATASETS",
+    "get_chatml_encoder",
+    "encode_chat_template",
+    "decode_chat_template",
 ]

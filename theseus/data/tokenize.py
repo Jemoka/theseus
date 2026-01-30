@@ -22,7 +22,7 @@ from theseus.data.tokenizer import get_chatml_encoder, encode_chat_template
 # ========== Pydantic Configs ==========
 
 
-class PrepareDatasetConfigBase(BaseModel):
+class TokenizeDatasetConfigBase(BaseModel):
     """Base config for dataset preparation"""
 
     name: str = Field(description="Name of dataset in DATASETS registry")
@@ -43,7 +43,7 @@ class PrepareDatasetConfigBase(BaseModel):
         return v
 
 
-class PrepareDatasetConfig(PrepareDatasetConfigBase):
+class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
     """Config for preparing non-pretraining datasets with fixed block size"""
 
     split: str = Field(default="train", description="Dataset split to use")
@@ -55,7 +55,7 @@ class PrepareDatasetConfig(PrepareDatasetConfigBase):
     )
 
 
-class PreparePretrainingDatasetConfig(PrepareDatasetConfigBase):
+class PreparePretrainingDatasetConfig(TokenizeDatasetConfigBase):
     """Config for preparing pretraining datasets with streaming"""
 
     max_samples: Optional[int] = Field(
@@ -66,11 +66,13 @@ class PreparePretrainingDatasetConfig(PrepareDatasetConfigBase):
 # ========== Dataset Preparation Jobs ==========
 
 
-class PrepareDatasetJob(BasicJob[PrepareDatasetConfig]):
+class PrepareDatasetJob(BasicJob[TokenizeDatasetConfig]):
     """
     Prepare non-pretraining datasets with fixed block size.
     Creates .bin and .bin.mask files for train/val splits.
     """
+
+    config = TokenizeDatasetConfig
 
     @property
     def done(self) -> bool:
@@ -295,6 +297,8 @@ class PreparePretrainingDatasetJob(BasicJob[PreparePretrainingDatasetConfig]):
     Prepare pretraining datasets with streaming support.
     Creates train.bin and val.bin files with variable-length sequences.
     """
+
+    config = PreparePretrainingDatasetConfig
 
     @property
     def done(self) -> bool:
