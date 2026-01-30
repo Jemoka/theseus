@@ -5,16 +5,21 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "click>=8.1.0",
     "datasets>=4.5.0",
     "loguru>=0.7.3",
     "numpy>=2.4.1",
     "omegaconf>=2.3.0",
     "orbax>=0.1.9",
     "pydantic>=2.12.5",
+    "python-dotenv>=1.2.1",
     "rich>=14.2.0",
     "tiktoken>=0.12.0",
     "torchax>=0.0.11",
 ]
+
+[project.scripts]
+theseus = "theseus.cli:theseus"
 
 [dependency-groups]
 dev = [
@@ -38,6 +43,7 @@ cpu = [
 
 [tool.uv]
 default-groups = ["dev"]
+package = true
 
 [tool.ruff]
 line-length = 88
