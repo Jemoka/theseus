@@ -422,7 +422,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
             else:
                 # String dataset - for pretraining, add EOT token
                 string_item = cast(str, item)
-                ids = encoder.encode(string_item)
+                ids = encoder.encode_ordinary(string_item)
                 # Add end of text token (this is special token index in cl100k_base)
                 ids.append(encoder.eot_token)
 
