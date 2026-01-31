@@ -6,7 +6,7 @@ import jax
 from typing import Dict, Any, List, Type
 
 from theseus.model.attention import SelfAttention, RopeAttention
-from theseus.model.layers.layer_norm import LayerNorm
+from theseus.model.layers.layernorm import LayerNorm
 from theseus.model.layers.mlp import MLP
 from theseus.model.module import Module
 

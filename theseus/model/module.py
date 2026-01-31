@@ -21,17 +21,17 @@ class Module(nn):
         )
 
     @classmethod
-    def dfs(cls) -> List[Type[Any]]:
+    def gather(cls) -> List[Type[Any]]:
         """Depth-first search of all constituent parts of this module.
 
         Returns:
             List[Type]: A list of all constituent part types.
         """
 
-        parts = []
+        parts: List[Type[Any]] = [cls]
         for component in cls.components():
             if issubclass(component, Module):
-                parts.extend(component.dfs())
+                parts.extend(component.gather())
             else:
                 parts.append(component)
-        return parts
+        return list(set(parts))

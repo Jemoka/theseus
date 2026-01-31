@@ -11,3 +11,4 @@ class Axes(Enum):
     N_EMBD_OUT = "n_embd_out"
     N_EMBD_FF = "n_embd_ff"
     N_ATTN = "n_attn"
+    BLOCK_SIZE = "block_size"

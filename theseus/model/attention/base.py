@@ -19,7 +19,7 @@ ATTN_DTYPE = jnp.bfloat16
 class SelfAttention(Module):
     n_embd: int = field("architecture/n_embd")
     n_head: int = field("architecture/n_head")
-    n_layer: int = field("architecture/n_layer")
+    n_layers: int = field("architecture/n_layers")
     bias: bool = field("architecture/bias")
     dropout: float = field("architecture/dropout")
 
@@ -46,7 +46,7 @@ class SelfAttention(Module):
             self.n_embd,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layer)),
+                jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layers)),
                 (Axes.N_EMBD_OUT.value, Axes.N_EMBD.value),
             ),
             param_dtype=jnp.float32,

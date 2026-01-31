@@ -3,7 +3,7 @@ import random
 
 from abc import abstractmethod, abstractproperty
 from loguru import logger
-from typing import Generic, TypeVar, Dict, Any, Tuple, Type, Self
+from typing import Generic, TypeVar, Dict, Any, Tuple, Type, Self, List, Union
 
 import jax
 import json
@@ -18,7 +18,9 @@ C = TypeVar("C")
 
 
 class BasicJob(_BaseJob, Generic[C]):
-    config: Type[C]
+    @classmethod
+    def config(cls) -> Union[Type[C], List[Type[Any]]]:
+        raise NotImplementedError()
 
     def __init__(self, args: C, spec: ExecutionSpec):
         self.args = args
@@ -133,7 +135,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
                 "numpy_random": np.random.get_state(),
                 "jax_random": int(self.key[0]),  # Save seed
             }
-            np.save(os.path.join(path, "rng.npy"), rng_state)
+            np.save(os.path.join(path, "rng.npy"), rng_state)  # type: ignore
             logger.debug("CHECKPOINT | saved random state")
 
             # Save config

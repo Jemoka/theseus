@@ -19,7 +19,7 @@ import random
 import numpy as np
 
 from theseus.registry import JOBS
-from theseus.config import build, hydrate
+from theseus.config import build, hydrate, configuration
 
 console = Console()
 
@@ -101,8 +101,6 @@ def configure(
     # if job obj is iterable, spread it into build, otherwise just pass directly
     if isinstance(job_obj.config, (list, tuple)):
         config = build(*job_obj.config)
-    elif isinstance(job_obj.config, dict):
-        config = build(*job_obj.config.values())
     else:
         config = build(job_obj.config)
 
@@ -218,20 +216,15 @@ def run(
     console.print()
 
     # Hydrate and run the job
-    if isinstance(job_obj.config, (list, tuple)):
-        cfgs = []
-        for i in job_obj.config:
-            cfgs.append(hydrate(i, cfg))
-        job_instance = job_obj.local(cfgs, out_path)
-    elif isinstance(job_obj.config, dict):
-        cfgs = {}
-        for k, v in job_obj.config.items():
-            cfgs[k] = hydrate(v, cfg)
-        job_instance = job_obj.local(cfgs, out_path)
-    else:
-        cfg = hydrate(job_obj.config, cfg)
-        job_instance = job_obj.local(cfg, out_path)
-    job_instance()
+    with configuration(cfg):
+        if isinstance(job_obj.config, (list, tuple)):
+            # everything else should be passed with implicit configure()
+            cfg = hydrate(job_obj.config[0], cfg)
+            job_instance = job_obj.local(cfg, out_path)
+        else:
+            cfg = hydrate(job_obj.config, cfg)
+            job_instance = job_obj.local(cfg, out_path)
+        job_instance()
 
     console.print()
     console.print(f"\n[green]Job '{job}' completed successfully[/green]")

@@ -2,7 +2,7 @@ import os
 import json
 import random
 import time
-from typing import Union, cast, Any
+from typing import Union, cast, Any, Type
 from dataclasses import dataclass, asdict
 import numpy as np
 from loguru import logger
@@ -68,7 +68,9 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
     Creates .bin and .bin.mask files for train/val splits.
     """
 
-    config = TokenizeDatasetConfig
+    @classmethod
+    def config(cls) -> Type[TokenizeDatasetConfig]:
+        return TokenizeDatasetConfig
 
     @property
     def done(self) -> bool:
@@ -294,7 +296,9 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
     Creates train.bin and val.bin files with variable-length sequences.
     """
 
-    config = TokenizePretrainingDatasetConfig
+    @classmethod
+    def config(cls) -> Type[TokenizePretrainingDatasetConfig]:
+        return TokenizePretrainingDatasetConfig
 
     @property
     def done(self) -> bool:
@@ -497,7 +501,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
 
         # Trim train file to actual size
         train_arr.flush()
-        train_arr._mmap.close()
+        train_arr._mmap.close()  # type: ignore
         del train_arr
 
         with open(train_filename, "r+b") as f:
@@ -505,7 +509,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
 
         # Trim val file to actual size
         val_arr.flush()
-        val_arr._mmap.close()
+        val_arr._mmap.close()  # type: ignore
         del val_arr
 
         with open(val_filename, "r+b") as f:

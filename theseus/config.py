@@ -6,7 +6,7 @@ from dataclasses import fields, is_dataclass
 from typing import Any, Union, Dict, Tuple, List, TypeVar, Generator
 from collections import defaultdict
 
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig, ListConfig
 
 T = TypeVar("T")
 _current_config: ContextVar[OmegaConf | None] = ContextVar(
@@ -167,7 +167,7 @@ def build(*classes: Any) -> OmegaConf:
     return build_default_config(types, defaults)
 
 
-def hydrate(cls: Any, config: OmegaConf) -> Any:
+def hydrate(cls: Any, config: DictConfig | ListConfig) -> Any:
     """Hydrates a dataclass instance from an OmegaConf configuration.
 
     Args:
@@ -200,7 +200,7 @@ def hydrate(cls: Any, config: OmegaConf) -> Any:
 
 
 @contextmanager
-def configuration(config: OmegaConf) -> Generator[None, None, None]:
+def configuration(config: DictConfig | ListConfig) -> Generator[None, None, None]:
     """Context manager that sets the current config for configure() calls.
 
     Usage:
