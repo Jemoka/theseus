@@ -2,13 +2,20 @@ import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
+from typing import List, Type, Any
+
 from theseus.config import field
+from theseus.model.module import Module
 
 
-class LayerNorm(nn.Module):
+class LayerNorm(Module):
     ndim: int = field("architecture/n_embd")
     bias: bool = field("architecture/bias")
     dtype: jnp.dtype = jnp.bfloat16
+
+    @classmethod
+    def components(cls) -> List[Type[Any]]:
+        return []
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:

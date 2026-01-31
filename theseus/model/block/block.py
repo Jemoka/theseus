@@ -3,18 +3,22 @@ Your most very basic indeed transformer Block
 """
 
 import jax
-import flax.linen as nn
-from typing import Dict, Any
+from typing import Dict, Any, List, Type
 
 from theseus.model.attention import SelfAttention, RopeAttention
 from theseus.model.layers.layer_norm import LayerNorm
 from theseus.model.layers.mlp import MLP
+from theseus.model.module import Module
 
 from theseus.config import configure, field
 
 
-class Block(nn.Module):
+class Block(Module):
     rope: bool = field("architecture/rope", default=True)
+
+    @classmethod
+    def components(cls) -> List[Type[Any]]:
+        return [LayerNorm, SelfAttention, RopeAttention, MLP]
 
     def setup(self) -> None:
         self.ln_1 = configure(LayerNorm)

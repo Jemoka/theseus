@@ -3,23 +3,29 @@ Your grandpa's vanilla self-attention module.
 """
 
 import math
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List, Type
 
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
 from theseus.config import field
+from theseus.model.axes import Axes
+from theseus.model.module import Module
 
 ATTN_DTYPE = jnp.bfloat16
 
 
-class SelfAttention(nn.Module):
+class SelfAttention(Module):
     n_embd: int = field("architecture/n_embd")
     n_head: int = field("architecture/n_head")
     n_layer: int = field("architecture/n_layer")
     bias: bool = field("architecture/bias")
     dropout: float = field("architecture/dropout")
+
+    @classmethod
+    def components(cls) -> List[Type[Any]]:
+        return []
 
     def setup(self) -> None:
         assert self.n_embd % self.n_head == 0
@@ -29,7 +35,8 @@ class SelfAttention(nn.Module):
             3 * self.n_embd,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), ("n_embd", "n_attn")
+                jax.nn.initializers.normal(stddev=0.02),
+                (Axes.N_EMBD.value, Axes.N_ATTN.value),
             ),
             param_dtype=jnp.float32,
             dtype=jnp.bfloat16,
@@ -40,7 +47,7 @@ class SelfAttention(nn.Module):
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layer)),
-                ("n_embd_out", "n_embd"),
+                (Axes.N_EMBD_OUT.value, Axes.N_EMBD.value),
             ),
             param_dtype=jnp.float32,
             dtype=jnp.bfloat16,

@@ -3,21 +3,30 @@ import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
+from typing import List, Type, Any
+
 from theseus.config import field
+from theseus.model.axes import Axes
+from theseus.model.module import Module
 
 
-class MLP(nn.Module):
+class MLP(Module):
     n_embd: int = field("architecture/n_embd")
     n_layers: int = field("architecture/n_layers")
     bias: bool = field("architecture/bias")
     dropout: float = field("architecture/dropout")
+
+    @classmethod
+    def components(cls) -> List[Type[Any]]:
+        return []
 
     def setup(self) -> None:
         self.c_fc = nn.Dense(
             4 * self.n_embd,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), ("n_embd", "n_embd_ff")
+                jax.nn.initializers.normal(stddev=0.02),
+                (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
             ),
             param_dtype=jnp.float32,
             dtype=jnp.bfloat16,
@@ -28,7 +37,7 @@ class MLP(nn.Module):
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layers)),
-                ("n_embd_ff", "n_embd"),
+                (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
             ),
             param_dtype=jnp.float32,
             dtype=jnp.bfloat16,

@@ -2,20 +2,26 @@ import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Any, Type
 
 from theseus.model.block import Block
 from theseus.model.layers import LayerNorm
+from theseus.model.axes import Axes
+from theseus.model.module import Module
 
 from theseus.config import field, configure
 
 
-class GPT(nn.Module):
+class GPT(Module):
     n_layers: int = field("architecture/n_layers")
     n_embd: int = field("architecture/n_embd")
     vocab_size: int = field("architecture/vocab_size")
     block_size: int = field("architecture/block_size")
     dropout: float = field("architecture/dropout")
+
+    @classmethod
+    def components(cls) -> List[Type[Any]]:
+        return [Block, LayerNorm]
 
     def setup(self) -> None:
         assert self.vocab_size is not None
@@ -53,7 +59,8 @@ class GPT(nn.Module):
         wte: jax.Array = self.param(
             "wte",
             nn.with_partitioning(
-                nn.initializers.normal(stddev=0.02), ("vocab", "n_embd")
+                nn.initializers.normal(stddev=0.02),
+                (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
             jnp.float32,
