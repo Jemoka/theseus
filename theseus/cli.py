@@ -18,6 +18,8 @@ from rich.table import Table
 import random
 import numpy as np
 
+from typing import Any, List, Type
+
 from theseus.registry import JOBS
 from theseus.config import build, hydrate, configuration
 
@@ -99,10 +101,11 @@ def configure(
     job_obj = JOBS[job]
 
     # if job obj is iterable, spread it into build, otherwise just pass directly
-    if isinstance(job_obj.config, (list, tuple)):
-        config = build(*job_obj.config)
+    if isinstance(job_obj.config(), (list, tuple)):
+        cfgs: List[Type[Any]] = job_obj.config()  # type: ignore
+        config = build(*cfgs)
     else:
-        config = build(job_obj.config)
+        config = build(job_obj.config())
 
     # If previous config provided, merge it
     if previous:
@@ -217,12 +220,12 @@ def run(
 
     # Hydrate and run the job
     with configuration(cfg):
-        if isinstance(job_obj.config, (list, tuple)):
+        if isinstance(job_obj.config(), (list, tuple)):
             # everything else should be passed with implicit configure()
-            cfg = hydrate(job_obj.config[0], cfg)
+            cfg = hydrate(job_obj.config()[0], cfg)
             job_instance = job_obj.local(cfg, out_path)
         else:
-            cfg = hydrate(job_obj.config, cfg)
+            cfg = hydrate(job_obj.config(), cfg)
             job_instance = job_obj.local(cfg, out_path)
         job_instance()
 
