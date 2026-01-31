@@ -1,10 +1,17 @@
 import dataclasses
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import field as f
 from dataclasses import fields, is_dataclass
-from typing import Any, Union, Dict, Tuple, List
+from typing import Any, Union, Dict, Tuple, List, TypeVar, Generator
 from collections import defaultdict
 
 from omegaconf import OmegaConf
+
+T = TypeVar("T")
+_current_config: ContextVar[OmegaConf | None] = ContextVar(
+    "_current_config", default=None
+)
 
 MISSING_VALUE = "???"
 
@@ -190,3 +197,35 @@ def hydrate(cls: Any, config: OmegaConf) -> Any:
             init_kwargs[fld.name] = flat_config[key]
 
     return cls(**init_kwargs)
+
+
+@contextmanager
+def configuration(config: OmegaConf) -> Generator[None, None, None]:
+    """Context manager that sets the current config for configure() calls.
+
+    Usage:
+        with Configurate(config):
+            model = configure(ModelConfig)
+    """
+    token = _current_config.set(config)
+    try:
+        yield
+    finally:
+        _current_config.reset(token)
+
+
+def configure(cls: Any) -> Any:
+    """Hydrates a dataclass from the current Configurate context.
+
+    Must be called within a Configurate context manager.
+
+    Args:
+        cls: Dataclass type to instantiate.
+
+    Returns:
+        Instantiated dataclass with values from the current config.
+    """
+    config = _current_config.get()
+    if config is None:
+        raise RuntimeError("configure() must be called within a Configurate context")
+    return hydrate(cls, config)
