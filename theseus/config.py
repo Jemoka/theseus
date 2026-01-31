@@ -1,6 +1,7 @@
+import dataclasses
 from dataclasses import field as f
-from dataclasses import fields
-from typing import Any, Union, Dict, Tuple
+from dataclasses import fields, is_dataclass
+from typing import Any, Union, Dict, Tuple, List
 from collections import defaultdict
 
 from omegaconf import OmegaConf
@@ -23,7 +24,17 @@ def field(
         return f(metadata={"th_config_field": key}, **kwargs)
 
 
-def generate_canonical_config(*classes: Any) -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
+def dedupe(seq: Any) -> Any:
+    out: List[Any] = []
+    for x in seq:
+        if not any(x == y for y in out):
+            out.append(x)
+    return out
+
+
+def generate_canonical_config(
+    *classes: Any, _non_recurse_cls: List[Any] = []
+) -> Tuple[Dict[Any, Any], Dict[Any, Any]]:
     """generate a full configuration from components
 
     Args:
@@ -33,11 +44,25 @@ def generate_canonical_config(*classes: Any) -> Tuple[Dict[Any, Any], Dict[Any, 
         Tuple[Dict[str, Any], Dict[str, Any]]: canonical field types and default values
     """
 
+    # if the type of any field is itself a dataclass, recurse into it
+    expanded_classes = []
+    for cls in classes:
+        for fld in fields(cls):
+            if is_dataclass(fld.type):
+                expanded_classes.append(fld.type)
+    if len(expanded_classes) > 0:
+        return generate_canonical_config(
+            *expanded_classes, _non_recurse_cls=list(classes)
+        )
+
+    classes = tuple(list(classes) + list(_non_recurse_cls))
+
     all_fields = [
         (j.metadata.get("th_config_field"), j.type)
         for i in classes
         for j in fields(i)
         if j.metadata.get("th_config_field") is not None
+        if is_dataclass(j.type) is False
     ]
     all_fields_lub = defaultdict(list)
     for i, j in all_fields:
@@ -48,18 +73,24 @@ def generate_canonical_config(*classes: Any) -> Tuple[Dict[Any, Any], Dict[Any, 
     }
 
     all_field_defaults = [
-        (j.metadata.get("th_config_field"), j.default)
+        (
+            j.metadata.get("th_config_field"),
+            j.default
+            if not isinstance(j.default, dataclasses._MISSING_TYPE)
+            else j.default_factory(),  # type: ignore
+        )
         for i in classes
         for j in fields(i)
         if j.metadata.get("th_config_field") is not None
         and j.default is not j.default_factory
+        and is_dataclass(j.type) is False
     ]
     all_field_defaults_lub = defaultdict(list)
     for i, j in all_field_defaults:
         if j is not None:
             all_field_defaults_lub[i].append(j)
     canonical_field_defaults = {
-        key: value[0] if len(set(value)) == 1 else None
+        key: value[0] if len(dedupe(value)) == 1 else None
         for key, value in all_field_defaults_lub.items()
     }
 
@@ -153,6 +184,8 @@ def hydrate(cls: Any, config: OmegaConf) -> Any:
     init_kwargs: Dict[str, Any] = {}
     for fld in fields(cls):
         key = fld.metadata.get("th_config_field")
+        if is_dataclass(fld.type):
+            init_kwargs[fld.name] = hydrate(fld.type, config)
         if key is not None and key in flat_config:
             init_kwargs[fld.name] = flat_config[key]
 

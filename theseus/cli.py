@@ -97,7 +97,14 @@ def configure(
         sys.exit(1)
 
     job_obj = JOBS[job]
-    config = build(job_obj.config)
+
+    # if job obj is iterable, spread it into build, otherwise just pass directly
+    if isinstance(job_obj.config, (list, tuple)):
+        config = build(*job_obj.config)
+    elif isinstance(job_obj.config, dict):
+        config = build(*job_obj.config.values())
+    else:
+        config = build(job_obj.config)
 
     # If previous config provided, merge it
     if previous:
@@ -152,13 +159,11 @@ def configure(
 @click.option(
     "-j", "--job", default=None, help="Job name (read from YAML if not specified)"
 )  # type: ignore[misc]
-@click.option("--help-config", is_flag=True, help="Show config schema for the job")  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
     yaml_path: str,
     out_path: str,
     job: str | None,
-    help_config: bool,
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
@@ -194,18 +199,6 @@ def run(
 
     job_obj = JOBS[job]
 
-    # Handle help-config flag
-    if help_config:
-        config_schema = build(job_obj.config)
-        yaml_str = OmegaConf.to_yaml(config_schema)
-        console.print()
-        console.print(f"[cyan]Config schema for job '{job}':[/cyan]")
-        console.print(
-            Syntax(yaml_str, "yaml", line_numbers=True, background_color="default")
-        )
-        console.print()
-        return
-
     # Apply CLI overrides
     if overrides:
         cfg_cli = OmegaConf.from_dotlist(list(overrides))
@@ -225,8 +218,19 @@ def run(
     console.print()
 
     # Hydrate and run the job
-    cfg = hydrate(job_obj.config, cfg)
-    job_instance = job_obj.local(cfg, out_path)
+    if isinstance(job_obj.config, (list, tuple)):
+        cfgs = []
+        for i in job_obj.config:
+            cfgs.append(hydrate(i, cfg))
+        job_instance = job_obj.local(cfgs, out_path)
+    elif isinstance(job_obj.config, dict):
+        cfgs = {}
+        for k, v in job_obj.config.items():
+            cfgs[k] = hydrate(v, cfg)
+        job_instance = job_obj.local(cfgs, out_path)
+    else:
+        cfg = hydrate(job_obj.config, cfg)
+        job_instance = job_obj.local(cfg, out_path)
     job_instance()
 
     console.print()
