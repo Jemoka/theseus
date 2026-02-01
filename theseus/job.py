@@ -11,8 +11,12 @@ import numpy as np
 import orbax.checkpoint as ocp
 from jax.experimental import multihost_utils
 
-from theseus.base import _BaseJob, ExecutionSpec, PyTree
+from omegaconf import OmegaConf
+
+from theseus.base import _BaseJob, ExecutionSpec, PyTree, JobSpec
 from theseus.base import local
+from theseus.config import current_config
+
 
 C = TypeVar("C")
 
@@ -56,9 +60,22 @@ class BasicJob(_BaseJob, Generic[C]):
         self.finish()
 
     @classmethod
-    def local(cls, config: C, root_dir: str) -> Self:
+    def local(
+        cls,
+        config: C,
+        root_dir: str,
+        name: str = "local",
+        project: str | None = None,
+        group: str | None = None,
+    ) -> Self:
         hardware = local(root_dir, "-")
-        spec = ExecutionSpec(name="local", hardware=hardware, distributed=False)
+        spec = ExecutionSpec(
+            name=name,
+            project=project,
+            group=group,
+            hardware=hardware,
+            distributed=False,
+        )
         return cls(config, spec)
 
 
@@ -110,7 +127,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
             os.path.join(path, "checkpoint"), target=template_tree
         )
 
-        # Load config
+        # Load metadata
         with open(os.path.join(path, "config.json"), "r") as df:
             data = json.load(df)
 
@@ -145,6 +162,24 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
                     df,
                 )
             logger.debug("CHECKPOINT | saved configuration")
+
+            # Save job spec (only JobSpec fields, not ExecutionSpec)
+            # Uses JobSpec.model_fields to be extensible - new fields added to JobSpec
+            # will automatically be included without modifying this code
+            job_spec_data = {
+                field_name: getattr(self.spec, field_name)
+                for field_name in JobSpec.model_fields
+            }
+            with open(os.path.join(path, "job.json"), "w") as df:
+                json.dump(job_spec_data, df)
+            logger.debug("CHECKPOINT | saved job spec")
+
+            # Save current OmegaConf configuration as YAML
+            cfg = current_config()
+            if cfg is not None:
+                with open(os.path.join(path, "config.yaml"), "w") as df:
+                    df.write(OmegaConf.to_yaml(cfg))
+                logger.debug("CHECKPOINT | saved config.yaml")
 
         multihost_utils.sync_global_devices("save:mid")
 

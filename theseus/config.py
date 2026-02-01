@@ -229,3 +229,12 @@ def configure(cls: Any) -> Any:
     if config is None:
         raise RuntimeError("configure() must be called within a Configurate context")
     return hydrate(cls, config)
+
+
+def current_config() -> DictConfig | ListConfig | None:
+    """Returns the current configuration in the Configurate context.
+
+    Returns:
+        OmegaConf | None: Current configuration or None if not in context.
+    """
+    return _current_config.get()

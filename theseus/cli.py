@@ -160,11 +160,21 @@ def configure(
 @click.option(
     "-j", "--job", default=None, help="Job name (read from YAML if not specified)"
 )  # type: ignore[misc]
+@click.option(
+    "-n", "--name", default="local", help="Name of the job run (default: local)"
+)  # type: ignore[misc]
+@click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
+@click.option(
+    "-g", "--group", default=None, help="Group under the project this run belongs to"
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
     yaml_path: str,
     out_path: str,
     job: str | None,
+    name: str,
+    project: str | None,
+    group: str | None,
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
@@ -223,10 +233,14 @@ def run(
         if isinstance(job_obj.config(), (list, tuple)):
             # everything else should be passed with implicit configure()
             cfg = hydrate(job_obj.config()[0], cfg)
-            job_instance = job_obj.local(cfg, out_path)
+            job_instance = job_obj.local(
+                cfg, out_path, name=name, project=project, group=group
+            )
         else:
             cfg = hydrate(job_obj.config(), cfg)
-            job_instance = job_obj.local(cfg, out_path)
+            job_instance = job_obj.local(
+                cfg, out_path, name=name, project=project, group=group
+            )
         job_instance()
 
     console.print()
