@@ -19,7 +19,7 @@ class GPT(Module):
     rope: bool = field("architecture/rope", default=True)
     block_size: int = field("architecture/block_size", default=512)
     dropout: float = field("architecture/dropout", default=0.0)
-    vocab_size: int = field("architecture/vocab_size", default=50304)
+    vocab_size: int = field("architecture/vocab_size", default=100288)
 
     @property
     def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:  # type: ignore
