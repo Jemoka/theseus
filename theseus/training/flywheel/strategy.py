@@ -117,6 +117,15 @@ class Strategy:
         self.spec = spec
         self.block_size = block_size
 
+        # make samplings if you got dicts
+        nmixture = []
+        for i in mixture:
+            if isinstance(i, dict):
+                nmixture.append(Sampling(**i))
+            else:
+                nmixture.append(i)
+        mixture = nmixture
+
         # validate that rates sum to 1
         total_rate = sum(sampling.rate for sampling in mixture)
         if not abs(total_rate - 1.0) < 1e-6:
