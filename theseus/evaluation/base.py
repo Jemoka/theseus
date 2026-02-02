@@ -148,6 +148,7 @@ class RolloutEvaluation(Evaluation):
         encoding: Any,
         temperature: float = 0.0,
         top_p: float = 1.0,
+        chunk_size: int = 200,
         **kwargs: Any,
     ) -> float:
         """Run evaluation.
@@ -157,6 +158,7 @@ class RolloutEvaluation(Evaluation):
             encoding: Tokenizer with encode_batch/decode_batch methods
             temperature: Sampling temperature (0.0 for greedy)
             top_p: Nucleus sampling threshold
+            chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
             Evaluation score
@@ -215,7 +217,11 @@ class RolloutEvaluation(Evaluation):
         max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
         total_tokens = min(max_prompt_length + max_new_tokens, inference.block_size)
 
-        def evaluate(state: Any, xs: Any, masks: Any, key: Any) -> Any:
+        def evaluate_chunk(
+            state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
+        ) -> Any:
+            """Evaluate a chunk of batches."""
+
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch = batch
                 results = inference._autoregress(
@@ -230,19 +236,42 @@ class RolloutEvaluation(Evaluation):
                 )
                 return None, results
 
-            _, rollouts = jax.lax.scan(reduce, None, (xs, masks))
+            _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
             results = jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
             return results
 
-        # JIT compile
+        # JIT compile chunk function once
         data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate = jax.jit(
-            evaluate,
+        wrapped_evaluate_chunk = jax.jit(
+            evaluate_chunk,
             in_shardings=(inference.state_sharding, data_sharding, data_sharding, None),
             out_shardings=None,
         )
 
-        results = wrapped_evaluate(inference.state, xs, masks, key)
+        # Process in chunks with progress logging
+        num_batches = xs.shape[0]
+        all_results = []
+
+        for chunk_start in range(0, num_batches, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_batches)
+            xs_chunk = xs[chunk_start:chunk_end]
+            masks_chunk = masks[chunk_start:chunk_end]
+
+            # Log progress (only on main process)
+            if jax.process_index() == 0:
+                progress = (chunk_end / num_batches) * 100
+                logger.info(
+                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                )
+
+            # Run chunk
+            chunk_results = wrapped_evaluate_chunk(
+                inference.state, xs_chunk, masks_chunk, key
+            )
+            all_results.append(chunk_results)
+
+        # Concatenate all chunk results
+        results = jnp.concatenate(all_results, axis=0)
 
         # Collect across hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -314,6 +343,7 @@ class EncodingEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        chunk_size: int = 200,
         **kwargs: Any,
     ) -> float:
         """Run evaluation.
@@ -321,6 +351,7 @@ class EncodingEvaluation(Evaluation):
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
+            chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
             Evaluation score
@@ -371,7 +402,9 @@ class EncodingEvaluation(Evaluation):
             masks, inference.mesh, data_pspec
         )
 
-        def evaluate(state: Any, xs: Any, masks: Any) -> Any:
+        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
+            """Evaluate a chunk of batches."""
+
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch = batch
                 # Use inference's forward method - returns (logits, loss)
@@ -386,19 +419,42 @@ class EncodingEvaluation(Evaluation):
                 predictions = jnp.argmax(logits[:, :-1, :], axis=-1)
                 return None, predictions
 
-            _, results = jax.lax.scan(reduce, None, (xs, masks))
+            _, results = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
             results = jnp.reshape(results, (-1, results.shape[-1]))
             return results
 
-        # JIT compile
+        # JIT compile chunk function once
         data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate = jax.jit(
-            evaluate,
+        wrapped_evaluate_chunk = jax.jit(
+            evaluate_chunk,
             in_shardings=(inference.state_sharding, data_sharding, data_sharding),
             out_shardings=None,
         )
 
-        results = wrapped_evaluate(inference.state, xs, masks)
+        # Process in chunks with progress logging
+        num_batches = xs.shape[0]
+        all_results = []
+
+        for chunk_start in range(0, num_batches, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_batches)
+            xs_chunk = xs[chunk_start:chunk_end]
+            masks_chunk = masks[chunk_start:chunk_end]
+
+            # Log progress (only on main process)
+            if jax.process_index() == 0:
+                progress = (chunk_end / num_batches) * 100
+                logger.info(
+                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                )
+
+            # Run chunk
+            chunk_results = wrapped_evaluate_chunk(
+                inference.state, xs_chunk, masks_chunk
+            )
+            all_results.append(chunk_results)
+
+        # Concatenate all chunk results
+        results = jnp.concatenate(all_results, axis=0)
 
         # Collect across hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -435,6 +491,7 @@ class PerplexityEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        chunk_size: int = 200,
         **kwargs: Any,
     ) -> float:
         """Run evaluation.
@@ -442,6 +499,7 @@ class PerplexityEvaluation(Evaluation):
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode/encode_batch methods
+            chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
             Accuracy score
@@ -540,8 +598,10 @@ class PerplexityEvaluation(Evaluation):
             prefix_lens_local, inference.mesh, prefix_lens_pspec
         )
 
-        def evaluate(state: Any, xs: Any, masks: Any, prefix_lens: Any) -> Any:
-            """Compute per-sample loss only on continuation tokens."""
+        def evaluate_chunk(
+            state: Any, xs_chunk: Any, masks_chunk: Any, prefix_lens_chunk: Any
+        ) -> Any:
+            """Compute per-sample loss only on continuation tokens for a chunk."""
 
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch, prefix_len_batch = batch
@@ -594,15 +654,17 @@ class PerplexityEvaluation(Evaluation):
 
                 return None, per_sample_loss
 
-            _, losses = jax.lax.scan(reduce, None, (xs, masks, prefix_lens))
+            _, losses = jax.lax.scan(
+                reduce, None, (xs_chunk, masks_chunk, prefix_lens_chunk)
+            )
             losses = jnp.reshape(losses, (-1,))
             return losses
 
-        # JIT compile
+        # JIT compile chunk function once
         data_sharding = NamedSharding(inference.mesh, data_pspec)
         prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
-        wrapped_evaluate = jax.jit(
-            evaluate,
+        wrapped_evaluate_chunk = jax.jit(
+            evaluate_chunk,
             in_shardings=(
                 inference.state_sharding,
                 data_sharding,
@@ -612,7 +674,31 @@ class PerplexityEvaluation(Evaluation):
             out_shardings=None,
         )
 
-        losses = wrapped_evaluate(inference.state, xs, masks, prefix_lens_local)
+        # Process in chunks with progress logging
+        num_batches = xs.shape[0]
+        all_losses = []
+
+        for chunk_start in range(0, num_batches, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_batches)
+            xs_chunk = xs[chunk_start:chunk_end]
+            masks_chunk = masks[chunk_start:chunk_end]
+            prefix_lens_chunk = prefix_lens_local[chunk_start:chunk_end]
+
+            # Log progress (only on main process)
+            if jax.process_index() == 0:
+                progress = (chunk_end / num_batches) * 100
+                logger.info(
+                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                )
+
+            # Run chunk
+            chunk_losses = wrapped_evaluate_chunk(
+                inference.state, xs_chunk, masks_chunk, prefix_lens_chunk
+            )
+            all_losses.append(chunk_losses)
+
+        # Concatenate all chunk results
+        losses = jnp.concatenate(all_losses, axis=0)
 
         # Gather results across all hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
