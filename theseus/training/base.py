@@ -44,9 +44,7 @@ class BaseTrainerConfig:
     per_device_batch_size: int = field(
         "training/per_device_batch_size", default=8
     )  # TODO! this should be automatically detected somehow
-    total_steps: int = field(
-        "training/total_steps"
-    )  # TODO: this should be computed based on the dataset spec
+    total_tokens: int = field("training/tokens", default=1_000_000_000)
 
     # Learning rate schedule (WSD: Warmup-Stable-Decay)
     lr: float = field("optimization/lr", default=3e-4)
@@ -105,7 +103,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
 
         sched, cfg = SCHEDULES[sched_name]  # type: ignore
 
-        return sched(self.args.total_steps, configure(cfg))
+        return sched(self.total_steps, configure(cfg))
 
     def _optimizer(self) -> optax.GradientTransformation:
         optim_name = self.optimizer()
@@ -146,7 +144,8 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         )
 
         # Total micro-batches to process per node
-        self.total_batches = self.args.total_steps * self.accumulate_steps
+        self.total_steps = self.args.total_tokens // self.args.batch_size
+        self.total_batches = self.total_steps * self.accumulate_steps
 
         # Log a bunch of things
         if self.main_process():
@@ -644,7 +643,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
 
         # final save at the end of training
         self.save(
-            Path("ntoks")
+            Path("final")
             / str(
                 (
                     ((indx + 1) // self.accumulate_steps)
@@ -687,3 +686,13 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
                 self.global_step_counter_,
                 self.best_val_score_,
             )
+
+    def run(self) -> None:
+        """main entry point to run training, called on all nodes"""
+        self.train()
+
+    @property
+    def done(self) -> bool:
+        """check if training is done"""
+
+        return self.global_step_counter_ >= self.total_batches
