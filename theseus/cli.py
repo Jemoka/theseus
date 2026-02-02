@@ -21,7 +21,7 @@ import numpy as np
 from typing import Any, List, Type
 
 from theseus.registry import JOBS
-from theseus.config import build, hydrate, configuration
+from theseus.config import build, configuration
 
 console = Console()
 
@@ -201,6 +201,8 @@ def run(
             )
             sys.exit(1)
         job = cfg.job
+    else:
+        cfg.job = job
 
     # Validate job exists
     if job not in JOBS:
@@ -228,19 +230,10 @@ def run(
     console.print(f"[blue]Output path:[/blue] {out_path}")
     console.print()
 
-    # Hydrate and run the job
+    # Run the job within the configuration context
+    # BasicJob.__init__ will call configure() to hydrate args from the context
     with configuration(cfg):
-        if isinstance(job_obj.config(), (list, tuple)):
-            # everything else should be passed with implicit configure()
-            cfg = hydrate(job_obj.config()[0], cfg)
-            job_instance = job_obj.local(
-                cfg, out_path, name=name, project=project, group=group
-            )
-        else:
-            cfg = hydrate(job_obj.config(), cfg)
-            job_instance = job_obj.local(
-                cfg, out_path, name=name, project=project, group=group
-            )
+        job_instance = job_obj.local(out_path, name=name, project=project, group=group)
         job_instance()
 
     console.print()

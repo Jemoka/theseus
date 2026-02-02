@@ -15,7 +15,7 @@ from omegaconf import OmegaConf
 
 from theseus.base import _BaseJob, ExecutionSpec, PyTree, JobSpec
 from theseus.base import local
-from theseus.config import current_config
+from theseus.config import current_config, configure
 
 
 C = TypeVar("C")
@@ -26,8 +26,13 @@ class BasicJob(_BaseJob, Generic[C]):
     def config(cls) -> Union[Type[C], List[Type[Any]]]:
         raise NotImplementedError()
 
-    def __init__(self, args: C, spec: ExecutionSpec):
-        self.args = args
+    def __init__(self, spec: ExecutionSpec):
+        cfg_type = self.config()
+        if isinstance(cfg_type, list):
+            self.args = configure(cfg_type[0])
+        else:
+            self.args = configure(cfg_type)
+
         self.spec = spec
 
     def main_process(self) -> bool:
@@ -62,7 +67,6 @@ class BasicJob(_BaseJob, Generic[C]):
     @classmethod
     def local(
         cls,
-        config: C,
         root_dir: str,
         name: str = "local",
         project: str | None = None,
@@ -76,12 +80,12 @@ class BasicJob(_BaseJob, Generic[C]):
             hardware=hardware,
             distributed=False,
         )
-        return cls(config, spec)
+        return cls(spec)
 
 
 class CheckpointedJob(BasicJob[C], Generic[C]):
-    def __init__(self, args: C, spec: ExecutionSpec):
-        super().__init__(args, spec)
+    def __init__(self, spec: ExecutionSpec):
+        super().__init__(spec)
         self.key = jax.random.PRNGKey(0)
 
     def _get_checkpoint_path(self, suffix: str) -> str:
