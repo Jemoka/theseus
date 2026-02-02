@@ -70,8 +70,8 @@ class BaseTrainerConfig:
 
     # Logging/checkpointing
     report_interval: int = field("logging/report_interval", default=32)
-    checkpoint_interval: int = field("training/checkpoint_interval", default=1024)
-    validation_interval: int = field("training/validation_interval", default=512)
+    checkpoint_interval: int = field("logging/checkpoint_interval", default=1024)
+    validation_interval: int = field("logging/validation_interval", default=512)
     validation_steps: int = field("training/validation_steps", default=2048)
 
     # W&B
