@@ -296,8 +296,14 @@ def local(root_dir: str, work_dir: str) -> HardwareResult:
 
         total_chips = len(devices)
 
+    import socket
+
     # Create cluster (paths assumed identical across hosts)
     cluster = Cluster(name="local", root=root_dir, work=work_dir)
+
+    # Get current host's actual hostname
+    current_process_idx = jax.process_index()
+    current_hostname = socket.gethostname()
 
     # Create one ClusterMachine per host
     # Host index matches jax.process_index()
@@ -308,9 +314,15 @@ def local(root_dir: str, work_dir: str) -> HardwareResult:
         if host_device_count > 0:
             resources[chip] = host_device_count
 
+        # Use actual hostname for current host, fallback to index for others
+        if host_idx == current_process_idx:
+            host_name = current_hostname
+        else:
+            host_name = f"host-{host_idx}"
+
         hosts.append(
             ClusterMachine(
-                name=f"host-{host_idx}",
+                name=host_name,
                 cluster=cluster,
                 resources=resources,
             )
