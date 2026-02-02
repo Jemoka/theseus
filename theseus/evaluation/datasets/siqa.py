@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from typing import Tuple
+from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
@@ -35,6 +35,10 @@ class SIQAEval(RolloutEvaluation):
     def name(self) -> str:
         return "siqa"
 
+    def max_new_tokens(self, inference: Any) -> int:
+        """Only need 1 token for A/B/C answer."""
+        return 10
+
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = ["A", "B", "C"][int(item["label"]) - 1]
@@ -61,7 +65,7 @@ class SIQAEval(RolloutEvaluation):
                 assistant_msgs.append(i.message.strip())
         if not assistant_msgs:
             return ""
-        return assistant_msgs[-1].strip().upper()
+        return assistant_msgs[0].strip().upper()
 
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().upper() == y_hat.strip().upper()

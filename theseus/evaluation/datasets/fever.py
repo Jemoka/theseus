@@ -61,6 +61,10 @@ class FEVEREval(RolloutEvaluation):
     def name(self) -> str:
         return "fever"
 
+    def max_new_tokens(self, inference: Any) -> int:
+        """Need ~5 tokens for SUPPORTS/REFUTES/NOT ENOUGH INFO."""
+        return 25
+
     def _get_evidence_text(self, evidence: list[Any]) -> str | None:
         """Extract unique Wikipedia article titles and fetch summaries."""
         articles: set[str] = set()
@@ -102,7 +106,7 @@ class FEVEREval(RolloutEvaluation):
                 assistant_msgs.append(i.message.strip())
         if not assistant_msgs:
             return ""
-        return assistant_msgs[-1].strip().upper()
+        return assistant_msgs[0].strip().upper()
 
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().upper() == y_hat.strip().upper()

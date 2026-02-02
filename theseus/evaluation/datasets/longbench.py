@@ -57,7 +57,9 @@ class LongBench(RolloutEvaluation):
         for i in chats:
             if i.role == "assistant":
                 assistant_msgs.append(i.message.strip())
-        return assistant_msgs[-1].strip().lower()
+        if not assistant_msgs:
+            return ""
+        return assistant_msgs[0].strip().lower()
 
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().lower() == y_hat.strip().lower()

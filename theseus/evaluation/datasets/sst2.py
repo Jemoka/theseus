@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from typing import Tuple
+from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
@@ -28,6 +28,10 @@ class SST2Eval(RolloutEvaluation):
     def name(self) -> str:
         return "sst2"
 
+    def max_new_tokens(self, inference: Any) -> int:
+        """Only need ~2 tokens for positive/negative answer."""
+        return 15
+
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = "positive" if item["label"] == 1 else "negative"
@@ -45,7 +49,7 @@ class SST2Eval(RolloutEvaluation):
                 assistant_msgs.append(i.message.strip())
         if not assistant_msgs:
             return ""
-        return assistant_msgs[-1].strip().lower()
+        return assistant_msgs[0].strip().lower()
 
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().lower() == y_hat.strip().lower()

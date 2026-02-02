@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from typing import Tuple
+from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
@@ -29,6 +29,10 @@ class QQPEval(RolloutEvaluation):
     def name(self) -> str:
         return "qqp"
 
+    def max_new_tokens(self, inference: Any) -> int:
+        """Only need 1 token for yes/no answer."""
+        return 10
+
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = "yes" if item["label"] else "no"
@@ -48,7 +52,7 @@ class QQPEval(RolloutEvaluation):
                 assistant_msgs.append(i.message.strip())
         if not assistant_msgs:
             return ""
-        return assistant_msgs[-1].strip().lower()
+        return assistant_msgs[0].strip().lower()
 
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().lower() == y_hat.strip().lower()

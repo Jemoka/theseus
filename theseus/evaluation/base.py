@@ -135,6 +135,13 @@ class RolloutEvaluation(Evaluation):
         """
         ...
 
+    def max_new_tokens(self, inference: "InferenceJob[Any, M]") -> int:
+        """Maximum tokens to generate. Override in subclasses for shorter rollouts.
+
+        Default is full block_size, but most evaluations only need ~10-100 tokens.
+        """
+        return inference.block_size
+
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
@@ -203,14 +210,20 @@ class RolloutEvaluation(Evaluation):
         # Create subkey
         inference.key, key = jax.random.split(inference.key)
 
+        # Calculate total tokens needed: max prompt length + max_new_tokens
+        max_new_tokens = eval_data.max_new_tokens(inference)
+        max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
+        total_tokens = min(max_prompt_length + max_new_tokens, inference.block_size)
+
         def evaluate(state: Any, xs: Any, masks: Any, key: Any) -> Any:
             def reduce(_: Any, batch: Any) -> Any:
+                x_batch, mask_batch = batch
                 results = inference._autoregress(
                     state,
                     key,
-                    batch[0],
-                    batch[1],
-                    inference.block_size,
+                    x_batch,
+                    mask_batch,
+                    total_tokens,
                     temperature,
                     top_p,
                     **kwargs,
