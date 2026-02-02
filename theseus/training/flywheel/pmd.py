@@ -13,13 +13,16 @@ import numpy as np
 from theseus.base.job import ExecutionSpec
 from theseus.training.flywheel.strategy import Dataset
 
+BYTES_PER_BLOCK = 4 * 1024 * 1024  # 4MB block size
+BUFFER_BLOCKS = 4  # Number of blocks to buffer (16MB total)
+
 
 class MemmapDataset(Dataset):
     def __init__(
         self, spec: ExecutionSpec, block_size: int, name: str, suffix: str = ""
     ):
-        self.cache_train = None
-        self.cache_val = None
+        self.cache_train: Optional[np.memmap] = None
+        self.cache_val: Optional[np.memmap] = None
         self.block_size = block_size
 
         data_dir: Path = spec.hardware.hosts[jax.process_index()].cluster.data_dir
@@ -28,40 +31,94 @@ class MemmapDataset(Dataset):
 
         self.has_val = (path / "val.bin").exists()
 
+        # Buffer state for cache-optimal loading (per split)
+        self._tokens_per_block = BYTES_PER_BLOCK // 2  # uint16 = 2 bytes
+        self._train_buffer: Optional[np.ndarray] = None
+        self._train_sample_indices: Optional[np.ndarray] = None
+        self._train_sample_ptr = 0
+        self._train_next_block = 0
+        self._val_buffer: Optional[np.ndarray] = None
+        self._val_sample_indices: Optional[np.ndarray] = None
+        self._val_sample_ptr = 0
+        self._val_next_block = 0
+
+    def _get_memmap(self, split: str) -> np.memmap:
+        """Get or create memmap for the given split."""
+        if split == "train":
+            if self.cache_train is None:
+                self.cache_train = np.memmap(
+                    os.path.join(self.path, "train.bin"), dtype=np.uint16, mode="r"
+                )
+            result = self.cache_train
+        else:
+            if self.cache_val is None:
+                self.cache_val = np.memmap(
+                    os.path.join(self.path, "val.bin"), dtype=np.uint16, mode="r"
+                )
+            result = self.cache_val
+        assert result is not None
+        return result
+
+    def _refill_buffer(self, data: np.memmap, split: str) -> None:
+        """Read next BUFFER_BLOCKS sequentially into buffer, generate shuffled indices."""
+        file_tokens = len(data)
+        total_blocks = max(1, (file_tokens * 2) // BYTES_PER_BLOCK)
+
+        # Get current state for this split
+        if split == "train":
+            next_block = self._train_next_block
+        else:
+            next_block = self._val_next_block
+
+        # Wrap around and determine read range
+        start_block = next_block % total_blocks
+        blocks_to_read = min(BUFFER_BLOCKS, total_blocks)
+
+        # Calculate token range (sequential read - cache friendly!)
+        start_token = start_block * self._tokens_per_block
+        end_token = min(
+            start_token + blocks_to_read * self._tokens_per_block, file_tokens
+        )
+
+        # Handle wrap-around at end of file
+        if end_token <= start_token + self.block_size:
+            start_token = 0
+            end_token = min(blocks_to_read * self._tokens_per_block, file_tokens)
+            start_block = 0
+
+        # Single sequential read into buffer
+        buffer = np.array(data[start_token:end_token])
+
+        # Generate shuffled sample indices within buffer
+        num_samples = max(1, len(buffer) - self.block_size - 1)
+        sample_indices = np.random.permutation(num_samples)
+
+        # Update state for this split
+        if split == "train":
+            self._train_buffer = buffer
+            self._train_sample_indices = sample_indices
+            self._train_sample_ptr = 0
+            self._train_next_block = (start_block + blocks_to_read) % total_blocks
+        else:
+            self._val_buffer = buffer
+            self._val_sample_indices = sample_indices
+            self._val_sample_ptr = 0
+            self._val_next_block = (start_block + blocks_to_read) % total_blocks
+
     def get_batch(
         self,
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """get batches based on the "poor man's dataloader" strategy"""
-
+        """Get batches using cache-optimal sequential block reads."""
         if not self.has_val and split == "val":
             split = "train"
 
-        # args is the run configuration + config is the GPT config
-        data_dir = self.path
+        data = self._get_memmap(split)
         block_size = self.block_size
 
-        # We recreate np.memmap every batch to avoid a memory leak, as per
-        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-        if split == "train":
-            if self.cache_train is not None:
-                data = self.cache_train
-            else:
-                data = np.memmap(
-                    os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r"
-                )
-                self.cache_train = data  # type: ignore
-        else:
-            if self.cache_val is not None:
-                data = self.cache_val
-            else:
-                data = np.memmap(
-                    os.path.join(data_dir, "val.bin"), dtype=np.uint16, mode="r"
-                )
-                self.cache_val = data  # type: ignore
-
+        # Deterministic access: use original sequential logic (for validation)
         if deterministic_key:
             portion = batch_size * block_size
             ix = np.arange(
@@ -69,17 +126,53 @@ class MemmapDataset(Dataset):
                 (deterministic_key + 1) * portion,
                 block_size,
             )
+            x = np.stack([data[i : i + block_size].astype(np.int64) for i in ix])
+            y = np.stack(
+                [data[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix]
+            )
+            padding_mask = np.ones_like(x, dtype=np.bool_)
+            return x, y, padding_mask
+
+        # Random access: use buffer for cache-optimal loading
+        if split == "train":
+            buffer = self._train_buffer
+            sample_indices = self._train_sample_indices
+            sample_ptr = self._train_sample_ptr
         else:
-            ix = np.random.randint(0, len(data) - block_size, size=(batch_size,))
+            buffer = self._val_buffer
+            sample_indices = self._val_sample_indices
+            sample_ptr = self._val_sample_ptr
 
-        x = np.stack([data[i : i + block_size].astype(np.int64) for i in ix])
-        y = np.stack([data[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix])
+        # Refill buffer if needed
+        if (
+            buffer is None
+            or sample_indices is None
+            or sample_ptr + batch_size > len(sample_indices)
+        ):
+            self._refill_buffer(data, split)
+            if split == "train":
+                buffer = self._train_buffer
+                sample_indices = self._train_sample_indices
+                sample_ptr = 0
+            else:
+                buffer = self._val_buffer
+                sample_indices = self._val_sample_indices
+                sample_ptr = 0
 
-        # Convert to numpy arrays
-        x = np.array(x)
-        y = np.array(y)
+        assert buffer is not None and sample_indices is not None
 
-        # For now, all tokens are real (no padding)
+        # Sample from buffer using pre-shuffled indices
+        ix = sample_indices[sample_ptr : sample_ptr + batch_size]
+
+        # Update pointer
+        if split == "train":
+            self._train_sample_ptr = sample_ptr + batch_size
+        else:
+            self._val_sample_ptr = sample_ptr + batch_size
+
+        # Extract sequences from buffer (all in-memory, no file access)
+        x = np.stack([buffer[i : i + block_size].astype(np.int64) for i in ix])
+        y = np.stack([buffer[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix])
         padding_mask = np.ones_like(x, dtype=np.bool_)
 
         return x, y, padding_mask
