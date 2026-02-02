@@ -253,10 +253,16 @@ class RolloutEvaluation(Evaluation):
         results = jnp.reshape(results, (-1, results.shape[-1]))
         decoded_results = encoding.decode_batch(results.tolist())
 
-        # Score (y was gathered on process 0, broadcast to all)
-        assert y is not None
-        score = eval_data.score(list(y), [eval_data.clean(i) for i in decoded_results])
-        return score
+        # Score on process 0 only, then broadcast
+        if jax.process_index() == 0:
+            assert y is not None
+            score = eval_data.score(
+                list(y), [eval_data.clean(i) for i in decoded_results]
+            )
+        else:
+            score = None
+        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
+        return float(score)
 
 
 class EncodingEvaluation(Evaluation):
@@ -403,10 +409,14 @@ class EncodingEvaluation(Evaluation):
         results = jnp.reshape(results, (-1, results.shape[-1]))
         decoded_outputs = encoding.decode_batch(results.tolist())
 
-        # Score
-        assert x is not None
-        score = eval_data.score(x, [eval_data.clean(i) for i in decoded_outputs])
-        return score
+        # Score on process 0 only, then broadcast
+        if jax.process_index() == 0:
+            assert x is not None
+            score = eval_data.score(x, [eval_data.clean(i) for i in decoded_outputs])
+        else:
+            score = None
+        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
+        return float(score)
 
 
 class PerplexityEvaluation(Evaluation):
@@ -619,34 +629,40 @@ class PerplexityEvaluation(Evaluation):
         metadata_gathered = jax.device_get(metadata_gathered)
         correct_indices_array = jax.device_get(correct_indices_array)
 
-        # Group losses by sample_idx
-        sample_losses = defaultdict(list)
-        sample_num_continuations = {}
+        # Score on process 0 only, then broadcast
+        if jax.process_index() == 0:
+            # Group losses by sample_idx
+            sample_losses = defaultdict(list)
+            sample_num_continuations = {}
 
-        for i, (sample_idx, cont_idx, num_conts) in enumerate(metadata_gathered):
-            sample_idx = int(sample_idx)
-            sample_losses[sample_idx].append(losses[i])
-            sample_num_continuations[sample_idx] = int(num_conts)
+            for i, (sample_idx, cont_idx, num_conts) in enumerate(metadata_gathered):
+                sample_idx = int(sample_idx)
+                sample_losses[sample_idx].append(losses[i])
+                sample_num_continuations[sample_idx] = int(num_conts)
 
-        # Evaluate complete samples only
-        correct = 0
-        total = 0
+            # Evaluate complete samples only
+            correct = 0
+            total = 0
 
-        for sample_idx in sorted(sample_losses.keys()):
-            expected_conts = sample_num_continuations[sample_idx]
-            actual_conts = len(sample_losses[sample_idx])
+            for sample_idx in sorted(sample_losses.keys()):
+                expected_conts = sample_num_continuations[sample_idx]
+                actual_conts = len(sample_losses[sample_idx])
 
-            if actual_conts != expected_conts:
-                continue
+                if actual_conts != expected_conts:
+                    continue
 
-            losses_for_sample = jnp.array(sample_losses[sample_idx])
-            pred = int(jnp.argmin(losses_for_sample))
-            correct_idx = int(correct_indices_array[sample_idx])
+                losses_for_sample = jnp.array(sample_losses[sample_idx])
+                pred = int(jnp.argmin(losses_for_sample))
+                correct_idx = int(correct_indices_array[sample_idx])
 
-            correct += int(pred == correct_idx)
-            total += 1
+                correct += int(pred == correct_idx)
+                total += 1
 
-        accuracy = correct / total if total > 0 else 0.0
+            accuracy = correct / total if total > 0 else 0.0
+        else:
+            accuracy = None
+
+        accuracy = multihost_utils.broadcast_one_to_all(jnp.array(accuracy))
         return float(accuracy)
 
 
