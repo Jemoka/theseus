@@ -31,7 +31,10 @@ from theseus.model.module import Module
 from theseus.base import PyTree, Axis
 from theseus.training.optimizers import OPTIMIZERS
 from theseus.training.schedules import SCHEDULES
-from theseus.training.utils import find_accumulation_steps
+from theseus.training.utils import (
+    find_accumulation_steps,
+    estimate_per_device_batch_size,
+)
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
 
 M = TypeVar("M", bound=Module)
@@ -42,8 +45,9 @@ class BaseTrainerConfig:
     # Training hyperparameters
     batch_size: int = field("training/batch_size", default=512)
     per_device_batch_size: int = field(
-        "training/per_device_batch_size", default=8
-    )  # TODO! this should be automatically detected somehow
+        "training/per_device_batch_size", default=-1
+    )  # -1 = auto-estimate based on VRAM
+    vram_calib_factor: float = field("architecture/vram_calib_factor", default=1.0)
     total_tokens: int = field("training/tokens", default=1_000_000_000)
 
     # Learning rate schedule (WSD: Warmup-Stable-Decay)
@@ -138,16 +142,80 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
 
-        # compute our batch size
+        # initialize model from the config in thin air
+        self.model: M = configure(self.MODEL)
+
+        # Initialize random keys
+        self.key, init_key, self.dropout_key = jax_random.split(self.key, num=3)
+
+        # Initialize model
+        dummy_input = jnp.ones((1, self.args.block_size), dtype=jnp.int32)
+        variables = self.model.init(init_key, dummy_input)
+        params = variables["params"]
+
+        # build the optimizer
+        self.scheduler: optax.base.Schedule = self._schedule()
+        self.tx = self._optimizer()
+        logger.info(f"OPTIMIZER | {self.tx}")
+
+        # build state
+        self.state = train_state.TrainState.create(
+            apply_fn=self.model.apply, params=params, tx=self.tx
+        )  # type: ignore
+        self.total_params = (
+            sum(x.size for x in jax.tree_util.tree_leaves(self.state.params)) / 1e6
+        )
+
+        if self.main_process():
+            logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
+
+        # Shard the state
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+            flax.linen.get_partition_spec(self.state),
+            self.mesh,
+            rules=tuple(self.model.sharding),
+        )
+        self.state = jax.device_put(self.state, self.state_sharding)
+
+        # Compute batch size (auto-estimate or manual override)
+        if self.args.per_device_batch_size < 0:
+            if self.spec.hardware.chip is None:
+                raise ValueError(
+                    "Cannot auto-estimate per-device batch size without chip specification in hardware!"
+                )
+            chip_memory = self.spec.hardware.chip.memory
+            shards = self.mesh.shape[Axis.SHARD]
+
+            fitted_bs = estimate_per_device_batch_size(
+                chip_memory=chip_memory,
+                total_params_millions=self.total_params,
+                shards=shards,
+                block_size=self.args.block_size,
+                vram_calib_factor=self.args.vram_calib_factor,
+            )
+
+            if self.main_process():
+                logger.info(
+                    "AUTO_BATCH | vram={:.1f}GB params={:.1f}M shards={} seq={} calib={:.2f} -> batch_size={}",
+                    chip_memory / 1e9,
+                    self.total_params,
+                    shards,
+                    self.args.block_size,
+                    self.args.vram_calib_factor,
+                    fitted_bs,
+                )
+        else:
+            fitted_bs = self.args.per_device_batch_size
+
         self.per_device_batch_size, self.accumulate_steps = find_accumulation_steps(
-            self.args.batch_size, self.args.per_device_batch_size, topology
+            self.args.batch_size, fitted_bs, topology
         )
 
         # Total micro-batches to process per node
         self.total_steps = self.args.total_tokens // self.args.batch_size
         self.total_batches = self.total_steps * self.accumulate_steps
 
-        # Log a bunch of things
+        # Log batch configuration
         if self.main_process():
             logger.info(
                 "BATCHING | {} batchsize/node * ({} local * {} prox = {} dp) * {} accumulation = {} batchsize",
@@ -190,41 +258,6 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             )
             if self.args.wandb:
                 self.spec.id = wandb.run.id
-
-        # initialize model from the config in thin air
-        self.model: M = configure(self.MODEL)
-
-        # Initialize random keys
-        self.key, init_key, self.dropout_key = jax_random.split(self.key, num=3)
-
-        # Initialize model
-        dummy_input = jnp.ones((1, self.args.block_size), dtype=jnp.int32)
-        variables = self.model.init(init_key, dummy_input)
-        params = variables["params"]
-
-        # build the optimizer
-        self.scheduler: optax.base.Schedule = self._schedule()
-        self.tx = self._optimizer()
-        logger.info(f"OPTIMIZER | {self.tx}")
-
-        # build state
-        self.state = train_state.TrainState.create(
-            apply_fn=self.model.apply, params=params, tx=self.tx
-        )  # type: ignore
-        self.total_params = (
-            sum(x.size for x in jax.tree_util.tree_leaves(self.state.params)) / 1e6
-        )
-
-        if self.main_process():
-            logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
-
-        # Shard the state
-        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
-            flax.linen.get_partition_spec(self.state),
-            self.mesh,
-            rules=tuple(self.model.sharding),
-        )
-        self.state = jax.device_put(self.state, self.state_sharding)
 
         # make dataset strategy
         self.strategy = Strategy(spec, self.args.block_size, self.args.datasets)
