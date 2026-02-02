@@ -195,7 +195,7 @@ class Strategy:
         padding_mask = np.concatenate(mask_parts, axis=0)
 
         # Shuffle to mix samples from different datasets
-        perm = r.sample(range(batch_size), batch_size)
+        perm = r.sample(range(min(batch_size, len(x))), min(batch_size, len(x)))
         x = x[perm]
         y = y[perm]
         padding_mask = padding_mask[perm]
