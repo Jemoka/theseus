@@ -25,7 +25,6 @@ from loguru import logger
 from theseus.base import ExecutionSpec
 from theseus.job import RestoreableJob
 from theseus.config import field, current_config, configure
-from theseus.inference import InferenceJob
 
 from theseus.model.module import Module
 
@@ -37,6 +36,7 @@ from theseus.training.utils import (
     estimate_per_device_batch_size,
 )
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
+from theseus.evaluation.base import Evaluator, EvaluatorConfig
 
 M = TypeVar("M", bound=Module)
 
@@ -88,7 +88,7 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
 
     @classmethod
     def config(cls) -> List[Type[Any]]:
-        cfg = [BaseTrainerConfig, *cls.MODEL.gather()]
+        cfg: List[Type[Any]] = [BaseTrainerConfig, *cls.MODEL.gather(), EvaluatorConfig]
 
         if isinstance(cls.optimizer(), str):
             _, optim_cfg = OPTIMIZERS.get(cls.optimizer(), (None, None))
@@ -339,13 +339,13 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         return logits, loss
 
     @property
-    def inference(self) -> "InferenceJob[Any, M]":
+    def inference(self) -> "Evaluator[M]":
         """Get InferenceJob for this trainer (for evaluations).
 
         Creates a new InferenceJob each time - if caching is needed,
         store the result externally.
         """
-        return InferenceJob.from_trainer(self)
+        return Evaluator.from_trainer(self)
 
     @classmethod
     def train_step(
@@ -663,6 +663,8 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
                 )  # so we don't ovelap with checkpoint
             ):
                 score, val_metrics = valid_step(self.state)
+                eval_metrics = self.inference.evaluate()
+                val_metrics.update(eval_metrics)
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)
                     * self.args.batch_size

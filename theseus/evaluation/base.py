@@ -725,8 +725,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         evaluator.encoding = get_chatml_encoder()
         return evaluator, cfg
 
-    def run(self) -> None:
-        """Run all evaluations and save results to disk."""
+    def evaluate(self) -> dict[str, float]:
         results: dict[str, float] = {}
 
         for evaluation in self.evaluations:
@@ -734,6 +733,14 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
             score = evaluation(self, self.encoding)
             results[evaluation.name] = score
             logger.info("EVAL | {} = {:.4f}", evaluation.name, score)
+
+        return results
+
+    def run(self) -> None:
+        """Run all evaluations and save results to disk."""
+
+        logger.info("EVAL | Starting evaluations for job {}", self.spec.name)
+        results = self.evaluate()
 
         # Log summary
         logger.info("=" * 60)
