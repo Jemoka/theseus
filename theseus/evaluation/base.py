@@ -10,10 +10,11 @@ Also provides:
 - Evaluator: InferenceJob subclass that runs multiple evaluations
 """
 
-from abc import ABC, abstractmethod
-from collections import defaultdict
 import json
 from pathlib import Path
+from abc import ABC, abstractmethod
+from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Tuple, List, Generic, TYPE_CHECKING
 
 import jax
@@ -23,7 +24,11 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from loguru import logger
 
 from theseus.base import Axis, ExecutionSpec
+
+from theseus.config import field, configure
 from theseus.inference import InferenceJob, M
+from theseus.data.tokenizer import get_chatml_encoder
+from theseus.evaluation.datasets import DATASETS
 
 if TYPE_CHECKING:
     from theseus.training.trainers.base import BaseTrainer
@@ -663,7 +668,16 @@ class PerplexityEvaluation(Evaluation):
         return float(accuracy)
 
 
-class Evaluator(InferenceJob[Any, M], Generic[M]):
+@dataclass
+class EvaluatorConfig:
+    """Configuration for Evaluator."""
+
+    evaluations: List[str] = field(
+        "evaluator/evaluations", default_factory=lambda x: ["blimp"]
+    )
+
+
+class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
     """InferenceJob that runs evaluations and saves results.
 
     Created from a trainer or checkpoint, holds a list of evaluations,
@@ -677,6 +691,10 @@ class Evaluator(InferenceJob[Any, M], Generic[M]):
     MODEL: type[M]  # Set by subclass (e.g., EvaluatorGPT)
     evaluations: List[Evaluation]
     encoding: Any  # Tokenizer
+
+    @classmethod
+    def config(cls) -> List[Any]:
+        return [EvaluatorConfig]
 
     def __init__(self, spec: ExecutionSpec):
         """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
@@ -698,12 +716,7 @@ class Evaluator(InferenceJob[Any, M], Generic[M]):
         return self._get_results_path().exists()
 
     @classmethod
-    def from_trainer(  # type: ignore[override]
-        cls,
-        trainer: "BaseTrainer[Any]",
-        evaluations: List[Evaluation],
-        encoding: Any,
-    ) -> "Evaluator[M]":
+    def from_trainer(cls, trainer: "BaseTrainer[Any]") -> "Evaluator[M]":
         """Create Evaluator from trainer.
 
         Args:
@@ -715,17 +728,19 @@ class Evaluator(InferenceJob[Any, M], Generic[M]):
             Evaluator instance ready to run evaluations
         """
         evaluator = super().from_trainer(trainer)
-        evaluator.evaluations = evaluations
-        evaluator.encoding = encoding
+        evaluator.encoding = get_chatml_encoder()
+
+        cfg = configure(EvaluatorConfig)
+        try:
+            evaluator.evaluations = [DATASETS[name]() for name in cfg.evaluations]
+        except KeyError as e:
+            raise ValueError(f"Unknown evaluation dataset: {e.args[0]}") from e
+
         return evaluator
 
     @classmethod
-    def from_checkpoint(  # type: ignore[override]
-        cls,
-        suffix: str | Path,
-        spec: ExecutionSpec,
-        evaluations: List[Evaluation],
-        encoding: Any,
+    def from_checkpoint(
+        cls, suffix: str | Path, spec: ExecutionSpec
     ) -> Tuple["Evaluator[M]", Any]:
         """Create Evaluator from checkpoint.
 
@@ -739,8 +754,7 @@ class Evaluator(InferenceJob[Any, M], Generic[M]):
             (evaluator, config) tuple
         """
         evaluator, cfg = super().from_checkpoint(suffix, spec)
-        evaluator.evaluations = evaluations
-        evaluator.encoding = encoding
+        evaluator.encoding = get_chatml_encoder()
         return evaluator, cfg
 
     def run(self) -> None:

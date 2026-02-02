@@ -204,10 +204,6 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         logger.debug("CHECKPOINT | loaded {}", spec.name)
         return job, cfg
 
-    @classmethod
-    def config(cls) -> List[Any]:
-        return []
-
     @staticmethod
     def pad(
         seqs: List[List[int]], pad_token: int = 0, pad_to: Optional[int] = None
