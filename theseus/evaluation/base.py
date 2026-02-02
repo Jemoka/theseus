@@ -160,7 +160,7 @@ class RolloutEvaluation(Evaluation):
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
             x, y = zip(*[eval_data.get(i) for i in range(len(eval_data))])
-            xs, masks = inference.pad(encoding.encode_batch(x))
+            xs, masks = inference.pad(encoding.encode_batch(x, allowed_special="all"))
         else:
             x, y = None, None
             xs, masks = None, None
@@ -312,7 +312,7 @@ class EncodingEvaluation(Evaluation):
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
             x = [eval_data.get(i) for i in range(len(eval_data))]
-            xs, masks = inference.pad(encoding.encode_batch(x))
+            xs, masks = inference.pad(encoding.encode_batch(x, allowed_special="all"))
         else:
             x = None
             xs, masks = None, None
@@ -446,7 +446,9 @@ class PerplexityEvaluation(Evaluation):
                     metadata.append((sample_idx, cont_idx, len(continuations)))
 
             # Encode all inputs
-            encoded_inputs = encoding.encode_batch(flattened_inputs)
+            encoded_inputs = encoding.encode_batch(
+                flattened_inputs, allowed_special="all"
+            )
             xs, masks = inference.pad(encoded_inputs)
             prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
             metadata_array = jnp.array(metadata, dtype=jnp.int32)
