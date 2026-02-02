@@ -102,10 +102,10 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             return optax.constant_schedule(self.args.lr)
 
         sched_name = self.schedule()
-        if isinstance(sched_name, optax._src.base.Schedule):
+        if not isinstance(sched_name, str):
             return sched_name
 
-        sched, cfg = SCHEDULES[sched_name]  # type: ignore
+        sched, cfg = SCHEDULES[sched_name]
 
         return sched(self.total_steps, configure(cfg))
 
@@ -141,6 +141,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         self.mesh = spec.topology.mesh
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
+        self.total_steps = self.args.total_tokens // self.args.batch_size
 
         # initialize model from the config in thin air
         self.model: M = configure(self.MODEL)
@@ -156,7 +157,6 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         # build the optimizer
         self.scheduler: optax._src.base.Schedule = self._schedule()
         self.tx = self._optimizer()
-        logger.info(f"OPTIMIZER | {self.tx}")
 
         # build state
         self.state = train_state.TrainState.create(
@@ -212,7 +212,6 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         )
 
         # Total micro-batches to process per node
-        self.total_steps = self.args.total_tokens // self.args.batch_size
         self.total_batches = self.total_steps * self.accumulate_steps
 
         # Log batch configuration
@@ -463,20 +462,20 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         x = multihost_utils.host_local_array_to_global_array(
             x,
             self.mesh,
-            P(None, Axis.BATCH.value, None),  # type: ignore
+            P(None, Axis.BATCH, None),  # type: ignore
         )
         y = multihost_utils.host_local_array_to_global_array(
             y,
             self.mesh,
-            P(None, Axis.BATCH.value, None),  # type: ignore
+            P(None, Axis.BATCH, None),  # type: ignore
         )
         padding_mask = multihost_utils.host_local_array_to_global_array(
             padding_mask,
             self.mesh,
-            P(None, Axis.BATCH.value, None),  # type: ignore
+            P(None, Axis.BATCH, None),  # type: ignore
         )
 
-        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH.value, None))  # type: ignore
+        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
 
         valid_step_inner_jit = jax.jit(
             self.val_step,
@@ -518,7 +517,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         ],
         Tuple[train_state.TrainState, jax.Array],
     ]:
-        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH.value, None))  # type: ignore
+        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
         train_step = jax.jit(
             self.train_step,
             in_shardings=(self.state_sharding, data_shard, None, None),
@@ -559,18 +558,18 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             xa: jax.Array = multihost_utils.host_local_array_to_global_array(
                 x,
                 self.mesh,
-                P(None, Axis.BATCH.value, None),  # type: ignore
+                P(None, Axis.BATCH, None),  # type: ignore
             )
             ya: jax.Array = multihost_utils.host_local_array_to_global_array(
                 y,
                 self.mesh,
-                P(None, Axis.BATCH.value, None),  # type: ignore
+                P(None, Axis.BATCH, None),  # type: ignore
             )
             padding_mask_a: jax.Array = (
                 multihost_utils.host_local_array_to_global_array(
                     padding_mask,
                     self.mesh,
-                    P(None, Axis.BATCH.value, None),  # type: ignore
+                    P(None, Axis.BATCH, None),  # type: ignore
                 )
             )
 

@@ -6,6 +6,8 @@ from dataclasses import fields, is_dataclass
 from typing import Any, Union, Dict, Tuple, List, TypeVar, Generator
 from collections import defaultdict
 
+from flax.linen import Module as nn
+
 from omegaconf import OmegaConf, DictConfig, ListConfig
 
 T = TypeVar("T")
@@ -198,10 +200,13 @@ def hydrate(cls: Any, config: DictConfig | ListConfig) -> Any:
         if key is not None and key in flat_config:
             init_kwargs[fld.name] = flat_config[key]
 
-    init_kwargs = OmegaConf.create(init_kwargs)
-    init_kwargs_typed = OmegaConf.merge(OmegaConf.structured(cls), init_kwargs)
+    if not issubclass(cls, nn):
+        init_kwargs = OmegaConf.create(init_kwargs)
+        init_kwargs_typed = OmegaConf.merge(OmegaConf.structured(cls), init_kwargs)
 
-    return OmegaConf.to_object(init_kwargs_typed)
+        return OmegaConf.to_object(init_kwargs_typed)
+    else:
+        return cls(**init_kwargs)
 
 
 @contextmanager
