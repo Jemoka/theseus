@@ -96,13 +96,13 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
 
         return cfg
 
-    def _schedule(self) -> optax.base.Schedule:
+    def _schedule(self) -> optax._src.base.Schedule:
         """build learning rate schedule from config"""
         if self.schedule() is None:
             return optax.constant_schedule(self.args.lr)
 
         sched_name = self.schedule()
-        if isinstance(sched_name, optax.base.Schedule):
+        if isinstance(sched_name, optax._src.base.Schedule):
             return sched_name
 
         sched, cfg = SCHEDULES[sched_name]  # type: ignore
@@ -154,7 +154,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         params = variables["params"]
 
         # build the optimizer
-        self.scheduler: optax.base.Schedule = self._schedule()
+        self.scheduler: optax._src.base.Schedule = self._schedule()
         self.tx = self._optimizer()
         logger.info(f"OPTIMIZER | {self.tx}")
 
@@ -293,7 +293,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         return "adamw"
 
     @classmethod
-    def schedule(cls) -> Optional[str | optax.base.Schedule]:
+    def schedule(cls) -> Optional[str | optax._src.base.Schedule]:
         """return either a learning rate schedule, a schedule name from the library, or nothing to use a constant lr"""
 
         return None

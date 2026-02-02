@@ -1,22 +1,8 @@
-from typing import Any
-
-from theseus.job import CheckpointedJob
-
-from .pretrainer import (
-    Pretrainer,
-    PretrainerConfig,
-    GPTPretrainer,
-    configure_optimizers_adamw,
-)
-
-JOBS: dict[str, type[CheckpointedJob[Any]]] = {
-    "train/gpt": GPTPretrainer,
-}
+from .trainers import JOBS
+from .trainers.base import BaseTrainer, BaseTrainerConfig
 
 __all__ = [
-    "Pretrainer",
-    "PretrainerConfig",
-    "GPTPretrainer",
-    "configure_optimizers_adamw",
     "JOBS",
+    "BaseTrainer",
+    "BaseTrainerConfig",
 ]

@@ -12,7 +12,7 @@ class AdamWConfig:
 
 
 def adamw(
-    lr: optax.base.Schedule | float, cfg: AdamWConfig
+    lr: optax._src.base.Schedule | float, cfg: AdamWConfig
 ) -> optax.GradientTransformation:
     return optax.chain(
         optax.clip_by_global_norm(1.0),

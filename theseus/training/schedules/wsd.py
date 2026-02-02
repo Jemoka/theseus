@@ -11,7 +11,7 @@ class WSDConfig:
     decay_pct: float = field("optimization/decay_pct", default=0.01)
 
 
-def wsd(total_steps: int, cfg: WSDConfig) -> optax.base.Schedule:
+def wsd(total_steps: int, cfg: WSDConfig) -> optax._src.base.Schedule:
     warmup_steps = int(total_steps * cfg.warmup_pct)
     decay_steps = int(total_steps * cfg.decay_pct)
     stable_steps = total_steps - warmup_steps - decay_steps
