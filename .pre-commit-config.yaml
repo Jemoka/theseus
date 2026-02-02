@@ -6,8 +6,10 @@ repos:
       - id: ruff-check
         types_or: [ python, pyi ]
         args: [ --fix ]
+        exclude: ^(examples/|tests/|scratchpad\.py$)
       - id: ruff-format
         types_or: [ python, pyi ]
+        exclude: ^(examples/|tests/|scratchpad\.py$)
   # Type check Python code
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.16.1

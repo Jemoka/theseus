@@ -28,7 +28,7 @@ from theseus.config import field, current_config, configure
 
 from theseus.model.module import Module
 
-from theseus.base import PyTree, Axis
+from theseus.base import PyTree, Axis, Topology
 from theseus.training.optimizers import OPTIMIZERS
 from theseus.training.schedules import SCHEDULES
 from theseus.training.utils import (
@@ -133,6 +133,17 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
 
         super().__init__(spec)
 
+        topology = self._init_topology(spec)
+        params = self._init_model()
+        self._init_optimizer(params)
+        self._init_sharding()
+        self._init_batch_config(topology)
+        self._init_wandb(spec)
+        self._init_data(spec)
+        self._init_counters_and_eval()
+
+    def _init_topology(self, spec: ExecutionSpec) -> Topology:
+        """Initialize topology, mesh, and compute total steps."""
         # first get the requested topology from spec
         assert spec.topology is not None, (
             "Topology must be provided to perform training"
@@ -145,7 +156,10 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         self.total_steps = (
             self.args.total_tokens // self.args.batch_size // self.args.block_size
         )
+        return topology
 
+    def _init_model(self) -> PyTree[jax.Array]:
+        """Initialize model and random keys, return initial params."""
         # initialize model from the config in thin air
         self.model: M = configure(self.MODEL)
 
@@ -156,7 +170,10 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         dummy_input = jnp.ones((1, self.args.block_size), dtype=jnp.int32)
         variables = self.model.init(init_key, dummy_input)
         params = variables["params"]
+        return params  # type: ignore[no-any-return]
 
+    def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
+        """Build optimizer, scheduler, and train state."""
         # build the optimizer
         self.scheduler: optax._src.base.Schedule = self._schedule()
         self.tx = self._optimizer()
@@ -172,14 +189,18 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         if self.main_process():
             logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
 
+    def _init_sharding(self) -> None:
+        """Shard the train state across devices."""
         # Shard the state
         self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
             flax.linen.get_partition_spec(self.state),
             self.mesh,
-            rules=tuple(self.model.sharding),
+            rules=tuple(self.model.sharding),  # type: ignore
         )
         self.state = jax.device_put(self.state, self.state_sharding)
 
+    def _init_batch_config(self, topology: Topology) -> None:
+        """Compute batch size, accumulation steps, and log configuration."""
         # Compute batch size (auto-estimate or manual override)
         if self.args.per_device_batch_size < 0:
             if self.spec.hardware.chip is None:
@@ -244,6 +265,9 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
                 * self.args.block_size,
             )
 
+    def _init_wandb(self, spec: ExecutionSpec) -> None:
+        """Initialize Weights & Biases logging."""
+        if self.main_process():
             assert current_config() is not None, (
                 "cannot locate configuration in context!"
             )
@@ -261,6 +285,8 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
             if self.args.wandb:
                 self.spec.id = wandb.run.id
 
+    def _init_data(self, spec: ExecutionSpec) -> None:
+        """Initialize dataset strategy and data loaders."""
         # make dataset strategy
         self.strategy = Strategy(spec, self.args.block_size, self.args.datasets)
         self.train_dl = self.strategy.get_async_batches(
@@ -279,17 +305,24 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
             deterministic_key=32,
         )
 
+    def _init_counters_and_eval(self) -> None:
+        """Initialize step counters, score tracking, and evaluator."""
         # Initialize counters
         self.global_step_counter_ = 0
         self.best_val_score_ = float("-inf")
 
         # bake evaluator
-        self.evaluator: Evaluator[M] = Evaluator.from_trainer(self)
+        self.inference: Evaluator[M] = self.evaluator()
 
         # weeeeeeeeeeee
         # print the model
         if self.main_process():
             logger.info(self.model)
+
+    def evaluator(self) -> Evaluator[M]:
+        """define what evaluator to use"""
+
+        raise NotImplementedError("Evaluator not defined for this trainer!")
 
     @classmethod
     def optimizer(cls) -> str | optax.GradientTransformation:
@@ -657,7 +690,7 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
                 )  # so we don't ovelap with checkpoint
             ):
                 score, val_metrics = valid_step(self.state)
-                eval_metrics = self.evaluator.evaluate()
+                eval_metrics = self.inference.evaluate()
                 val_metrics.update(eval_metrics)
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)
