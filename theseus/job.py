@@ -1,5 +1,5 @@
-import os
 import random
+from pathlib import Path
 
 from abc import abstractmethod, abstractproperty
 from loguru import logger
@@ -96,7 +96,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         super().__init__(spec)
         self.key = jax.random.PRNGKey(0)
 
-    def _get_checkpoint_path(self, suffix: str) -> str:
+    def _get_checkpoint_path(self, suffix: str | Path) -> Path:
         """
         Compute checkpoint path based on process index, project, group, and job name.
 
@@ -104,7 +104,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         - project: defaults to "misc" if None
         - group: defaults to "default" if None or empty string
         - job_name: required (self.spec.name)
-        - suffix: provided by caller (e.g., "step_1000", "final")
+        - suffix: provided by caller (e.g., "step_1000", "final", or nested "best/model")
         """
         process_index = jax.process_index()
         checkpoint_dir = self.spec.hardware.hosts[process_index].cluster.checkpoints_dir
@@ -116,17 +116,17 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         group = self.spec.group if self.spec.group else "default"
 
         # Build path: checkpoints_dir/project/group/job_name/suffix/
-        path = checkpoint_dir / project / group / self.spec.name / suffix
+        path = checkpoint_dir / project / group / self.spec.name / str(suffix)
 
-        return str(path)
+        return path
 
     def get_tree_and_metadata(
-        self, suffix: str, template_tree: PyTree[Any]
+        self, suffix: str | Path, template_tree: PyTree[Any]
     ) -> Tuple[PyTree[Any], Dict[str, Any]]:
         path = self._get_checkpoint_path(suffix)
 
         try:
-            rng_state = np.load(os.path.join(path, "rng.npy"), allow_pickle=True).item()
+            rng_state = np.load(path / "rng.npy", allow_pickle=True).item()
             random.setstate(rng_state["python_random"])
             np.random.set_state(rng_state["numpy_random"])
             self.key = jax.random.PRNGKey(rng_state["jax_random"])
@@ -135,18 +135,16 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
         # Load checkpoint using Orbax
         checkpointer = ocp.StandardCheckpointer()
-        restored = checkpointer.restore(
-            os.path.join(path, "checkpoint"), target=template_tree
-        )
+        restored = checkpointer.restore(path / "checkpoint", target=template_tree)
 
         # Load metadata
-        with open(os.path.join(path, "config.json"), "r") as df:
+        with open(path / "config.json", "r") as df:
             data = json.load(df)
 
         return restored, data
 
     def save_tree_and_metadata(
-        self, suffix: str, tree: PyTree[Any], metadata: Dict[str, Any]
+        self, suffix: str | Path, tree: PyTree[Any], metadata: Dict[str, Any]
     ) -> None:
         path = self._get_checkpoint_path(suffix)
         logger.debug("CHECKPOINT | saving checkpoint at {}", path)
@@ -155,7 +153,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
         # Write directly to shared filesystem path (multi-host safe)
         if self.main_process():
-            os.makedirs(path, exist_ok=True)
+            path.mkdir(parents=True, exist_ok=True)
             logger.debug("CHECKPOINT | created checkpoint directory")
 
             # Save random state
@@ -164,11 +162,11 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
                 "numpy_random": np.random.get_state(),
                 "jax_random": int(self.key[0]),  # Save seed
             }
-            np.save(os.path.join(path, "rng.npy"), rng_state)  # type: ignore
+            np.save(path / "rng.npy", rng_state)  # type: ignore
             logger.debug("CHECKPOINT | saved random state")
 
             # Save config
-            with open(os.path.join(path, "config.json"), "w") as df:
+            with open(path / "config.json", "w") as df:
                 json.dump(
                     metadata,
                     df,
@@ -182,14 +180,14 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
                 field_name: getattr(self.spec, field_name)
                 for field_name in JobSpec.model_fields
             }
-            with open(os.path.join(path, "job.json"), "w") as df:
+            with open(path / "job.json", "w") as df:
                 json.dump(job_spec_data, df)
             logger.debug("CHECKPOINT | saved job spec")
 
             # Save current OmegaConf configuration as YAML
             cfg = current_config()
             if cfg is not None:
-                with open(os.path.join(path, "config.yaml"), "w") as df:
+                with open(path / "config.yaml", "w") as df:
                     df.write(OmegaConf.to_yaml(cfg))
                 logger.debug("CHECKPOINT | saved config.yaml")
 
@@ -210,7 +208,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
         state_to_save = jax.tree_util.tree_map(make_global_array, tree)
 
-        checkpointer.save(os.path.join(path, "checkpoint"), state_to_save, force=True)
+        checkpointer.save(path / "checkpoint", state_to_save, force=True)
         checkpointer.wait_until_finished()
         logger.debug("CHECKPOINT | saved training state")
 

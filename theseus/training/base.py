@@ -2,12 +2,17 @@
 a very basic trainer
 """
 
+from pathlib import Path
 from dataclasses import dataclass
-from typing import Generic, TypeVar, Type, Dict, Any, Optional, List
+from typing import Generic, TypeVar, Type, Dict, Any, Optional, List, Tuple, Callable
+
+import numpy as np
 
 import jax
 import jax.numpy as jnp
 from jax import random as jax_random
+from jax.experimental import multihost_utils
+from jax.sharding import NamedSharding, PartitionSpec as P
 
 import flax
 from flax.training import train_state
@@ -23,9 +28,11 @@ from theseus.config import field, current_config, configure
 
 from theseus.model.module import Module
 
+from theseus.base import PyTree, Axis
 from theseus.training.optimizers import OPTIMIZERS
 from theseus.training.schedules import SCHEDULES
 from theseus.training.utils import find_accumulation_steps
+from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
 
 M = TypeVar("M", bound=Module)
 
@@ -45,6 +52,14 @@ class BaseTrainerConfig:
     lr: float = field("optimization/lr", default=3e-4)
     warmup_pct: float = field("training/warmup_pct", default=0.01)
     decay_pct: float = field("training/decay_pct", default=0.1)
+
+    # dataset
+    datasets: List[Sampling] = field(
+        "training/dataset",
+        default_factory=lambda: [
+            Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)
+        ],
+    )
 
     # Some Architecture
     # We need to know block size for data handling; the model will
@@ -99,19 +114,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
 
         optim, cfg = OPTIMIZERS[optim_name]
 
-        return optim(self._schedule(), configure(cfg))
-
-    @classmethod
-    def optimizer(cls) -> str | optax.GradientTransformation:
-        """return either an optimizer from the optimizer library, or a custom optax optimizer"""
-
-        return "adamw"
-
-    @classmethod
-    def schedule(cls) -> Optional[str | optax.base.Schedule]:
-        """return either a learning rate schedule, a schedule name from the library, or nothing to use a constant lr"""
-
-        return None
+        return optim(self.scheduler, configure(cfg))
 
     def __init__(self, spec: ExecutionSpec) -> None:
         """Build a basic trainer
@@ -186,6 +189,8 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
                 resume="allow",
                 id=spec.id,
             )
+            if self.args.wandb:
+                self.spec.id = wandb.run.id
 
         # initialize model from the config in thin air
         self.model: M = configure(self.MODEL)
@@ -199,6 +204,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         params = variables["params"]
 
         # build the optimizer
+        self.scheduler: optax.base.Schedule = self._schedule()
         self.tx = self._optimizer()
         logger.info(f"OPTIMIZER | {self.tx}")
 
@@ -221,6 +227,24 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         )
         self.state = jax.device_put(self.state, self.state_sharding)
 
+        # make dataset strategy
+        self.strategy = Strategy(spec, self.args.block_size, self.args.datasets)
+        self.train_dl = self.strategy.get_async_batches(
+            self.per_device_batch_size * self.local_replicas * self.accumulate_steps,
+            split="train",
+        )
+        self.val_dl = self.strategy.get_async_batches(
+            (
+                (
+                    self.args.validation_steps
+                    // (self.per_device_batch_size * self.local_replicas)
+                )
+                * (self.per_device_batch_size * self.local_replicas)
+            ),
+            split="val",
+            deterministic_key=32,
+        )
+
         # Initialize counters
         self.global_step_counter_ = 0
         self.best_val_score_ = float("-inf")
@@ -229,3 +253,431 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         # print the model
         if self.main_process():
             logger.info(self.model)
+
+    @classmethod
+    def optimizer(cls) -> str | optax.GradientTransformation:
+        """return either an optimizer from the optimizer library, or a custom optax optimizer"""
+
+        return "adamw"
+
+    @classmethod
+    def schedule(cls) -> Optional[str | optax.base.Schedule]:
+        """return either a learning rate schedule, a schedule name from the library, or nothing to use a constant lr"""
+
+        return None
+
+    def batch(self, slice: str = "train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """get the next batch from the dataset strategy"""
+
+        x: np.ndarray
+        y: np.ndarray
+        padding_mask: np.ndarray
+
+        if slice == "train":
+            x, y, padding_mask = self.train_dl.get_batch()
+        else:
+            x, y, padding_mask = self.val_dl.get_batch()
+
+        return x, y, padding_mask
+
+    @staticmethod
+    def forward(
+        state: train_state.TrainState,
+        params: PyTree[jax.Array],
+        batch: Tuple[jax.Array, jax.Array, jax.Array],
+        key: Optional[jax.Array] = None,
+        deterministic: bool = False,
+    ) -> Tuple[jax.Array, jax.Array]:
+        x, y, padding_mask = batch  # (B, T)
+
+        if not deterministic and key is not None:
+            _, dropout_key = jax_random.split(key)
+
+        logits, loss = state.apply_fn(  # logits: (B, T, V), loss: scalar
+            {"params": params},
+            x,
+            y,
+            deterministic=deterministic,
+            rngs={"dropout": dropout_key} if not dropout_key is not None else {},
+        )
+
+        return logits, loss
+
+    @classmethod
+    def train_step(
+        cls,
+        state: train_state.TrainState,
+        batch: Tuple[jax.Array, jax.Array, jax.Array],  # (S, B, T) each
+        key: jax.Array,
+        accumulate_steps: int,
+    ) -> Tuple[train_state.TrainState, jax.Array]:
+        """Compute gradients over S micro-batches and apply one optimizer step.
+
+        Args:
+            state: Current training state
+            batch: (x, y, padding_mask) each with shape (S, B, T)
+                   S = accumulation steps, B = batch size, T = sequence length
+            key: PRNG key for dropout
+            accumulate_steps: Number of micro-batches (S)
+
+        Returns:
+            (updated_state, loss)
+        """
+
+        def train_eval(
+            state: train_state.TrainState,
+            batch: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+            key: jax.Array,
+            accumulate_steps: int,
+        ) -> Tuple[jax.Array, PyTree[jax.Array]]:
+            x, y, padding_mask = batch  # (B, T)
+            _, dropout_key = jax_random.split(key)
+
+            def loss_fn(params: PyTree[jax.Array]) -> jax.Array:
+                logits, loss = cls.forward(
+                    state,
+                    params,
+                    (x, y, padding_mask),
+                    key=dropout_key,
+                    deterministic=False,
+                )
+                return loss / accumulate_steps
+
+            loss, grads = jax.value_and_grad(loss_fn)(
+                state.params
+            )  # loss: scalar, grads: PyTree
+
+            return loss, grads
+
+        def reduce(
+            carry: Tuple[PyTree[jax.Array], jax.Array],
+            batch: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array], None]:
+            grad, loss = carry
+            loss_single, grad_single = train_eval(state, batch, key, accumulate_steps)
+
+            grad_acc = jax.tree_util.tree_map(lambda a, g: a + g, grad, grad_single)
+            loss_acc = loss + loss_single
+
+            return (grad_acc, loss_acc), None
+
+        grad_zero = jax.tree_util.tree_map(jnp.zeros_like, state.params)
+
+        # scan over S micro-batches, accumulating gradients
+        loss_sum: jax.Array
+        (grad_sum, loss_sum), _ = jax.lax.scan(reduce, (grad_zero, 0.0), batch)  # type: ignore
+
+        state: PyTree[jax.Array] = state.apply_gradients(grads=grad_sum)  # type: ignore
+
+        return state, loss_sum
+
+    @classmethod
+    def val_step(
+        cls,
+        state: train_state.TrainState,
+        batch: Tuple[jax.Array, jax.Array, jax.Array],  # (S, B, T) each
+    ) -> Tuple[float, int]:
+        """Compute validation loss over S micro-batches.
+
+        Args:
+            state: Current training state
+            batch: (x, y, padding_mask) each with shape (S, B, T)
+                   S = accumulation size, B = batch size, T = sequence length
+
+        Returns:
+            (loss_sum, token_count) for computing mean: loss = loss_sum / token_count
+        """
+        x, y, padding_mask = batch  # (S, B, T)
+
+        def reduce(
+            carry: Tuple[jax.Array, jax.Array],
+            xb: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+        ) -> Tuple[Tuple[jax.Array, jax.Array], None]:
+            loss_sum, count = carry
+            x_i, y_i, mask_i = xb  # (B, T)
+
+            _, loss_i = cls.forward(
+                state,
+                state.params,  # type: ignore
+                (x_i, y_i, mask_i),
+                deterministic=True,
+            )  # loss_i: scalar
+
+            n = mask_i.sum()  # count real tokens: scalar
+            return (loss_sum + loss_i * n, count + n), None
+
+        # scan over S micro-batches, accumulating weighted loss
+        (loss_sum, count), _ = jax.lax.scan(reduce, (0.0, 0), (x, y, padding_mask))  # type: ignore
+
+        return loss_sum, count  # scalars
+
+    def __make_valid_step(
+        self,
+    ) -> Callable[[train_state.TrainState], Tuple[float, Dict[str, float]]]:
+        x, y, padding_mask = self.batch("val")
+
+        # reshape into (steps, per_device_bs*replicas, seq_len) and shard the middle axis
+        x = x.reshape(-1, self.per_device_batch_size * self.local_replicas, x.shape[-1])
+        y = y.reshape(-1, self.per_device_batch_size * self.local_replicas, y.shape[-1])
+        padding_mask = padding_mask.reshape(
+            -1, self.per_device_batch_size * self.local_replicas, padding_mask.shape[-1]
+        )
+
+        x = multihost_utils.host_local_array_to_global_array(
+            x,
+            self.mesh,
+            P(None, Axis.BATCH.value, None),  # type: ignore
+        )
+        y = multihost_utils.host_local_array_to_global_array(
+            y,
+            self.mesh,
+            P(None, Axis.BATCH.value, None),  # type: ignore
+        )
+        padding_mask = multihost_utils.host_local_array_to_global_array(
+            padding_mask,
+            self.mesh,
+            P(None, Axis.BATCH.value, None),  # type: ignore
+        )
+
+        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH.value, None))  # type: ignore
+
+        valid_step_inner_jit = jax.jit(
+            self.val_step,
+            in_shardings=(self.state_sharding, data_shard),
+            out_shardings=(None, None),
+        )
+
+        def valid_step_wrapper(
+            state: train_state.TrainState,
+        ) -> Tuple[float, Dict[str, float]]:
+            loss_sum, count = valid_step_inner_jit(state, (x, y, padding_mask))
+            loss_sum = jax.device_get(loss_sum)
+            count = jax.device_get(count)
+
+            # if these come back as per-device arrays, reduce them here
+            loss_sum_local = float(jnp.sum(loss_sum))
+            count_local = float(jnp.sum(count))
+
+            loss_sum_g = multihost_utils.process_allgather(jnp.asarray(loss_sum_local))
+            count_g = multihost_utils.process_allgather(jnp.asarray(count_local))
+
+            loss = float(jnp.sum(loss_sum_g) / jnp.sum(count_g))
+
+            score = 1 / loss
+            metrics = {"val/loss": loss, "val/score": score}
+
+            return score, metrics
+
+        return valid_step_wrapper
+
+    def __make_train_step(
+        self,
+    ) -> Callable[
+        [
+            train_state.TrainState,
+            Tuple[jax.Array, jax.Array, jax.Array],
+            jax.Array,
+            int,
+        ],
+        Tuple[train_state.TrainState, jax.Array],
+    ]:
+        data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH.value, None))  # type: ignore
+        train_step = jax.jit(
+            self.train_step,
+            in_shardings=(self.state_sharding, data_shard, None, None),
+            out_shardings=(self.state_sharding, None),
+        )
+        return train_step
+
+    def train(self) -> None:
+        if self.main_process():
+            logger.info("BEGIN TRAINING")
+
+        train_step = self.__make_train_step()
+        valid_step = self.__make_valid_step()
+
+        # because sometimes the load function may skip some epochs
+        for indx in range(
+            self.global_step_counter_, self.total_batches + 1, self.accumulate_steps
+        ):
+            logger.debug("DATA | {} | START", indx)
+            x, y, padding_mask = self.batch()
+            x = x.reshape(
+                -1,
+                self.local_replicas * self.per_device_batch_size,
+                self.args.block_size,
+            )
+            y = y.reshape(
+                -1,
+                self.local_replicas * self.per_device_batch_size,
+                self.args.block_size,
+            )
+            padding_mask = padding_mask.reshape(
+                -1,
+                self.local_replicas * self.per_device_batch_size,
+                self.args.block_size,
+            )
+            logger.debug("DATA | {} | PLACING", indx)
+
+            xa: jax.Array = multihost_utils.host_local_array_to_global_array(
+                x,
+                self.mesh,
+                P(None, Axis.BATCH.value, None),  # type: ignore
+            )
+            ya: jax.Array = multihost_utils.host_local_array_to_global_array(
+                y,
+                self.mesh,
+                P(None, Axis.BATCH.value, None),  # type: ignore
+            )
+            padding_mask_a: jax.Array = (
+                multihost_utils.host_local_array_to_global_array(
+                    padding_mask,
+                    self.mesh,
+                    P(None, Axis.BATCH.value, None),  # type: ignore
+                )
+            )
+
+            logger.debug("DATA | {} | PLACED", indx)
+
+            self.state, loss = train_step(
+                self.state,
+                (xa, ya, padding_mask_a),
+                self.dropout_key,
+                self.accumulate_steps,
+            )
+            logger.debug("COMPUTATION | {} | FINISHED", indx)
+            train_metrics = {}
+
+            # perform logging, and then increment
+            if (
+                (indx % self.accumulate_steps == 0)
+                and (indx // self.accumulate_steps) % self.args.report_interval == 0
+                and indx != 0
+            ):
+                multihost_utils.sync_global_devices("report:pre")
+                train_metrics["train/lr"] = float(self.scheduler(self.state.step))
+                loss_val = float(loss)
+
+                if self.main_process():
+                    train_metrics["train/tokens"] = (
+                        ((indx + 1) // self.accumulate_steps)
+                        * self.args.batch_size
+                        * self.args.block_size
+                    )
+                    train_metrics["train/loss"] = loss_val
+
+                    wandb.log(
+                        train_metrics,
+                        step=indx // self.accumulate_steps,
+                    )
+                    logger.info(
+                        "TRAIN | {}/{} | loss {}",
+                        indx // self.accumulate_steps,
+                        self.total_batches // self.accumulate_steps,
+                        loss_val,
+                    )
+                multihost_utils.sync_global_devices("report:post")
+
+            if indx % self.accumulate_steps == 0:
+                self.global_step_counter_ += self.accumulate_steps
+
+            if self.main_process():
+                logger.debug("STEP | {} | {}", indx, train_metrics)
+
+            # save a checkpoint, if needed
+            if (
+                indx != 0
+                and indx % self.accumulate_steps == 0
+                and (indx // self.accumulate_steps) % self.args.checkpoint_interval
+                == (
+                    self.args.checkpoint_interval // 2
+                )  # offset checkpoint to not crash with val
+            ):
+                self.save(
+                    Path("ntoks")
+                    / str(
+                        (
+                            ((indx + 1) // self.accumulate_steps)
+                            * self.args.batch_size
+                            * self.args.block_size
+                        )
+                    )
+                )  # save as number of tokens
+
+            # perform validation and save a checkpoint, if needed
+            if (
+                indx != 0
+                and indx % self.accumulate_steps == 0
+                and (indx // self.accumulate_steps) % self.args.validation_interval
+                == (
+                    self.args.validation_interval // 3
+                )  # so we don't ovelap with checkpoint
+            ):
+                score, val_metrics = valid_step(self.state)
+                val_metrics["train/tokens"] = (
+                    ((indx + 1) // self.accumulate_steps)
+                    * self.args.batch_size
+                    * self.args.block_size
+                )
+                if self.main_process():
+                    wandb.log(
+                        val_metrics,
+                        step=indx // self.accumulate_steps,
+                    )
+                    logger.info(
+                        "VAL | {} | score {}",
+                        indx // self.accumulate_steps,
+                        score,
+                    )
+
+                if score > self.best_val_score_:
+                    if self.main_process():
+                        logger.info("VAL | BEST SCORE | score {}", score)
+                    self.best_val_score_ = score
+                    self.save(Path("best"))
+
+        # final save at the end of training
+        self.save(
+            Path("ntoks")
+            / str(
+                (
+                    ((indx + 1) // self.accumulate_steps)
+                    * self.args.batch_size
+                    * self.args.block_size
+                )
+            )
+        )
+
+    def save(self, suffix: Path) -> None:
+        """final save at the end of training"""
+
+        self.save_tree_and_metadata(
+            suffix,
+            self.state,
+            {"steps": self.global_step_counter_, "score": self.best_val_score_},
+        )
+
+        if self.main_process():
+            logger.info(
+                "CHECKPOINT | saved checkpoint at {} at step {}, best score {}",
+                suffix,
+                self.global_step_counter_,
+                self.best_val_score_,
+            )
+
+    def load(self, suffix: Path) -> None:
+        """load from a checkpoint, if available"""
+
+        state, metadata = self.get_tree_and_metadata(suffix, self.state)
+
+        self.state = state
+        self.global_step_counter_ = metadata.get("steps", 0)
+        self.best_val_score_ = metadata.get("score", float("-inf"))
+
+        if self.main_process():
+            logger.info(
+                "CHECKPOINT | loaded checkpoint from {} at step {}, best score {}",
+                suffix,
+                self.global_step_counter_,
+                self.best_val_score_,
+            )
