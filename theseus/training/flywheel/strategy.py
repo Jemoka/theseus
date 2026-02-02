@@ -168,7 +168,10 @@ class Strategy:
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
+        _recursion_depth: int = 0,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        MAX_RECURSION_DEPTH = 10
+
         r = random if deterministic_key is None else random.Random(deterministic_key)
 
         # Sample batch distribution: how many samples from each dataset
@@ -206,15 +209,22 @@ class Strategy:
         cut_batch_y = y[valid_rows]
         cut_batch_mask = padding_mask[valid_rows]
 
-        if cut_batch_x.shape[0] < batch_size:
+        # Try to fill remaining batch, but stop after max depth
+        if cut_batch_x.shape[0] < batch_size and _recursion_depth < MAX_RECURSION_DEPTH:
             x_addn, y_addn, mask_addn = self.get_batch(
                 batch_size - cut_batch_x.shape[0],
                 split,
                 deterministic_key + 1000 if deterministic_key is not None else None,
+                _recursion_depth=_recursion_depth + 1,
             )
             x = np.concatenate([cut_batch_x, x_addn], axis=0)
             y = np.concatenate([cut_batch_y, y_addn], axis=0)
             padding_mask = np.concatenate([cut_batch_mask, mask_addn], axis=0)
+        else:
+            # Hit max depth or have enough samples, return what we have
+            x = cut_batch_x
+            y = cut_batch_y
+            padding_mask = cut_batch_mask
 
         return (x, y, padding_mask)
 
