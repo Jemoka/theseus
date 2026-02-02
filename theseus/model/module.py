@@ -14,7 +14,7 @@ from theseus.model.axes import Axes
 
 class Module(nn):
     @abstractproperty
-    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:
+    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:  # type: ignore
         """Return the sharding configuration for this module.
 
         Returns:

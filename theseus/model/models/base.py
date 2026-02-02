@@ -22,7 +22,7 @@ class GPT(Module):
     vocab_size: int = field("architecture/vocab_size", default=50304)
 
     @property
-    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:
+    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:  # type: ignore
         return [
             (Axes.VOCAB, None),
             (Axes.BLOCK_SIZE, None),

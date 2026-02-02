@@ -1,6 +1,3 @@
-from enum import Enum
+from types import SimpleNamespace
 
-
-class Axis(Enum):
-    BATCH = "batch"  # anything that should have "rare comms", i.e. data parallel
-    SHARD = "shard"  # anything that should have "frequent comms", i.e. tensor parallel
+Axis = SimpleNamespace(BATCH="batch", SHARD="shard")

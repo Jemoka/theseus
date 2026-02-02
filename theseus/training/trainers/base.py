@@ -141,7 +141,9 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         self.mesh = spec.topology.mesh
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
-        self.total_steps = self.args.total_tokens // self.args.batch_size
+        self.total_steps = (
+            self.args.total_tokens // self.args.batch_size // self.args.block_size
+        )
 
         # initialize model from the config in thin air
         self.model: M = configure(self.MODEL)
