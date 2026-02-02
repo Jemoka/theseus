@@ -61,7 +61,7 @@ class Topology(BaseModel):
         devices = np.array(devs).reshape(-1, local)
         devices = devices.reshape(-1, shard_into)
 
-        mesh = Mesh(jax.devices(), (Axis.BATCH, Axis.SHARD))
+        mesh = Mesh(devices, (Axis.BATCH, Axis.SHARD))
 
         replicas = jax.device_count() // shard_into
         local_replicas = local // shard_into
