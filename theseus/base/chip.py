@@ -3,10 +3,12 @@ Chip information.
 """
 
 from typing import Annotated
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Chip(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     name: Annotated[str, Field(description="name of hardware")]
     display_name: Annotated[str, Field(description="display name for logs")]
     memory: Annotated[int, Field(description="bytes of memory per chip")]
