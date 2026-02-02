@@ -125,6 +125,7 @@ class Strategy:
             else:
                 nmixture.append(i)
         mixture = nmixture
+        self.mixture = mixture
 
         # validate that rates sum to 1
         total_rate = sum(sampling.rate for sampling in mixture)
