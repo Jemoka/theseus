@@ -22,6 +22,8 @@ from typing import Any, List, Type
 
 from theseus.registry import JOBS
 from theseus.config import build, configuration
+from theseus.job import RestoreableJob
+from theseus.base.job import ExecutionSpec
 
 console = Console()
 
@@ -29,23 +31,28 @@ random.seed(0)
 np.random.seed(0)
 
 load_dotenv()
-logger.remove()
-logger.add(
-    sys.stderr,
-    format="<cyan>{time:YYYY-MM-DD HH:mm:ss}</cyan> |"
-    "<level>{level: ^8}</level>| "
-    "<magenta>({name}:{line})</magenta> <level>{message}</level>",
-    level="INFO",
-    colorize=True,
-    enqueue=True,
-    filter=lambda x: x["extra"].get("task", "") != "plot",
-)
+
+
+def setup_logging(verbose: bool) -> None:
+    """Configure loguru with appropriate log level."""
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        format="<cyan>{time:YYYY-MM-DD HH:mm:ss}</cyan> |"
+        "<level>{level: ^8}</level>| "
+        "<magenta>({name}:{line})</magenta> <level>{message}</level>",
+        level="DEBUG" if verbose else "INFO",
+        colorize=True,
+        enqueue=True,
+        filter=lambda x: x["extra"].get("task", "") != "plot",
+    )
 
 
 @click.group()  # type: ignore[misc]
-def theseus() -> None:
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")  # type: ignore[misc]
+def theseus(verbose: bool) -> None:
     """Theseus CLI for managing and running jobs."""
-    pass
+    setup_logging(verbose)
 
 
 @theseus.command()  # type: ignore[misc]
@@ -157,13 +164,11 @@ def configure(
 
 
 @theseus.command()  # type: ignore[misc]
+@click.argument("name")  # type: ignore[misc]
 @click.argument("yaml_path")  # type: ignore[misc]
 @click.argument("out_path")  # type: ignore[misc]
 @click.option(
     "-j", "--job", default=None, help="Job name (read from YAML if not specified)"
-)  # type: ignore[misc]
-@click.option(
-    "-n", "--name", default="local", help="Name of the job run (default: local)"
 )  # type: ignore[misc]
 @click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
 @click.option(
@@ -171,16 +176,17 @@ def configure(
 )  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
+    name: str,
     yaml_path: str,
     out_path: str,
     job: str | None,
-    name: str,
     project: str | None,
     group: str | None,
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
 
+    NAME: Name of the job run
     YAML_PATH: Path to the configuration YAML file
     OUT_PATH: Output path for job results
     OVERRIDES: Optional config overrides in key=value format
@@ -243,6 +249,72 @@ def run(
     console.print()
     console.print(f"\n[green]Job '{job}' completed successfully[/green]")
     console.print()
+
+
+@theseus.command()  # type: ignore[misc]
+@click.argument("name")  # type: ignore[misc]
+@click.argument("out_path")  # type: ignore[misc]
+@click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
+@click.option("-g", "--group", default=None, help="Group under the project")  # type: ignore[misc]
+def checkpoints(
+    name: str, out_path: str, project: str | None, group: str | None
+) -> None:
+    """List available checkpoints for a job.
+
+    NAME: Name of the job
+    OUT_PATH: Output path where checkpoints are stored
+    """
+    spec = ExecutionSpec.local(out_path, name=name, project=project, group=group)
+    ckpts = RestoreableJob.checkpoints(spec)
+
+    if not ckpts:
+        console.print(f"\n[yellow]No checkpoints found for job '{name}'[/yellow]\n")
+        return
+
+    console.print()
+    console.print(f"[blue]Checkpoints for job '{name}':[/blue]")
+    for ckpt in sorted(ckpts):
+        console.print(f"  [cyan]• {ckpt}[/cyan]")
+    console.print()
+
+
+@theseus.command()  # type: ignore[misc]
+@click.argument("name")  # type: ignore[misc]
+@click.argument("checkpoint")  # type: ignore[misc]
+@click.argument("out_path")  # type: ignore[misc]
+@click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
+@click.option("-g", "--group", default=None, help="Group under the project")  # type: ignore[misc]
+def restore(
+    name: str, checkpoint: str, out_path: str, project: str | None, group: str | None
+) -> None:
+    """Restore and run a job from a checkpoint.
+
+    NAME: Name of the job
+    CHECKPOINT: Checkpoint to restore from
+    OUT_PATH: Output path where checkpoints are stored
+    """
+    spec = ExecutionSpec.local(out_path, name=name, project=project, group=group)
+
+    console.print()
+    console.print(
+        f"[blue]Restoring job '{name}' from checkpoint '{checkpoint}'...[/blue]"
+    )
+
+    job: Any
+    cfg: Any
+
+    job, cfg = RestoreableJob.from_checkpoint(checkpoint, spec)
+
+    console.print(
+        f"[green]Restored job '{name}' from checkpoint '{checkpoint}'[/green]"
+    )
+    console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
+    console.print()
+
+    with configuration(cfg):
+        job()
+
+    console.print(f"\n[green]Job '{name}' completed successfully[/green]\n")
 
 
 if __name__ == "__main__":

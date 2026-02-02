@@ -23,7 +23,7 @@ import wandb
 from loguru import logger
 
 from theseus.base import ExecutionSpec
-from theseus.job import CheckpointedJob
+from theseus.job import RestoreableJob
 from theseus.config import field, current_config, configure
 
 from theseus.model.module import Module
@@ -45,7 +45,7 @@ class BaseTrainerConfig:
     # Training hyperparameters
     batch_size: int = field("training/batch_size", default=512)
     per_device_batch_size: int = field(
-        "training/per_device_batch_size", default=-1
+        "training/per_device_batch_size", default=8
     )  # -1 = auto-estimate based on VRAM
     vram_calib_factor: float = field("architecture/vram_calib_factor", default=1.0)
     total_tokens: int = field("training/tokens", default=1_000_000_000)
@@ -78,7 +78,7 @@ class BaseTrainerConfig:
     wandb: bool = field("logging/wandb", default=False)
 
 
-class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
+class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
     """
     Generic pretrainer for GPT-style models.
     """
@@ -720,6 +720,9 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
                 self.global_step_counter_,
                 self.best_val_score_,
             )
+
+    def restore(self, suffix: Path) -> None:
+        return self.load(suffix)  # this is to satisfy the restore API
 
     def run(self) -> None:
         """main entry point to run training, called on all nodes"""

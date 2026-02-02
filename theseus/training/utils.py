@@ -34,6 +34,10 @@ def estimate_per_device_batch_size(
     Returns:
         Estimated batch size (at least 1)
     """
+    raise NotImplementedError(
+        "for some reason even with *180 this hilariously underestimates memory usage"
+    )
+
     params_per_shard = total_params_millions * 1e6 / shards
 
     fixed_memory = params_per_shard * 180

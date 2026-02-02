@@ -14,8 +14,7 @@ from jax.experimental import multihost_utils
 from omegaconf import OmegaConf
 
 from theseus.base import _BaseJob, ExecutionSpec, PyTree, JobSpec
-from theseus.base import local, Topology
-from theseus.config import current_config, configure
+from theseus.config import current_config, configure, configuration
 
 
 C = TypeVar("C")
@@ -75,18 +74,11 @@ class BasicJob(_BaseJob, Generic[C]):
         project: str | None = None,
         group: str | None = None,
     ) -> Self:
-        hardware = local(root_dir, "-")
-        if hardware.chip is None:
-            topology = None
-        else:
-            topology = Topology.new(hardware.chip)
-        spec = ExecutionSpec(
+        spec = ExecutionSpec.local(
+            root_dir,
             name=name,
             project=project,
             group=group,
-            hardware=hardware,
-            distributed=False,
-            topology=topology,
         )
         return cls(spec)
 
@@ -96,7 +88,8 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         super().__init__(spec)
         self.key = jax.random.PRNGKey(0)
 
-    def _get_checkpoint_path(self, suffix: str | Path) -> Path:
+    @staticmethod
+    def _get_checkpoint_path(spec: ExecutionSpec, suffix: str | Path) -> Path:
         """
         Compute checkpoint path based on process index, project, group, and job name.
 
@@ -107,23 +100,23 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         - suffix: provided by caller (e.g., "step_1000", "final", or nested "best/model")
         """
         process_index = jax.process_index()
-        checkpoint_dir = self.spec.hardware.hosts[process_index].cluster.checkpoints_dir
+        checkpoint_dir = spec.hardware.hosts[process_index].cluster.checkpoints_dir
 
         # Handle project: use default "theseus" if None
-        project = self.spec.project or "misc"
+        project = spec.project or "general"
 
         # Handle group: use "default" if None or empty string
-        group = self.spec.group if self.spec.group else "default"
+        group = spec.group if spec.group else "default"
 
         # Build path: checkpoints_dir/project/group/job_name/suffix/
-        path = checkpoint_dir / project / group / self.spec.name / str(suffix)
+        path = checkpoint_dir / project / group / spec.name / str(suffix)
 
         return path
 
     def get_tree_and_metadata(
         self, suffix: str | Path, template_tree: PyTree[Any]
     ) -> Tuple[PyTree[Any], Dict[str, Any]]:
-        path = self._get_checkpoint_path(suffix)
+        path = self._get_checkpoint_path(self.spec, suffix)
 
         try:
             rng_state = np.load(path / "rng.npy", allow_pickle=True).item()
@@ -146,7 +139,7 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
     def save_tree_and_metadata(
         self, suffix: str | Path, tree: PyTree[Any], metadata: Dict[str, Any]
     ) -> None:
-        path = self._get_checkpoint_path(suffix)
+        path = self._get_checkpoint_path(self.spec, suffix)
         logger.debug("CHECKPOINT | saving checkpoint at {}", path)
 
         multihost_utils.sync_global_devices("save:pre")
@@ -213,3 +206,94 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         logger.debug("CHECKPOINT | saved training state")
 
         multihost_utils.sync_global_devices("save:post")
+
+
+class RestoreableJob(CheckpointedJob[C], Generic[C]):
+    @abstractmethod
+    def restore(self, suffix: Path) -> None:
+        """Restore job state from checkpoint with given suffix"""
+        raise NotImplementedError()
+
+    @classmethod
+    def from_checkpoint(
+        cls, suffix: str | Path, spec: ExecutionSpec
+    ) -> Tuple[Self, Any]:
+        """loads and instantiates a checkpointed job from disk
+
+        Args:
+            suffix: checkpoint suffix to restore from
+            spec: execution spec to use for locating checkpoint
+
+        Returns:
+            Tuple[Self, Any]: restored job instance and configuration
+        """
+
+        # use the current spec to identify paths
+        path = CheckpointedJob._get_checkpoint_path(spec, suffix)
+        logger.debug("CHECKPOINT | restoring checkpointed job at {}", path)
+
+        # Load job spec (only JobSpec fields, not ExecutionSpec)
+        # Uses JobSpec.model_fields to be extensible - new fields added to JobSpec
+        # will automatically be included without modifying this code
+        with open(path / "job.json", "r") as df:
+            job_spec_data = json.load(df)
+
+        # Create new ExecutionSpec with loaded JobSpec fields
+        for k, v in job_spec_data.items():
+            setattr(spec, k, v)
+        new_spec_obj = spec
+        logger.debug("CHECKPOINT | restored job spec")
+
+        # load config now from config.yaml
+        cfg = OmegaConf.load(path / "config.yaml")
+
+        # instantiate job within configuration context
+        with configuration(cfg):
+            # if there is a job field, then we need to use that to instantiate
+            if "job" in cfg:
+                from theseus.registry import JOBS
+
+                job_cls = JOBS.get(cfg.job)
+                if job_cls is None:
+                    logger.warning(
+                        f"Unknown job type '{cfg.job}' in configuration, defaulting to {cls.__name__}"
+                    )
+                    job_cls = cls
+                elif not issubclass(job_cls, cls):
+                    logger.warning(
+                        f"Configured job type '{cfg.job}' is not a subclass of {cls.__name__}, defaulting to {cls.__name__}"
+                    )
+                    job_cls = cls
+            else:
+                logger.warning(
+                    f"No job type specified in configuration, defaulting to {cls.__name__}"
+                )
+                job_cls = cls
+
+            job = job_cls(new_spec_obj)
+            job.restore(Path(suffix))
+
+        logger.debug(f"CHECKPOINT | restored checkpointed job {new_spec_obj.name}")
+
+        return job, cfg
+
+    @classmethod
+    def checkpoints(cls, spec: ExecutionSpec) -> List[str]:
+        """given the execution spec, list available checkpoints to restore from"""
+
+        path = CheckpointedJob._get_checkpoint_path(spec, "")
+        if not path.exists():
+            return []
+
+        suffixes = []
+        stack = [path]
+        while stack:
+            current = stack.pop()
+            if (current / "config.yaml").exists():
+                suffixes.append(str(current.relative_to(path)))
+            else:
+                for item in current.iterdir():
+                    if item.is_dir():
+                        stack.append(item)
+
+        return suffixes

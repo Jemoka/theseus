@@ -7,7 +7,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from theseus.base.topology import Topology
-from theseus.base.hardware import HardwareResult
+from theseus.base.hardware import HardwareResult, local
 
 
 class JobSpec(BaseModel):
@@ -33,6 +33,30 @@ class ExecutionSpec(JobSpec):
     distributed: bool = Field(
         description="whether or not the run is happening over multiple hosts"
     )
+
+    @classmethod
+    def local(
+        cls,
+        root_dir: str,
+        name: str = "local",
+        project: str | None = None,
+        group: str | None = None,
+    ) -> "ExecutionSpec":
+        hardware = local(root_dir, "-")
+        if hardware.chip is None:
+            topology = None
+        else:
+            topology = Topology.new(hardware.chip)
+        spec = cls(
+            name=name,
+            project=project,
+            group=group,
+            hardware=hardware,
+            distributed=False,
+            topology=topology,
+        )
+
+        return spec
 
 
 class _BaseJob(ABC):
