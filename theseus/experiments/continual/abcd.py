@@ -17,7 +17,13 @@ from theseus.experiments.gpt import EvaluateGPT
 class ABCDConfig(BaseTrainerConfig):
     total_tokens: List[int] = field(
         "training/tokens",
-        default_factory=lambda: [1_000_000_000, 10_000, 10_000, 10_000, 10_000],
+        default_factory=lambda: [
+            1_000_000_000,
+            100_000_000,
+            100_000_000,
+            100_000_000,
+            100_000_000,
+        ],
     )  # type: ignore
     datasets: List[List[Sampling]] = field(  # type: ignore
         "training/dataset",
