@@ -57,6 +57,10 @@ class BaseTrainerConfig:
     warmup_pct: float = field("training/warmup_pct", default=0.01)
     decay_pct: float = field("training/decay_pct", default=0.1)
 
+    # run validation or not?
+    validate: bool = field("training/validation", default=True)
+    evaluate: bool = field("training/evaluate", default=True)
+
     # dataset
     datasets: List[Sampling] = field(
         "training/dataset",
@@ -701,9 +705,24 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     self.args.validation_interval // 3
                 )  # so we don't ovelap with checkpoint
             ):
-                score, val_metrics = valid_step(self.state)
-                eval_metrics = self.inference.evaluate()
-                val_metrics.update(eval_metrics)
+                val_metrics = {}
+                score = None
+
+                if self.args.validate:
+                    val_score, metrics = valid_step(self.state)
+                    score = val_score
+                    val_metrics.update(metrics)
+                if self.args.evaluate:
+                    eval_metrics = self.inference.evaluate()
+                    eval_score = sum(eval_metrics.values()) / len(eval_metrics)
+                    if score is None:
+                        score = eval_score
+                    else:
+                        score = (score + eval_score) / 2
+                    val_metrics.update(eval_metrics)
+                if score is None:
+                    score = float("-inf")
+
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)
                     * self.args.batch_size
