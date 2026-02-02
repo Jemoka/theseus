@@ -135,11 +135,11 @@ class Strategy:
         self.datasets: list[Dataset] = []
         for sampling in mixture:
             ds: Dataset
-            if sampling.style == DatasetStyle.PADDED:
+            if sampling.style == DatasetStyle.PADDED or sampling.style == "PADDED":  # type: ignore
                 from theseus.training.flywheel.padded import PaddedDataset
 
                 ds = PaddedDataset(spec, block_size, sampling.name, sampling.suffix)
-            elif sampling.style == DatasetStyle.PMD:
+            elif sampling.style == DatasetStyle.PMD or sampling.style == "PMD":
                 from theseus.training.flywheel.pmd import MemmapDataset
 
                 ds = MemmapDataset(spec, block_size, sampling.name, sampling.suffix)
