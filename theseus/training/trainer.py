@@ -4,6 +4,7 @@ a very basic trainer
 
 from pathlib import Path
 from dataclasses import dataclass
+from abc import abstractmethod
 from typing import Generic, TypeVar, Type, Dict, Any, Optional, List, Tuple, Callable
 
 import numpy as np
@@ -79,16 +80,25 @@ class BaseTrainerConfig:
     wandb: bool = field("logging/wandb", default=False)
 
 
-class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
+C = TypeVar("C", bound=BaseTrainerConfig)
+
+
+class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     """
     Generic pretrainer for GPT-style models.
     """
 
     MODEL: Type[M]
+    CONFIG: Type[C]
 
     @classmethod
     def config(cls) -> List[Type[Any]]:
-        cfg: List[Type[Any]] = [BaseTrainerConfig, *cls.MODEL.gather(), EvaluatorConfig]
+        print(cls.CONFIG)
+        return cls._config() + [cls.CONFIG]
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        cfg: List[Type[Any]] = [*cls.MODEL.gather(), EvaluatorConfig]
 
         if isinstance(cls.optimizer(), str):
             _, optim_cfg = OPTIMIZERS.get(cls.optimizer(), (None, None))
@@ -319,6 +329,7 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         if self.main_process():
             logger.info(self.model)
 
+    @abstractmethod
     def evaluator(self) -> Evaluator[M]:
         """define what evaluator to use"""
 

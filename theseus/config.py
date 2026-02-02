@@ -73,6 +73,7 @@ def generate_canonical_config(
         if j.metadata.get("th_config_field") is not None
         if is_dataclass(j.type) is False
     ]
+
     all_fields_lub = defaultdict(list)
     for i, j in all_fields:
         all_fields_lub[i].append(j)

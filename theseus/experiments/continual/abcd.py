@@ -3,13 +3,17 @@ import numpy as np
 
 from typing import List, Tuple
 
+from dataclasses import dataclass
 from theseus.config import field
 from theseus.model.models import GPT
 from theseus.base import Topology, ExecutionSpec
 from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
+from theseus.evaluation.base import Evaluator
+from theseus.experiments.gpt import EvaluateGPT
 
 
+@dataclass
 class ABCDConfig(BaseTrainerConfig):
     total_tokens: List[int] = field(
         "training/tokens",
@@ -22,27 +26,38 @@ class ABCDConfig(BaseTrainerConfig):
                 Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD),
             ],
             [
-                Sampling(name="fineweb", rate=0.5, style=DatasetStyle.PMD),
-                Sampling(name="mnli", rate=0.5, style=DatasetStyle.PMD),
+                Sampling(name="mnli", rate=1, style=DatasetStyle.PADDED),
             ],
             [
-                Sampling(name="fineweb", rate=0.5, style=DatasetStyle.PMD),
-                Sampling(name="qqp", rate=0.5, style=DatasetStyle.PMD),
+                Sampling(name="qqp", rate=1, style=DatasetStyle.PADDED),
             ],
             [
-                Sampling(name="fineweb", rate=0.5, style=DatasetStyle.PMD),
-                Sampling(name="sst2", rate=0.5, style=DatasetStyle.PMD),
+                Sampling(name="sst2", rate=1, style=DatasetStyle.PADDED),
             ],
             [
-                Sampling(name="fineweb", rate=0.5, style=DatasetStyle.PMD),
-                Sampling(name="siqa", rate=0.5, style=DatasetStyle.PMD),
+                Sampling(name="siqa", rate=1, style=DatasetStyle.PADDED),
             ],
+        ],
+    )
+    evaluations: List[str] = field(
+        "eval/evaluations",
+        default_factory=lambda: [
+            "mnli",
+            "qqp",
+            "sst2",
+            "siqa",
         ],
     )
 
 
-class ABCDTrainer(BaseTrainer[GPT]):
+class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
+    """Standard continual learning: sequential shift and plasticity."""
+
     MODEL = GPT
+    CONFIG = ABCDConfig
+
+    def evaluator(self) -> Evaluator[GPT]:
+        return EvaluateGPT.from_trainer(self)
 
     @classmethod
     def schedule(cls) -> optax._src.base.Schedule:
@@ -60,7 +75,7 @@ class ABCDTrainer(BaseTrainer[GPT]):
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
         self.total_steps = (
-            sum(self.args.total_tokens) // self.args.batch_size // self.args.block_size  # type: ignore
+            sum(self.args.total_tokens) // self.args.batch_size // self.args.block_size
         )
         return topology
 
@@ -69,8 +84,7 @@ class ABCDTrainer(BaseTrainer[GPT]):
         # make dataset strategy
 
         self.strategies = [
-            Strategy(spec, self.args.block_size, i)  # type: ignore
-            for i in self.args.datasets
+            Strategy(spec, self.args.block_size, i) for i in self.args.datasets
         ]
         self.train_dls = [
             i.get_async_batches(
@@ -108,8 +122,8 @@ class ABCDTrainer(BaseTrainer[GPT]):
 
         # find which dataloader to use based on cumulative token thresholds
         cumulative = 0
-        dl_idx = len(self.args.total_tokens) - 1  # type: ignore
-        for i, tokens in enumerate(self.args.total_tokens):  # type: ignore
+        dl_idx = len(self.args.total_tokens) - 1
+        for i, tokens in enumerate(self.args.total_tokens):
             cumulative += tokens
             if current_ntok < cumulative:
                 dl_idx = i
