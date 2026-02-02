@@ -236,7 +236,7 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
                     if seq_len < args.block_size:
                         num_padded += 1
                     padding_len = args.block_size - seq_len
-                    padded = [args.pad_token] * padding_len + ids
+                    padded = [args.pad_token] * padding_len + ids  # type: ignore
                     tokens_arr[arr_idx] = np.array(padded, dtype=dtype)
 
                     # Mask: False for padding, True for real tokens

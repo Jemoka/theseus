@@ -24,9 +24,10 @@ def get_chatml_encoder() -> tiktoken.Encoding:
 
 def encode_chat_template(
     template: ChatTemplate,
-    encoder: tiktoken.Encoding,
+    encoder: Optional[tiktoken.Encoding] = None,
     system_prompt: Optional[str] = None,
-) -> list[int]:
+    prompt: bool = False,
+) -> list[int] | str:
     """
     Encode a chat template into tokens using chatml format.
 
@@ -37,6 +38,12 @@ def encode_chat_template(
     {message}<|im_end|>
     <|im_start|>assistant
     {message}<|im_end|>
+
+    Args:
+        template: List of chat turns
+        encoder: Tokenizer (if None, returns the string instead of tokens)
+        system_prompt: Optional system prompt to prepend
+        prompt: If True, end with <|im_start|>assistant for autoregressive generation
     """
     # Build the full string first
     parts = []
@@ -53,16 +60,24 @@ def encode_chat_template(
         parts.append(turn.message)
         parts.append("<|im_end|>\n")
 
-    # Concatenate and tokenize all at once
-    full_text = "".join(parts)
-    tokens: list[int] = encoder.encode(full_text, allowed_special="all")
+    # Add assistant prompt for autoregression
+    if prompt:
+        parts.append("<|im_start|>assistant\n")
 
+    # Concatenate
+    full_text = "".join(parts)
+
+    # Return string if no encoder, otherwise tokenize
+    if encoder is None:
+        return full_text
+
+    tokens: list[int] = encoder.encode(full_text, allowed_special="all")
     return tokens
 
 
 def decode_chat_template(
-    tokens: list[int],
-    encoder: tiktoken.Encoding,
+    tokens: list[int] | str,
+    encoder: Optional[tiktoken.Encoding] = None,
 ) -> ChatTemplate:
     """
     Decode tokens back into a ChatTemplate.
@@ -70,9 +85,16 @@ def decode_chat_template(
     Parses chatml format:
     <|im_start|>role
     message<|im_end|>
+
+    Args:
+        tokens: Token list or string (if encoder is None, treated as string)
+        encoder: Tokenizer (if None, tokens is treated as the raw string)
     """
-    # Decode tokens to text
-    text = encoder.decode(tokens)
+    # Decode tokens to text, or use directly if encoder is None
+    if encoder is None:
+        text = tokens if isinstance(tokens, str) else "".join(map(str, tokens))
+    else:
+        text = encoder.decode(tokens)
 
     # Parse chatml format
     # Pattern: <|im_start|>role\nmessage<|im_end|>

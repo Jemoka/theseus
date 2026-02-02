@@ -140,7 +140,6 @@ class RolloutEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
-        truncate: bool = False,
         temperature: float = 0.0,
         top_p: float = 1.0,
         **kwargs: Any,
@@ -150,7 +149,6 @@ class RolloutEvaluation(Evaluation):
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
-            truncate: Whether to truncate dataset if batch size doesn't divide evenly
             temperature: Sampling temperature (0.0 for greedy)
             top_p: Nucleus sampling threshold
 
@@ -171,22 +169,14 @@ class RolloutEvaluation(Evaluation):
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Find batch sizes
-        if not truncate:
-            per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], inference.per_device_batch_size, inference.replicas
-            )
-            if per_device_batch_size is None:
-                truncate = True
-
-        if truncate:
-            valid_size = (
-                xs.shape[0]
-                // (inference.replicas * inference.per_device_batch_size)
-                * (inference.replicas * inference.per_device_batch_size)
-            )
-            xs = xs[:valid_size]
-            masks = masks[:valid_size]
+        # Truncate to valid batch size
+        valid_size = (
+            xs.shape[0]
+            // (inference.replicas * inference.per_device_batch_size)
+            * (inference.replicas * inference.per_device_batch_size)
+        )
+        xs = xs[:valid_size]
+        masks = masks[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -306,7 +296,6 @@ class EncodingEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
-        truncate: bool = False,
         **kwargs: Any,
     ) -> float:
         """Run evaluation.
@@ -314,7 +303,6 @@ class EncodingEvaluation(Evaluation):
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
-            truncate: Whether to truncate dataset if batch size doesn't divide evenly
 
         Returns:
             Evaluation score
@@ -333,22 +321,14 @@ class EncodingEvaluation(Evaluation):
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Find batch sizes
-        if not truncate:
-            per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], inference.per_device_batch_size, inference.replicas
-            )
-            if per_device_batch_size is None:
-                truncate = True
-
-        if truncate:
-            valid_size = (
-                xs.shape[0]
-                // (inference.replicas * inference.per_device_batch_size)
-                * (inference.replicas * inference.per_device_batch_size)
-            )
-            xs = xs[:valid_size]
-            masks = masks[:valid_size]
+        # Truncate to valid batch size
+        valid_size = (
+            xs.shape[0]
+            // (inference.replicas * inference.per_device_batch_size)
+            * (inference.replicas * inference.per_device_batch_size)
+        )
+        xs = xs[:valid_size]
+        masks = masks[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -433,7 +413,6 @@ class PerplexityEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
-        truncate: bool = False,
         **kwargs: Any,
     ) -> float:
         """Run evaluation.
@@ -441,7 +420,6 @@ class PerplexityEvaluation(Evaluation):
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode/encode_batch methods
-            truncate: Whether to truncate dataset if batch size doesn't divide evenly
 
         Returns:
             Accuracy score
@@ -474,8 +452,6 @@ class PerplexityEvaluation(Evaluation):
             prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
             metadata_array = jnp.array(metadata, dtype=jnp.int32)
             correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
-            # Fix: correct_indices should be the third element of each tuple
-            correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
         else:
             xs, masks = None, None
             prefix_lengths_array, metadata_array, correct_indices_array = (
@@ -496,24 +472,16 @@ class PerplexityEvaluation(Evaluation):
         )
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Find batch sizes
-        if not truncate:
-            per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], inference.per_device_batch_size, inference.replicas
-            )
-            if per_device_batch_size is None:
-                truncate = True
-
-        if truncate:
-            valid_size = (
-                xs.shape[0]
-                // (inference.replicas * inference.per_device_batch_size)
-                * (inference.replicas * inference.per_device_batch_size)
-            )
-            xs = xs[:valid_size]
-            masks = masks[:valid_size]
-            prefix_lengths_array = prefix_lengths_array[:valid_size]
-            metadata_array = metadata_array[:valid_size]
+        # Truncate to valid batch size
+        valid_size = (
+            xs.shape[0]
+            // (inference.replicas * inference.per_device_batch_size)
+            * (inference.replicas * inference.per_device_batch_size)
+        )
+        xs = xs[:valid_size]
+        masks = masks[:valid_size]
+        prefix_lengths_array = prefix_lengths_array[:valid_size]
+        metadata_array = metadata_array[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
