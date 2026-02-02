@@ -31,7 +31,7 @@ class SIQA(ChatTemplateDataset):
 
     def __getitem__(self, idx: int) -> ChatTemplate:
         item = self.ds[idx]
-        label = ["A", "B", "C"][item["label"] - 1]
+        label = ["A", "B", "C"][int(item["label"]) - 1]
         return template(
             item["context"],
             item["question"],

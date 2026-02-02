@@ -37,7 +37,7 @@ class SIQAEval(RolloutEvaluation):
 
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
-        answer = ["A", "B", "C"][item["label"] - 1]
+        answer = ["A", "B", "C"][int(item["label"]) - 1]
         prompt: str = encode_chat_template(
             template(
                 item["context"],
