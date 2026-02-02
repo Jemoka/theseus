@@ -2,7 +2,7 @@
 Cluster information.
 """
 
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from pydantic import BaseModel, Field, model_validator
 from pathlib import Path
 
@@ -104,26 +104,102 @@ class HardwareResult(BaseModel):
     ]
 
 
-def _detect_local_gpus() -> tuple[Optional[Chip], int]:
+def _longest_common_substring(s1: str, s2: str) -> int:
+    """Return length of longest common substring between s1 and s2."""
+    if not s1 or not s2:
+        return 0
+
+    m, n = len(s1), len(s2)
+    # Use rolling array for space efficiency
+    prev = [0] * (n + 1)
+    curr = [0] * (n + 1)
+    max_len = 0
+
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if s1[i - 1] == s2[j - 1]:
+                curr[j] = prev[j - 1] + 1
+                max_len = max(max_len, curr[j])
+            else:
+                curr[j] = 0
+        prev, curr = curr, prev
+
+    return max_len
+
+
+def _normalize_gpu_name(name: str) -> str:
+    """Normalize GPU name by lowercasing and removing vendor prefixes."""
+    name = name.lower()
+    # Remove common vendor prefixes
+    for prefix in ["nvidia", "amd", "intel", "google"]:
+        name = name.replace(prefix, "")
+    # Clean up whitespace
+    return " ".join(name.split())
+
+
+def _match_chip_from_jax_device(device: Any) -> Optional[Chip]:
     """
-    Detect local GPUs using nvidia-smi and CUDA_VISIBLE_DEVICES.
-    Returns (chip, count) or (None, 0) if no GPUs found.
+    Match a JAX device to a supported Chip using longest common substring.
+    Returns None if no match found.
     """
-    import os
+    from theseus.base.chip import SUPPORTED_CHIPS
+
+    platform = device.platform
+    device_kind = device.device_kind if hasattr(device, "device_kind") else ""
+
+    if platform == "tpu":
+        device_kind_lower = device_kind.lower()
+        # Match TPU by version
+        for chip_key, chip in SUPPORTED_CHIPS.items():
+            if chip_key.startswith("tpu-"):
+                version = chip_key.replace("tpu-", "")
+                if version in device_kind_lower:
+                    return chip
+        # Unknown TPU
+        return Chip(
+            name=f"tpu-{device_kind_lower.replace(' ', '-')}",
+            display_name=f"Google {device_kind}",
+            memory=int(16 * 1024**3),
+        )
+
+    elif platform == "gpu":
+        # Normalize the device name (remove "NVIDIA" etc.)
+        normalized_device = _normalize_gpu_name(device_kind)
+
+        # Find best match using longest common substring
+        best_chip: Optional[Chip] = None
+        best_score = 0
+
+        for chip_key, chip in SUPPORTED_CHIPS.items():
+            # Skip non-GPU chips
+            if chip_key.startswith("tpu-") or chip_key == "cpu":
+                continue
+
+            normalized_chip = _normalize_gpu_name(chip.display_name)
+            score = _longest_common_substring(normalized_device, normalized_chip)
+
+            # Require minimum overlap to consider a match
+            if score >= 2 and score > best_score:
+                best_score = score
+                best_chip = chip
+
+        return best_chip
+
+    elif platform == "cpu":
+        return SUPPORTED_CHIPS["cpu"]
+
+    return None
+
+
+def _get_gpu_info_from_nvidia_smi() -> Optional[Chip]:
+    """
+    Query nvidia-smi for detailed GPU info when JAX doesn't provide enough.
+    Returns matched Chip or creates one for unknown GPU.
+    """
     import subprocess
 
     from theseus.base.chip import SUPPORTED_CHIPS
 
-    # Check which devices are visible
-    cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if cuda_visible is not None:
-        if cuda_visible.strip() == "":
-            return None, 0
-        visible_indices = [int(x.strip()) for x in cuda_visible.split(",") if x.strip()]
-    else:
-        visible_indices = None  # All GPUs visible
-
-    # Query nvidia-smi for GPU info
     try:
         result = subprocess.run(
             [
@@ -136,120 +212,108 @@ def _detect_local_gpus() -> tuple[Optional[Chip], int]:
             check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None, 0
+        return None
 
     lines = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
     if not lines:
-        return None, 0
+        return None
 
-    # Parse GPU info and filter by visible indices
-    gpus: list[tuple[int, str, int]] = []
-    for line in lines:
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) >= 3:
-            idx, name, mem_mb = int(parts[0]), parts[1], int(parts[2])
-            if visible_indices is None or idx in visible_indices:
-                gpus.append((idx, name, mem_mb))
+    # Parse first GPU info
+    parts = [p.strip() for p in lines[0].split(",")]
+    if len(parts) < 3:
+        return None
 
-    if not gpus:
-        return None, 0
+    _, gpu_name, mem_mb = parts[0], parts[1], int(parts[2])
 
-    # Match first GPU name to a supported chip
-    _, gpu_name, gpu_mem_mb = gpus[0]
-    gpu_name_lower = gpu_name.lower()
+    # Match to supported chip using longest common substring
+    normalized_device = _normalize_gpu_name(gpu_name)
+    best_chip: Optional[Chip] = None
+    best_score = 0
 
-    matched_chip: Optional[Chip] = None
     for chip_key, chip in SUPPORTED_CHIPS.items():
-        # Match by checking if chip name appears in the GPU name
-        if chip_key.split("-")[0] in gpu_name_lower:
-            # Refine match by memory if multiple variants exist
-            chip_mem_gb = chip.memory // (1024**3)
-            if abs(gpu_mem_mb // 1024 - chip_mem_gb) < 10:
-                matched_chip = chip
-                break
-            elif matched_chip is None:
-                matched_chip = chip
+        # Skip non-GPU chips
+        if chip_key.startswith("tpu-") or chip_key == "cpu":
+            continue
 
-    if matched_chip is None:
-        # Create a chip entry for unknown GPU
-        matched_chip = Chip(
-            name=gpu_name_lower.replace(" ", "-"),
-            display_name=gpu_name,
-            memory=gpu_mem_mb * 1024 * 1024,
-        )
+        normalized_chip = _normalize_gpu_name(chip.display_name)
+        score = _longest_common_substring(normalized_device, normalized_chip)
 
-    return matched_chip, len(gpus)
+        if score >= 2 and score > best_score:
+            best_score = score
+            best_chip = chip
 
+    if best_chip is not None:
+        return best_chip
 
-def _detect_local_tpus() -> tuple[Optional[Chip], int]:
-    """
-    Detect local TPUs using JAX.
-    Returns (chip, count) or (None, 0) if no TPUs found.
-    """
-    try:
-        import jax
-
-        devices = jax.devices()
-        tpu_devices = [d for d in devices if d.platform == "tpu"]
-
-        if not tpu_devices:
-            return None, 0
-
-        # Get TPU version from device kind (e.g., "TPU v4")
-        device_kind = tpu_devices[0].device_kind.lower()
-
-        from theseus.base.chip import SUPPORTED_CHIPS
-
-        # Match to supported TPU chips
-        matched_chip: Optional[Chip] = None
-        for chip_key, chip in SUPPORTED_CHIPS.items():
-            if chip_key.startswith("tpu-"):
-                version = chip_key.replace("tpu-", "")
-                if version in device_kind:
-                    matched_chip = chip
-                    break
-
-        if matched_chip is None:
-            # Create a chip entry for unknown TPU
-            matched_chip = Chip(
-                name=f"tpu-{device_kind.replace(' ', '-')}",
-                display_name=f"Google {device_kind.upper()}",
-                memory=int(16 * 1024**3),  # Default estimate
-            )
-
-        return matched_chip, len(tpu_devices)
-    except Exception:
-        return None, 0
-
-
-def _detect_cpu() -> tuple[Chip, int]:
-    """
-    Detect CPU as fallback.
-    Returns (cpu_chip, 1).
-    """
-    from theseus.base.chip import SUPPORTED_CHIPS
-
-    return SUPPORTED_CHIPS["cpu"], 1
+    # Create chip for unknown GPU
+    return Chip(
+        name=_normalize_gpu_name(gpu_name).replace(" ", "-"),
+        display_name=gpu_name,
+        memory=mem_mb * 1024 * 1024,
+    )
 
 
 def local(root_dir: str, work_dir: str) -> HardwareResult:
-    # Try GPU first
-    chip, total_chips = _detect_local_gpus()
+    """
+    Detect hardware using JAX device information.
+    Creates one ClusterMachine per host, with host index matching jax.process_index().
+    Assumes paths are identical across all hosts.
+    """
+    import jax
+    from collections import defaultdict
 
-    # Try TPU if no GPU found
-    if chip is None:
-        chip, total_chips = _detect_local_tpus()
+    from theseus.base.chip import SUPPORTED_CHIPS
 
-    # Fall back to CPU if no GPU or TPU
-    if chip is None:
-        chip, total_chips = _detect_cpu()
+    devices = jax.devices()
+    process_count = jax.process_count()
 
-    resources: dict[Chip, int] = {}
-    resources[chip] = total_chips
+    # Group devices by process index to count per host
+    devices_per_host: dict[int, int] = defaultdict(int)
+    chip: Chip
 
-    local_machine = ClusterMachine(
-        name="local",
-        cluster=Cluster(name="local", root=root_dir, work=work_dir),
-        resources=resources,
-    )
-    return HardwareResult(chip=chip, hosts=[local_machine], total_chips=total_chips)
+    if not devices:
+        # No devices at all, fall back to CPU
+        chip = SUPPORTED_CHIPS["cpu"]
+        total_chips = 1
+        devices_per_host[0] = 1
+    else:
+        for d in devices:
+            devices_per_host[d.process_index] += 1
+
+        # Determine chip type from first device
+        first_device = devices[0]
+        matched_chip = _match_chip_from_jax_device(first_device)
+
+        # If GPU and no match, try nvidia-smi for more info
+        if matched_chip is None and first_device.platform == "gpu":
+            matched_chip = _get_gpu_info_from_nvidia_smi()
+
+        # Final fallback to CPU if still no chip
+        if matched_chip is None:
+            chip = SUPPORTED_CHIPS["cpu"]
+        else:
+            chip = matched_chip
+
+        total_chips = len(devices)
+
+    # Create cluster (paths assumed identical across hosts)
+    cluster = Cluster(name="local", root=root_dir, work=work_dir)
+
+    # Create one ClusterMachine per host
+    # Host index matches jax.process_index()
+    hosts: list[ClusterMachine] = []
+    for host_idx in range(process_count):
+        host_device_count = devices_per_host.get(host_idx, 0)
+        resources: dict[Chip, int] = {}
+        if host_device_count > 0:
+            resources[chip] = host_device_count
+
+        hosts.append(
+            ClusterMachine(
+                name=f"host-{host_idx}",
+                cluster=cluster,
+                resources=resources,
+            )
+        )
+
+    return HardwareResult(chip=chip, hosts=hosts, total_chips=total_chips)

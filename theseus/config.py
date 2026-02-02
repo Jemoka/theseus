@@ -196,7 +196,10 @@ def hydrate(cls: Any, config: DictConfig | ListConfig) -> Any:
         if key is not None and key in flat_config:
             init_kwargs[fld.name] = flat_config[key]
 
-    return cls(**init_kwargs)
+    init_kwargs = OmegaConf.create(init_kwargs)
+    init_kwargs_typed = OmegaConf.merge(OmegaConf.structured(cls), init_kwargs)
+
+    return OmegaConf.to_object(init_kwargs_typed)
 
 
 @contextmanager

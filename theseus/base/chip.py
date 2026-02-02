@@ -43,6 +43,16 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         display_name="Nvidia RTX A6000",
         memory=int(48 * 1024**3),
     ),
+    "l40": Chip(
+        name="l40",
+        display_name="Nvidia L40",
+        memory=int(48 * 1024**3),
+    ),
+    "l40s": Chip(
+        name="l40s",
+        display_name="Nvidia L40S",
+        memory=int(48 * 1024**3),
+    ),
     # TPUs
     "tpu-v2": Chip(
         name="tpu-v2",
