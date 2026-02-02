@@ -25,6 +25,7 @@ from loguru import logger
 from theseus.base import ExecutionSpec
 from theseus.job import RestoreableJob
 from theseus.config import field, current_config, configure
+from theseus.inference import InferenceJob
 
 from theseus.model.module import Module
 
@@ -337,122 +338,14 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
 
         return logits, loss
 
-    @staticmethod
-    def pad(
-        seqs: List[List[int]], pad_token: int = 0, pad_to: Optional[int] = None
-    ) -> Tuple[jax.Array, jax.Array]:
-        """Left-pad sequences to uniform length.
+    @property
+    def inference(self) -> "InferenceJob[Any, M]":
+        """Get InferenceJob for this trainer (for evaluations).
 
-        Args:
-            seqs: List of token id lists
-            pad_token: Token to use for padding (default 0)
-            pad_to: Minimum length to pad to (default None, uses max seq length)
-
-        Returns:
-            padded: (batch_size, max_len) jnp array
-            mask: (batch_size, max_len) jnp bool array, True for real tokens
+        Creates a new InferenceJob each time - if caching is needed,
+        store the result externally.
         """
-        max_len = max(len(s) for s in seqs)
-        if pad_to is not None:
-            max_len = max(pad_to, max_len)
-        padded_seqs = [([pad_token] * (max_len - len(s))) + s for s in seqs]
-        padded_masks = [
-            ([False] * (max_len - len(s))) + [True for _ in s] for s in seqs
-        ]
-        return jnp.array(padded_seqs), jnp.array(padded_masks)
-
-    def _autoregress(
-        self,
-        state: train_state.TrainState,
-        key: jax.Array,
-        input: jax.Array,
-        input_mask: jax.Array,
-        num_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> jax.Array:
-        """Autoregressive generation using jax.lax.scan.
-
-        Uses self.forward() which subclasses may override. forward() always returns (logits, loss).
-
-        Args:
-            state: Training state with params and apply_fn
-            key: PRNG key
-            input: Input token ids (B, T_in)
-            input_mask: Attention mask (B, T_in)
-            num_tokens: Total sequence length (prompt + generated)
-            temperature: Sampling temperature (0.0 for greedy)
-            top_p: Nucleus sampling threshold
-
-        Returns:
-            Generated sequences (B, num_tokens) containing prompt + generated ids
-        """
-
-        def top_p_filter_logits(logits: jnp.ndarray, top_p: float) -> jnp.ndarray:
-            """Nucleus (top-p) filtering on logits."""
-            if top_p >= 1.0:
-                return logits
-
-            sort_idx = jnp.argsort(logits, axis=-1)[:, ::-1]
-            sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
-            sorted_probs = jax.nn.softmax(sorted_logits, axis=-1)
-            cumprobs = jnp.cumsum(sorted_probs, axis=-1)
-
-            keep_sorted = cumprobs <= top_p
-            keep_sorted = keep_sorted.at[:, 0].set(True)
-
-            keep = jnp.zeros_like(logits, dtype=jnp.bool_)
-            keep = keep.at[jnp.arange(logits.shape[0])[:, None], sort_idx].set(
-                keep_sorted
-            )
-
-            neg_inf = jnp.array(-jnp.inf, dtype=logits.dtype)
-            return jnp.where(keep, logits, neg_inf)
-
-        B, T_in = input.shape
-        T_total = num_tokens
-        seq = jnp.arange(num_tokens - T_in)
-
-        inp_buf = jnp.zeros((B, T_total), dtype=jnp.int32)
-        mask_buf = jnp.zeros((B, T_total), dtype=jnp.bool_)
-        inp_buf = inp_buf.at[:, :T_in].set(input.astype(jnp.int32))
-        mask_buf = mask_buf.at[:, :T_in].set(input_mask.astype(jnp.bool_))
-
-        forward_fn = self.forward
-
-        def reduce(carry: Any, step: Any) -> Any:
-            inputs, masks, key = carry
-            offset = T_in + step
-
-            # Call forward - returns (logits, loss)
-            logits, _ = forward_fn(
-                state,
-                state.params,  # type: ignore[arg-type]
-                (inputs, None, masks),  # type: ignore[arg-type]
-                None,
-                deterministic=True,
-            )
-
-            next_logits = logits[:, offset - 1, :]
-
-            if temperature == 0.0:
-                next_token = jnp.argmax(next_logits, axis=-1).astype(jnp.int32)
-            else:
-                key, subkey = jax_random.split(key)
-                scaled = next_logits / temperature
-                if top_p is not None:
-                    scaled = top_p_filter_logits(scaled, float(top_p))
-                next_token = jax.random.categorical(subkey, scaled, axis=-1).astype(
-                    jnp.int32
-                )
-
-            inputs = inputs.at[:, offset].set(next_token)
-            masks = masks.at[:, offset].set(True)
-
-            return (inputs, masks, key), None
-
-        (final_inputs, _, _), _ = jax.lax.scan(reduce, (inp_buf, mask_buf, key), seq)
-        return final_inputs
+        return InferenceJob.from_trainer(self)
 
     @classmethod
     def train_step(

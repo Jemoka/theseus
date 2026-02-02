@@ -41,6 +41,14 @@ class Cluster(BaseModel):
             checkpoints_dir.mkdir(parents=True, exist_ok=True)
         return checkpoints_dir
 
+    @property
+    def results_dir(self) -> Path:
+        # make directory if not exist
+        data_dir = Path(self.root_dir) / "results"
+        if not data_dir.exists():
+            data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
+
 
 class ClusterMachine(BaseModel):
     name: str

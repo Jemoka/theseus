@@ -3,6 +3,7 @@ from .base import (
     RolloutEvaluation,
     EncodingEvaluation,
     PerplexityEvaluation,
+    Evaluator,
 )
 
 EVALUATIONS: dict[str, type[Evaluation]] = {}
@@ -13,4 +14,5 @@ __all__ = [
     "RolloutEvaluation",
     "EncodingEvaluation",
     "PerplexityEvaluation",
+    "Evaluator",
 ]

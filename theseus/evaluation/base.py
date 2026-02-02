@@ -5,11 +5,16 @@ Provides abstract base classes for different evaluation types:
 - RolloutEvaluation: Autoregressive generation tasks
 - EncodingEvaluation: Next-token prediction accuracy
 - PerplexityEvaluation: Multiple-choice via perplexity comparison
+
+Also provides:
+- Evaluator: InferenceJob subclass that runs multiple evaluations
 """
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Any, Tuple
+import json
+from pathlib import Path
+from typing import Any, Tuple, List, Generic, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -17,7 +22,11 @@ from jax.experimental import multihost_utils
 from jax.sharding import NamedSharding, PartitionSpec as P
 from loguru import logger
 
-from theseus.base import Axis
+from theseus.base import Axis, ExecutionSpec
+from theseus.inference import InferenceJob, M
+
+if TYPE_CHECKING:
+    from theseus.training.trainers.base import BaseTrainer
 
 
 class Evaluation(ABC):
@@ -36,6 +45,13 @@ class Evaluation(ABC):
     @abstractmethod
     def __len__(self) -> int:
         """Number of samples in this evaluation."""
+        ...
+
+    @abstractmethod
+    def __call__(
+        self, inference: "InferenceJob[Any, M]", encoding: Any, **kwargs: Any
+    ) -> float:
+        """Run the evaluation and return a score."""
         ...
 
     @staticmethod
@@ -117,7 +133,7 @@ class RolloutEvaluation(Evaluation):
 
     def __call__(
         self,
-        trainer: Any,
+        inference: "InferenceJob[Any, M]",
         encoding: Any,
         truncate: bool = False,
         temperature: float = 0.0,
@@ -127,7 +143,7 @@ class RolloutEvaluation(Evaluation):
         """Run evaluation.
 
         Args:
-            trainer: BaseTrainer instance (or subclass)
+            inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
             truncate: Whether to truncate dataset if batch size doesn't divide evenly
             temperature: Sampling temperature (0.0 for greedy)
@@ -142,7 +158,7 @@ class RolloutEvaluation(Evaluation):
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
             x, y = zip(*[eval_data.get(i) for i in range(len(eval_data))])
-            xs, masks = trainer.pad(encoding.encode_batch(x))
+            xs, masks = inference.pad(encoding.encode_batch(x))
         else:
             x, y = None, None
             xs, masks = None, None
@@ -153,7 +169,7 @@ class RolloutEvaluation(Evaluation):
         # Find batch sizes
         if not truncate:
             per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], trainer.per_device_batch_size, trainer.replicas
+                xs.shape[0], inference.per_device_batch_size, inference.replicas
             )
             if per_device_batch_size is None:
                 truncate = True
@@ -161,8 +177,8 @@ class RolloutEvaluation(Evaluation):
         if truncate:
             valid_size = (
                 xs.shape[0]
-                // (trainer.replicas * trainer.per_device_batch_size)
-                * (trainer.replicas * trainer.per_device_batch_size)
+                // (inference.replicas * inference.per_device_batch_size)
+                * (inference.replicas * inference.per_device_batch_size)
             )
             xs = xs[:valid_size]
             masks = masks[:valid_size]
@@ -175,32 +191,32 @@ class RolloutEvaluation(Evaluation):
 
         # Reshape into (accumulate_steps, per_device_batch_size, T)
         xs = xs.reshape(
-            -1, trainer.local_replicas * trainer.per_device_batch_size, xs.shape[-1]
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
         )
         masks = masks.reshape(
-            -1, trainer.local_replicas * trainer.per_device_batch_size, xs.shape[-1]
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
         )
 
         # Create global arrays
         data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
         xs = multihost_utils.host_local_array_to_global_array(
-            xs, trainer.mesh, data_pspec
+            xs, inference.mesh, data_pspec
         )
         masks = multihost_utils.host_local_array_to_global_array(
-            masks, trainer.mesh, data_pspec
+            masks, inference.mesh, data_pspec
         )
 
         # Create subkey
-        trainer.key, key = jax.random.split(trainer.key)
+        inference.key, key = jax.random.split(inference.key)
 
         def evaluate(state: Any, xs: Any, masks: Any, key: Any) -> Any:
             def reduce(_: Any, batch: Any) -> Any:
-                results = trainer._autoregress(
+                results = inference._autoregress(
                     state,
                     key,
                     batch[0],
                     batch[1],
-                    trainer.args.block_size,
+                    inference.block_size,
                     temperature,
                     top_p,
                     **kwargs,
@@ -212,14 +228,14 @@ class RolloutEvaluation(Evaluation):
             return results
 
         # JIT compile
-        data_sharding = NamedSharding(trainer.mesh, data_pspec)
+        data_sharding = NamedSharding(inference.mesh, data_pspec)
         wrapped_evaluate = jax.jit(
             evaluate,
-            in_shardings=(trainer.state_sharding, data_sharding, data_sharding, None),
+            in_shardings=(inference.state_sharding, data_sharding, data_sharding, None),
             out_shardings=None,
         )
 
-        results = wrapped_evaluate(trainer.state, xs, masks, key)
+        results = wrapped_evaluate(inference.state, xs, masks, key)
 
         # Collect across hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -281,11 +297,17 @@ class EncodingEvaluation(Evaluation):
         """Get input string at index."""
         ...
 
-    def __call__(self, trainer: Any, encoding: Any, truncate: bool = False) -> float:
+    def __call__(
+        self,
+        inference: "InferenceJob[Any, M]",
+        encoding: Any,
+        truncate: bool = False,
+        **kwargs: Any,
+    ) -> float:
         """Run evaluation.
 
         Args:
-            trainer: BaseTrainer instance (or subclass)
+            inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
             truncate: Whether to truncate dataset if batch size doesn't divide evenly
 
@@ -298,7 +320,7 @@ class EncodingEvaluation(Evaluation):
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
             x = [eval_data.get(i) for i in range(len(eval_data))]
-            xs, masks = trainer.pad(encoding.encode_batch(x))
+            xs, masks = inference.pad(encoding.encode_batch(x))
         else:
             x = None
             xs, masks = None, None
@@ -309,7 +331,7 @@ class EncodingEvaluation(Evaluation):
         # Find batch sizes
         if not truncate:
             per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], trainer.per_device_batch_size, trainer.replicas
+                xs.shape[0], inference.per_device_batch_size, inference.replicas
             )
             if per_device_batch_size is None:
                 truncate = True
@@ -317,8 +339,8 @@ class EncodingEvaluation(Evaluation):
         if truncate:
             valid_size = (
                 xs.shape[0]
-                // (trainer.replicas * trainer.per_device_batch_size)
-                * (trainer.replicas * trainer.per_device_batch_size)
+                // (inference.replicas * inference.per_device_batch_size)
+                * (inference.replicas * inference.per_device_batch_size)
             )
             xs = xs[:valid_size]
             masks = masks[:valid_size]
@@ -331,26 +353,26 @@ class EncodingEvaluation(Evaluation):
 
         # Reshape into (accumulate_steps, per_device_batch_size, T)
         xs = xs.reshape(
-            -1, trainer.local_replicas * trainer.per_device_batch_size, xs.shape[-1]
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
         )
         masks = masks.reshape(
-            -1, trainer.local_replicas * trainer.per_device_batch_size, xs.shape[-1]
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
         )
 
         # Create global arrays
         data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
         xs = multihost_utils.host_local_array_to_global_array(
-            xs, trainer.mesh, data_pspec
+            xs, inference.mesh, data_pspec
         )
         masks = multihost_utils.host_local_array_to_global_array(
-            masks, trainer.mesh, data_pspec
+            masks, inference.mesh, data_pspec
         )
 
         def evaluate(state: Any, xs: Any, masks: Any) -> Any:
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch = batch
-                # Use trainer's forward method - returns (logits, loss)
-                logits, _ = trainer.forward(
+                # Use inference's forward method - returns (logits, loss)
+                logits, _ = inference.forward(
                     state,
                     state.params,
                     (x_batch, None, mask_batch),
@@ -366,14 +388,14 @@ class EncodingEvaluation(Evaluation):
             return results
 
         # JIT compile
-        data_sharding = NamedSharding(trainer.mesh, data_pspec)
+        data_sharding = NamedSharding(inference.mesh, data_pspec)
         wrapped_evaluate = jax.jit(
             evaluate,
-            in_shardings=(trainer.state_sharding, data_sharding, data_sharding),
+            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
             out_shardings=None,
         )
 
-        results = wrapped_evaluate(trainer.state, xs, masks)
+        results = wrapped_evaluate(inference.state, xs, masks)
 
         # Collect across hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -402,11 +424,17 @@ class PerplexityEvaluation(Evaluation):
         """
         ...
 
-    def __call__(self, trainer: Any, encoding: Any, truncate: bool = False) -> float:
+    def __call__(
+        self,
+        inference: "InferenceJob[Any, M]",
+        encoding: Any,
+        truncate: bool = False,
+        **kwargs: Any,
+    ) -> float:
         """Run evaluation.
 
         Args:
-            trainer: BaseTrainer instance (or subclass)
+            inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode/encode_batch methods
             truncate: Whether to truncate dataset if batch size doesn't divide evenly
 
@@ -437,7 +465,7 @@ class PerplexityEvaluation(Evaluation):
 
             # Encode all inputs
             encoded_inputs = encoding.encode_batch(flattened_inputs)
-            xs, masks = trainer.pad(encoded_inputs)
+            xs, masks = inference.pad(encoded_inputs)
             prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
             metadata_array = jnp.array(metadata, dtype=jnp.int32)
             correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
@@ -466,7 +494,7 @@ class PerplexityEvaluation(Evaluation):
         # Find batch sizes
         if not truncate:
             per_device_batch_size, accumulate_steps = self.find_accumulation_steps(
-                xs.shape[0], trainer.per_device_batch_size, trainer.replicas
+                xs.shape[0], inference.per_device_batch_size, inference.replicas
             )
             if per_device_batch_size is None:
                 truncate = True
@@ -474,8 +502,8 @@ class PerplexityEvaluation(Evaluation):
         if truncate:
             valid_size = (
                 xs.shape[0]
-                // (trainer.replicas * trainer.per_device_batch_size)
-                * (trainer.replicas * trainer.per_device_batch_size)
+                // (inference.replicas * inference.per_device_batch_size)
+                * (inference.replicas * inference.per_device_batch_size)
             )
             xs = xs[:valid_size]
             masks = masks[:valid_size]
@@ -496,7 +524,7 @@ class PerplexityEvaluation(Evaluation):
         metadata_local = pieces_metadata[jax.process_index()]
 
         # Reshape into (accumulate_steps, batch_size, T)
-        batch_size = trainer.local_replicas * trainer.per_device_batch_size
+        batch_size = inference.local_replicas * inference.per_device_batch_size
         xs = xs.reshape(-1, batch_size, xs.shape[-1])
         masks = masks.reshape(-1, batch_size, masks.shape[-1])
         prefix_lens_local = prefix_lens_local.reshape(-1, batch_size)
@@ -506,13 +534,13 @@ class PerplexityEvaluation(Evaluation):
         prefix_lens_pspec = P(None, Axis.BATCH)  # type: ignore[no-untyped-call]
 
         xs = multihost_utils.host_local_array_to_global_array(
-            xs, trainer.mesh, data_pspec
+            xs, inference.mesh, data_pspec
         )
         masks = multihost_utils.host_local_array_to_global_array(
-            masks, trainer.mesh, data_pspec
+            masks, inference.mesh, data_pspec
         )
         prefix_lens_local = multihost_utils.host_local_array_to_global_array(
-            prefix_lens_local, trainer.mesh, prefix_lens_pspec
+            prefix_lens_local, inference.mesh, prefix_lens_pspec
         )
 
         def evaluate(state: Any, xs: Any, masks: Any, prefix_lens: Any) -> Any:
@@ -537,8 +565,8 @@ class PerplexityEvaluation(Evaluation):
                 is_padding_or_prefix = seq_positions < prefix_end
                 y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
 
-                # Use trainer's forward method - returns (logits, loss)
-                logits, _ = trainer.forward(
+                # Use inference's forward method - returns (logits, loss)
+                logits, _ = inference.forward(
                     state,
                     state.params,
                     (x_batch, None, mask_batch),
@@ -574,12 +602,12 @@ class PerplexityEvaluation(Evaluation):
             return losses
 
         # JIT compile
-        data_sharding = NamedSharding(trainer.mesh, data_pspec)
-        prefix_lens_sharding = NamedSharding(trainer.mesh, prefix_lens_pspec)
+        data_sharding = NamedSharding(inference.mesh, data_pspec)
+        prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
         wrapped_evaluate = jax.jit(
             evaluate,
             in_shardings=(
-                trainer.state_sharding,
+                inference.state_sharding,
                 data_sharding,
                 data_sharding,
                 prefix_lens_sharding,
@@ -587,7 +615,7 @@ class PerplexityEvaluation(Evaluation):
             out_shardings=None,
         )
 
-        losses = wrapped_evaluate(trainer.state, xs, masks, prefix_lens_local)
+        losses = wrapped_evaluate(inference.state, xs, masks, prefix_lens_local)
 
         # Gather results across all hosts
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -633,3 +661,120 @@ class PerplexityEvaluation(Evaluation):
 
         accuracy = correct / total if total > 0 else 0.0
         return float(accuracy)
+
+
+class Evaluator(InferenceJob[Any, M], Generic[M]):
+    """InferenceJob that runs evaluations and saves results.
+
+    Created from a trainer or checkpoint, holds a list of evaluations,
+    and runs them when run() is called.
+
+    Example:
+        evaluator = Evaluator.from_trainer(trainer, evaluations, encoding)
+        evaluator()  # Runs evaluations and saves results
+    """
+
+    MODEL: type[M]  # Set by subclass (e.g., EvaluatorGPT)
+    evaluations: List[Evaluation]
+    encoding: Any  # Tokenizer
+
+    def __init__(self, spec: ExecutionSpec):
+        """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
+        raise NotImplementedError(
+            f"Cannot instantiate {self.__class__.__name__} directly. "
+            "Use from_trainer() or from_checkpoint() instead."
+        )
+
+    def _get_results_path(self) -> Path:
+        """Get path for saving evaluation results."""
+        results_dir = self.spec.hardware.hosts[0].cluster.results_dir
+        project = self.spec.project or "general"
+        group = self.spec.group if self.spec.group else "default"
+        return Path(results_dir) / project / group / self.spec.name / "results.json"
+
+    @property
+    def done(self) -> bool:
+        """Check if evaluation results already exist."""
+        return self._get_results_path().exists()
+
+    @classmethod
+    def from_trainer(  # type: ignore[override]
+        cls,
+        trainer: "BaseTrainer[Any]",
+        evaluations: List[Evaluation],
+        encoding: Any,
+    ) -> "Evaluator[M]":
+        """Create Evaluator from trainer.
+
+        Args:
+            trainer: BaseTrainer instance to get inference state from
+            evaluations: List of Evaluation instances to run
+            encoding: Tokenizer with encode/decode methods
+
+        Returns:
+            Evaluator instance ready to run evaluations
+        """
+        evaluator = super().from_trainer(trainer)
+        evaluator.evaluations = evaluations
+        evaluator.encoding = encoding
+        return evaluator
+
+    @classmethod
+    def from_checkpoint(  # type: ignore[override]
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        evaluations: List[Evaluation],
+        encoding: Any,
+    ) -> Tuple["Evaluator[M]", Any]:
+        """Create Evaluator from checkpoint.
+
+        Args:
+            suffix: Checkpoint suffix
+            spec: ExecutionSpec with topology
+            evaluations: List of Evaluation instances to run
+            encoding: Tokenizer with encode/decode methods
+
+        Returns:
+            (evaluator, config) tuple
+        """
+        evaluator, cfg = super().from_checkpoint(suffix, spec)
+        evaluator.evaluations = evaluations
+        evaluator.encoding = encoding
+        return evaluator, cfg
+
+    def run(self) -> None:
+        """Run all evaluations and save results to disk."""
+        results: dict[str, float] = {}
+
+        for evaluation in self.evaluations:
+            logger.info("EVAL | Running {}", evaluation.name)
+            score = evaluation(self, self.encoding)
+            results[evaluation.name] = score
+            logger.info("EVAL | {} = {:.4f}", evaluation.name, score)
+
+        # Log summary
+        logger.info("=" * 60)
+        logger.info("EVALUATION RESULTS")
+        logger.info("=" * 60)
+        for key, value in results.items():
+            logger.info("  {}: {:.4f}", key, value)
+        logger.info("=" * 60)
+
+        # Save results to JSON (only on main process)
+        if jax.process_index() == 0:
+            output_path = self._get_results_path()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(output_path, "w") as f:
+                json.dump(
+                    {
+                        "job": self.spec.name,
+                        "project": self.spec.project,
+                        "group": self.spec.group,
+                        "results": {k: float(v) for k, v in results.items()},
+                    },
+                    f,
+                    indent=2,
+                )
+            logger.info("EVAL | Results saved to {}", output_path)
