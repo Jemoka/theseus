@@ -3,11 +3,26 @@ A theseus nn module, which is nn module, execpt it asks you to
 dump all the types of constitutent parts so we can configure it.
 """
 
-from typing import Type, List, Any
+from abc import abstractproperty
+
+from typing import Type, List, Any, Tuple, Optional
 from flax.linen import Module as nn
+
+from theseus.base.axis import Axis
+from theseus.model.axes import Axes
 
 
 class Module(nn):
+    @abstractproperty
+    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:
+        """Return the sharding configuration for this module.
+
+        Returns:
+            Tuple[Tuple[Axes, Optional[Axis]]]: A dictionary mapping Axes to sharding dimensions.
+        """
+
+        ...
+
     @classmethod
     def components(cls) -> List[Type[Any]]:
         """Return the types of constituent parts of this module.

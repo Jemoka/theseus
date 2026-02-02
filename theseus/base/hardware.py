@@ -181,12 +181,71 @@ def _detect_local_gpus() -> tuple[Optional[Chip], int]:
     return matched_chip, len(gpus)
 
 
+def _detect_local_tpus() -> tuple[Optional[Chip], int]:
+    """
+    Detect local TPUs using JAX.
+    Returns (chip, count) or (None, 0) if no TPUs found.
+    """
+    try:
+        import jax
+
+        devices = jax.devices()
+        tpu_devices = [d for d in devices if d.platform == "tpu"]
+
+        if not tpu_devices:
+            return None, 0
+
+        # Get TPU version from device kind (e.g., "TPU v4")
+        device_kind = tpu_devices[0].device_kind.lower()
+
+        from theseus.base.chip import SUPPORTED_CHIPS
+
+        # Match to supported TPU chips
+        matched_chip: Optional[Chip] = None
+        for chip_key, chip in SUPPORTED_CHIPS.items():
+            if chip_key.startswith("tpu-"):
+                version = chip_key.replace("tpu-", "")
+                if version in device_kind:
+                    matched_chip = chip
+                    break
+
+        if matched_chip is None:
+            # Create a chip entry for unknown TPU
+            matched_chip = Chip(
+                name=f"tpu-{device_kind.replace(' ', '-')}",
+                display_name=f"Google {device_kind.upper()}",
+                memory=int(16 * 1024**3),  # Default estimate
+            )
+
+        return matched_chip, len(tpu_devices)
+    except Exception:
+        return None, 0
+
+
+def _detect_cpu() -> tuple[Chip, int]:
+    """
+    Detect CPU as fallback.
+    Returns (cpu_chip, 1).
+    """
+    from theseus.base.chip import SUPPORTED_CHIPS
+
+    return SUPPORTED_CHIPS["cpu"], 1
+
+
 def local(root_dir: str, work_dir: str) -> HardwareResult:
+    # Try GPU first
     chip, total_chips = _detect_local_gpus()
 
+    # Try TPU if no GPU found
+    if chip is None:
+        chip, total_chips = _detect_local_tpus()
+
+    # Fall back to CPU if no GPU or TPU
+    if chip is None:
+        chip, total_chips = _detect_cpu()
+
     resources: dict[Chip, int] = {}
-    if chip is not None:
-        resources[chip] = total_chips
+    resources[chip] = total_chips
 
     local_machine = ClusterMachine(
         name="local",

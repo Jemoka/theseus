@@ -14,6 +14,9 @@ class JobSpec(BaseModel):
     """user provided specification for a job"""
 
     name: str = Field(description="name of the job, useful for logging, etc.")
+    id: Optional[str] = Field(
+        description="ID (such as for wandb) of the job, could be None", default=None
+    )
     project: Optional[str] = Field(
         description="project this run belongs to", default="theseus"
     )

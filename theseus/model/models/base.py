@@ -10,6 +10,7 @@ from theseus.model.axes import Axes
 from theseus.model.module import Module
 
 from theseus.config import field, configure
+from theseus.base.axis import Axis
 
 
 class GPT(Module):
@@ -19,6 +20,17 @@ class GPT(Module):
     vocab_size: int = field("architecture/vocab_size")
     block_size: int = field("architecture/block_size")
     dropout: float = field("architecture/dropout")
+
+    @property
+    def sharding(self) -> List[Tuple[Axes, Optional[Axis]]]:
+        return [
+            (Axes.VOCAB, None),
+            (Axes.BLOCK_SIZE, None),
+            (Axes.N_EMBD, None),
+            (Axes.N_EMBD_FF, Axis.SHARD),
+            (Axes.N_EMBD_OUT, Axis.SHARD),
+            (Axes.N_ATTN, Axis.SHARD),
+        ]
 
     @classmethod
     def components(cls) -> List[Type[Any]]:

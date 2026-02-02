@@ -41,17 +41,23 @@ class Topology(BaseModel):
     ]
 
     @classmethod
-    def new(cls, chip: Chip, shard_into: int = 1) -> "Topology":
+    def new(cls, chip: Chip, shard_into: int | None = None) -> "Topology":
         """Create a Topology instance based on the current JAX device configuration.
 
-        spec       Args:
-                   shard_into (int): Number of shards to divide the devices into; note this isn't
-                                   the SPMD axis, and instead is the number of tensor parallel shards.
-                                   The SPMD axis will be determined automatically based on the number of devices.
+        Args:
+            chip: The chip type being used.
+            shard_into: Number of shards to divide the devices into for tensor parallelism.
+                        If None, defaults to local device count (shard evenly within each host).
+                        The SPMD/data parallel axis is determined automatically.
 
         """
         devs = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
         local = jax.local_device_count()
+
+        # Default to sharding by local device count if not specified
+        if shard_into is None:
+            shard_into = local
+
         devices = np.array(devs).reshape(-1, local)
         devices = devices.reshape(-1, shard_into)
 

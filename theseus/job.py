@@ -14,7 +14,7 @@ from jax.experimental import multihost_utils
 from omegaconf import OmegaConf
 
 from theseus.base import _BaseJob, ExecutionSpec, PyTree, JobSpec
-from theseus.base import local
+from theseus.base import local, Topology
 from theseus.config import current_config, configure
 
 
@@ -28,6 +28,9 @@ class BasicJob(_BaseJob, Generic[C]):
 
     def __init__(self, spec: ExecutionSpec):
         cfg_type = self.config()
+
+        self.args: C
+
         if isinstance(cfg_type, list):
             self.args = configure(cfg_type[0])
         else:
@@ -73,12 +76,17 @@ class BasicJob(_BaseJob, Generic[C]):
         group: str | None = None,
     ) -> Self:
         hardware = local(root_dir, "-")
+        if hardware.chip is None:
+            topology = None
+        else:
+            topology = Topology.new(hardware.chip)
         spec = ExecutionSpec(
             name=name,
             project=project,
             group=group,
             hardware=hardware,
             distributed=False,
+            topology=topology,
         )
         return cls(spec)
 

@@ -10,12 +10,11 @@ from theseus.data.datasets.registry import DATASETS
 
 # from theseus.trainer import JOBS as TRAINER_JOBS
 from theseus.job import BasicJob
+from theseus.training.optimizers import OPTIMIZERS
+from theseus.training.schedules import SCHEDULES
 
 JOBS: dict[str, type[BasicJob[Any]]] = {}
 JOBS.update(DATA_JOBS)
 # JOBS.update(TRAINER_JOBS)
 
-__all__ = [
-    "JOBS",
-    "DATASETS",
-]
+__all__ = ["JOBS", "DATASETS", "OPTIMIZERS", "SCHEDULES"]
