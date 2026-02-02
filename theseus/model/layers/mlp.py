@@ -13,8 +13,8 @@ from theseus.model.module import Module
 class MLP(Module):
     n_embd: int = field("architecture/n_embd")
     n_layers: int = field("architecture/n_layers")
-    bias: bool = field("architecture/bias")
     dropout: float = field("architecture/dropout")
+    bias: bool = field("architecture/bias", default=True)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:

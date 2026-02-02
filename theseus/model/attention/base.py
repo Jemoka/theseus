@@ -18,10 +18,11 @@ ATTN_DTYPE = jnp.bfloat16
 
 class SelfAttention(Module):
     n_embd: int = field("architecture/n_embd")
-    n_head: int = field("architecture/n_head")
     n_layers: int = field("architecture/n_layers")
     bias: bool = field("architecture/bias")
     dropout: float = field("architecture/dropout")
+
+    n_head: int = field("architecture/n_head", default=16)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:

@@ -150,7 +150,9 @@ def build_default_config(types: Dict[str, Any], defaults: Dict[str, Any]) -> Ome
             flat_out[k] = defaults[k]
         else:
             flat_out[k] = MISSING_VALUE
-    return OmegaConf.create(nest_slash_keys(flat_out))
+    cfg = OmegaConf.create(nest_slash_keys(flat_out))
+    OmegaConf.set_struct(cfg, True)
+    return cfg
 
 
 def build(*classes: Any) -> OmegaConf:

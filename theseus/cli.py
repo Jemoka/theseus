@@ -125,7 +125,9 @@ def configure(
         config = OmegaConf.merge(config, cfg_cli)
 
     # Add job name to config
+    OmegaConf.set_struct(config, False)
     config.job = job
+    OmegaConf.set_struct(config, True)
 
     # Validate that output path parent exists
     out_path = Path(out_yaml)
@@ -202,7 +204,9 @@ def run(
             sys.exit(1)
         job = cfg.job
     else:
+        OmegaConf.set_struct(cfg, False)
         cfg.job = job
+        OmegaConf.set_struct(cfg, True)
 
     # Validate job exists
     if job not in JOBS:
