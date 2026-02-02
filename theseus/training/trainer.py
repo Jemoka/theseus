@@ -143,6 +143,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         super().__init__(spec)
         logger.info(f"TOPOLOGY | \n{spec.model_dump_json(indent=2)}\n")
 
+        self.args = configure(self.CONFIG)
         topology = self._init_topology(spec)
         params = self._init_model()
         self._init_optimizer(params)
