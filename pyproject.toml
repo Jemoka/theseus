@@ -32,7 +32,13 @@ dev = [
     "mypy>=1.16.1",
 ]
 cuda = [
+    {include-group = "cuda13"},
+]
+cuda13 = [
     "jax[cuda13]>=0.4.23"
+]
+cuda12 = [
+    "jax[cuda12]>=0.4.23"
 ]
 tpu = [
     "jax[tpu]>=0.4.23"
