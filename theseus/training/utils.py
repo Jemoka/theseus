@@ -36,9 +36,8 @@ def estimate_per_device_batch_size(
     """
     params_per_shard = total_params_millions * 1e6 / shards
 
-    # Fixed memory: ~18 bytes/param (params + grads + optimizer + master weights)
-    fixed_memory = params_per_shard * 18
-    usable_memory = chip_memory * 0.85 - fixed_memory  # 85% usable
+    fixed_memory = params_per_shard * 180
+    usable_memory = chip_memory * 0.5 - fixed_memory
 
     # Activation memory per sample (empirical scaling)
     bytes_per_sample = vram_calib_factor * block_size * (params_per_shard**0.5)
