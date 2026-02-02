@@ -28,7 +28,6 @@ from theseus.base import Axis, ExecutionSpec
 from theseus.config import field, configure
 from theseus.inference import InferenceJob, M
 from theseus.data.tokenizer import get_chatml_encoder
-from theseus.evaluation.datasets import DATASETS
 
 if TYPE_CHECKING:
     from theseus.training.trainers.base import BaseTrainer
@@ -641,7 +640,7 @@ class EvaluatorConfig:
     """Configuration for Evaluator."""
 
     evaluations: List[str] = field(
-        "evaluator/evaluations", default_factory=lambda x: ["blimp"]
+        "eval/evaluations", default_factory=lambda: ["blimp"]
     )
 
 
@@ -695,6 +694,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         Returns:
             Evaluator instance ready to run evaluations
         """
+        from theseus.evaluation.datasets.registry import DATASETS
+
         evaluator = super().from_trainer(trainer)
         evaluator.encoding = get_chatml_encoder()
 

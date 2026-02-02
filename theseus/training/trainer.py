@@ -283,6 +283,9 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         self.global_step_counter_ = 0
         self.best_val_score_ = float("-inf")
 
+        # bake evaluator
+        self.evaluator: Evaluator[M] = Evaluator.from_trainer(self)
+
         # weeeeeeeeeeee
         # print the model
         if self.main_process():
@@ -337,15 +340,6 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
         )
 
         return logits, loss
-
-    @property
-    def inference(self) -> "Evaluator[M]":
-        """Get InferenceJob for this trainer (for evaluations).
-
-        Creates a new InferenceJob each time - if caching is needed,
-        store the result externally.
-        """
-        return Evaluator.from_trainer(self)
 
     @classmethod
     def train_step(
@@ -663,7 +657,7 @@ class BaseTrainer(RestoreableJob[BaseTrainerConfig], Generic[M]):
                 )  # so we don't ovelap with checkpoint
             ):
                 score, val_metrics = valid_step(self.state)
-                eval_metrics = self.inference.evaluate()
+                eval_metrics = self.evaluator.evaluate()
                 val_metrics.update(eval_metrics)
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)

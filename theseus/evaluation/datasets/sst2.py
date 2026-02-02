@@ -1,0 +1,51 @@
+from datasets import load_dataset
+from typing import Tuple
+
+from theseus.data.datasets import ChatTemplate, ChatTurn
+from theseus.evaluation.base import RolloutEvaluation
+from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+
+
+def template(sentence: str) -> ChatTemplate:
+    return [
+        ChatTurn(
+            role="user",
+            message=f"""Classify the sentiment of the following sentence; respond with "positive" or "negative", not including quotes.
+
+sentence: {sentence}
+""",
+        ),
+    ]
+
+
+class SST2Eval(RolloutEvaluation):
+    """SST-2 sentiment evaluation using validation split."""
+
+    def __init__(self, split: str = "validation") -> None:
+        self.ds = load_dataset("stanfordnlp/sst2", split=split)
+
+    @property
+    def name(self) -> str:
+        return "sst2"
+
+    def get(self, indx: int) -> Tuple[str, str]:
+        item = self.ds[indx]
+        answer = "positive" if item["label"] == 1 else "negative"
+        prompt: str = encode_chat_template(template(item["sentence"]), prompt=True)  # type: ignore
+        return prompt, answer
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def clean(self, y_hat: str) -> str:
+        chats: ChatTemplate = decode_chat_template(y_hat)
+        assistant_msgs = []
+        for i in chats:
+            if i.role == "assistant":
+                assistant_msgs.append(i.message.strip())
+        if not assistant_msgs:
+            return ""
+        return assistant_msgs[-1].strip().lower()
+
+    def check(self, y: str, y_hat: str) -> bool:
+        return y.strip().lower() == y_hat.strip().lower()
