@@ -290,6 +290,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
     ) -> Tuple[jax.Array, jax.Array]:
         x, y, padding_mask = batch  # (B, T)
 
+        dropout_key = None
         if not deterministic and key is not None:
             _, dropout_key = jax_random.split(key)
 
@@ -298,7 +299,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             x,
             y,
             deterministic=deterministic,
-            rngs={"dropout": dropout_key} if not dropout_key is not None else {},
+            rngs={"dropout": dropout_key} if dropout_key is not None else {},
         )
 
         return logits, loss
@@ -331,14 +332,13 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             accumulate_steps: int,
         ) -> Tuple[jax.Array, PyTree[jax.Array]]:
             x, y, padding_mask = batch  # (B, T)
-            _, dropout_key = jax_random.split(key)
 
             def loss_fn(params: PyTree[jax.Array]) -> jax.Array:
                 logits, loss = cls.forward(
                     state,
                     params,
                     (x, y, padding_mask),
-                    key=dropout_key,
+                    key=key,
                     deterministic=False,
                 )
                 return loss / accumulate_steps
@@ -350,22 +350,25 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             return loss, grads
 
         def reduce(
-            carry: Tuple[PyTree[jax.Array], jax.Array],
+            carry: Tuple[PyTree[jax.Array], jax.Array, jax.Array],
             batch: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
-        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array], None]:
-            grad, loss = carry
-            loss_single, grad_single = train_eval(state, batch, key, accumulate_steps)
+        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, jax.Array], None]:
+            grad, loss, key = carry
+            key, subkey = jax_random.split(key)
+            loss_single, grad_single = train_eval(
+                state, batch, subkey, accumulate_steps
+            )
 
             grad_acc = jax.tree_util.tree_map(lambda a, g: a + g, grad, grad_single)
             loss_acc = loss + loss_single
 
-            return (grad_acc, loss_acc), None
+            return (grad_acc, loss_acc, key), None
 
         grad_zero = jax.tree_util.tree_map(jnp.zeros_like, state.params)
 
         # scan over S micro-batches, accumulating gradients
         loss_sum: jax.Array
-        (grad_sum, loss_sum), _ = jax.lax.scan(reduce, (grad_zero, 0.0), batch)  # type: ignore
+        (grad_sum, loss_sum, _), _ = jax.lax.scan(reduce, (grad_zero, 0.0, key), batch)  # type: ignore
 
         state: PyTree[jax.Array] = state.apply_gradients(grads=grad_sum)  # type: ignore
 
@@ -376,7 +379,7 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
         cls,
         state: train_state.TrainState,
         batch: Tuple[jax.Array, jax.Array, jax.Array],  # (S, B, T) each
-    ) -> Tuple[float, int]:
+    ) -> Tuple[jax.Array, jax.Array]:
         """Compute validation loss over S micro-batches.
 
         Args:
@@ -407,9 +410,11 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
             return (loss_sum + loss_i * n, count + n), None
 
         # scan over S micro-batches, accumulating weighted loss
-        (loss_sum, count), _ = jax.lax.scan(reduce, (0.0, 0), (x, y, padding_mask))  # type: ignore
+        (loss_sum, count), _ = jax.lax.scan(
+            reduce, (jnp.array(0.0), jnp.array(0)), (x, y, padding_mask)
+        )
 
-        return loss_sum, count  # scalars
+        return loss_sum, count  # scalar arrays
 
     def __make_valid_step(
         self,
@@ -539,10 +544,11 @@ class BaseTrainer(CheckpointedJob[BaseTrainerConfig], Generic[M]):
 
             logger.debug("DATA | {} | PLACED", indx)
 
+            self.dropout_key, subkey = jax_random.split(self.dropout_key)
             self.state, loss = train_step(
                 self.state,
                 (xa, ya, padding_mask_a),
-                self.dropout_key,
+                subkey,
                 self.accumulate_steps,
             )
             logger.debug("COMPUTATION | {} | FINISHED", indx)
