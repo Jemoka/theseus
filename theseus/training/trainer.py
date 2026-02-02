@@ -93,7 +93,6 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     @classmethod
     def config(cls) -> List[Type[Any]]:
-        print(cls.CONFIG)
         return cls._config() + [cls.CONFIG]
 
     @classmethod
