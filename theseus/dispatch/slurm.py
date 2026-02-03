@@ -24,35 +24,87 @@ SBATCH_TEMPLATE = Path(__file__).parent / "sbatch.sh"
 
 
 def _scp_content(
-    content: str, host: str, remote_path: str, timeout: float | None = None
+    content: str,
+    host: str,
+    remote_path: str,
+    timeout: float | None = None,
 ) -> RunResult:
     """Write content to a remote file via scp.
 
     Creates a temp file locally, scps it to remote, then cleans up.
-    Better for large files than using SSH stdin with heredoc.
+    Retries on transient connection errors with adaptive backoff.
     """
+    from theseus.dispatch.ssh import (
+        _rate_limit,
+        _backoff,
+        _recover,
+        _is_transient_error,
+        _MAX_RETRIES,
+    )
+
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(content)
         local_path = f.name
 
     try:
-        scp_cmd = ["scp", "-o", "BatchMode=yes", local_path, f"{host}:{remote_path}"]
-        result = subprocess.run(
-            scp_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return RunResult(
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-    except subprocess.TimeoutExpired:
-        return RunResult(
-            returncode=-1,
-            stdout="",
-            stderr=f"scp timed out after {timeout}s",
+        last_result = None
+        for attempt in range(_MAX_RETRIES):
+            # Apply rate limiting to avoid SSH connection throttling
+            _rate_limit(host)
+
+            try:
+                scp_cmd = [
+                    "scp",
+                    "-o",
+                    "BatchMode=yes",
+                    local_path,
+                    f"{host}:{remote_path}",
+                ]
+                result = subprocess.run(
+                    scp_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                last_result = RunResult(
+                    returncode=result.returncode,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                )
+
+                if last_result.ok:
+                    _recover(host)
+                    return last_result
+
+                # Check for transient connection errors
+                if (
+                    _is_transient_error(last_result.stderr)
+                    and attempt < _MAX_RETRIES - 1
+                ):
+                    logger.warning(
+                        f"SLURM | scp failed (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                    )
+                    _backoff(host)
+                    continue
+
+                return last_result
+
+            except subprocess.TimeoutExpired:
+                last_result = RunResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=f"scp timed out after {timeout}s",
+                )
+                if attempt < _MAX_RETRIES - 1:
+                    logger.warning(
+                        f"SLURM | scp timeout (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                    )
+                    _backoff(host)
+                    continue
+                return last_result
+
+        return last_result or RunResult(
+            returncode=-1, stdout="", stderr="max retries exceeded"
         )
     finally:
         Path(local_path).unlink(missing_ok=True)

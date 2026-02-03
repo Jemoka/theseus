@@ -12,10 +12,30 @@ from dataclasses import dataclass
 
 from loguru import logger
 
-# Per-host rate limiting to avoid SSH connection throttling
+# Per-host adaptive rate limiting with exponential backoff
 _host_last_call: dict[str, float] = {}
+_host_interval: dict[str, float] = {}  # current interval per host
 _host_lock = threading.Lock()
-_MIN_CALL_INTERVAL = 0.3  # seconds between calls to same host
+
+_MIN_INTERVAL = 0.5  # minimum interval between calls
+_MAX_INTERVAL = 10.0  # maximum interval (cap for backoff)
+_BACKOFF_FACTOR = 2.0  # multiply interval by this on failure
+_RECOVERY_FACTOR = 0.8  # multiply interval by this on success
+_MAX_RETRIES = 5  # max retries for transient connection errors
+
+
+def _is_transient_error(stderr: str) -> bool:
+    """Check if an error is a transient connection error."""
+    transient_patterns = [
+        "connection reset",
+        "connection closed",
+        "kex_exchange",
+        "connection refused",
+        "connection timed out",
+        "no route to host",
+    ]
+    stderr_lower = stderr.lower()
+    return any(pattern in stderr_lower for pattern in transient_patterns)
 
 
 def _rate_limit(host: str) -> None:
@@ -23,12 +43,30 @@ def _rate_limit(host: str) -> None:
     with _host_lock:
         now = time.time()
         last_call = _host_last_call.get(host, 0)
+        interval = _host_interval.get(host, _MIN_INTERVAL)
         elapsed = now - last_call
-        if elapsed < _MIN_CALL_INTERVAL:
-            wait_time = _MIN_CALL_INTERVAL - elapsed
+        if elapsed < interval:
+            wait_time = interval - elapsed
             logger.debug(f"SSH | rate limiting: waiting {wait_time:.2f}s for {host}")
             time.sleep(wait_time)
         _host_last_call[host] = time.time()
+
+
+def _backoff(host: str) -> None:
+    """Increase rate limit interval for a host after a failure."""
+    with _host_lock:
+        current = _host_interval.get(host, _MIN_INTERVAL)
+        new_interval = min(current * _BACKOFF_FACTOR, _MAX_INTERVAL)
+        _host_interval[host] = new_interval
+        logger.debug(f"SSH | backoff for {host}: interval now {new_interval:.2f}s")
+
+
+def _recover(host: str) -> None:
+    """Decrease rate limit interval for a host after success."""
+    with _host_lock:
+        current = _host_interval.get(host, _MIN_INTERVAL)
+        new_interval = max(current * _RECOVERY_FACTOR, _MIN_INTERVAL)
+        _host_interval[host] = new_interval
 
 
 def _shell_quote(s: str) -> str:
@@ -84,6 +122,7 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
     """Execute a command remotely on a host via SSH.
 
     Runs in a login shell to ensure environment variables are loaded.
+    Retries on transient connection errors with exponential backoff.
 
     Args:
         cmd: Command to execute (string or list of args)
@@ -93,9 +132,6 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
     Returns:
         RunResult with returncode, stdout, and stderr
     """
-    # Rate limit to avoid overwhelming SSH server
-    _rate_limit(host)
-
     if isinstance(cmd, list):
         cmd = " ".join(cmd)
 
@@ -106,33 +142,63 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
 
     # Truncate cmd for logging if too long
     cmd_preview = cmd[:80] + "..." if len(cmd) > 80 else cmd
-    logger.debug(f"SSH | running on {host}: {cmd_preview}")
 
-    try:
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            logger.debug(
-                f"SSH | command failed (rc={result.returncode}): {result.stderr[:200] if result.stderr else 'no stderr'}"
+    last_result = None
+    for attempt in range(_MAX_RETRIES):
+        # Rate limit to avoid overwhelming SSH server
+        _rate_limit(host)
+
+        logger.debug(f"SSH | running on {host}: {cmd_preview}")
+
+        try:
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
-        return RunResult(
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-        )
-    except subprocess.TimeoutExpired as e:
-        logger.warning(f"SSH | command timed out after {timeout}s on {host}")
-        return RunResult(
-            returncode=-1,
-            stdout=e.stdout or ""
-            if isinstance(e.stdout, str)
-            else (e.stdout.decode() if e.stdout else ""),
-            stderr=f"Command timed out after {timeout}s",
-        )
+            last_result = RunResult(
+                returncode=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
+            if result.returncode == 0:
+                _recover(host)
+                return last_result
+
+            # Check if it's a transient error worth retrying
+            if _is_transient_error(result.stderr) and attempt < _MAX_RETRIES - 1:
+                logger.warning(
+                    f"SSH | transient error on {host} (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                )
+                _backoff(host)
+                continue
+
+            # Non-transient error or last attempt
+            if result.returncode != 0:
+                logger.debug(
+                    f"SSH | command failed (rc={result.returncode}): {result.stderr[:200] if result.stderr else 'no stderr'}"
+                )
+            return last_result
+
+        except subprocess.TimeoutExpired as e:
+            logger.warning(f"SSH | command timed out after {timeout}s on {host}")
+            last_result = RunResult(
+                returncode=-1,
+                stdout=e.stdout or ""
+                if isinstance(e.stdout, str)
+                else (e.stdout.decode() if e.stdout else ""),
+                stderr=f"Command timed out after {timeout}s",
+            )
+            if attempt < _MAX_RETRIES - 1:
+                _backoff(host)
+                continue
+            return last_result
+
+    return last_result or RunResult(
+        returncode=-1, stdout="", stderr="max retries exceeded"
+    )
 
 
 def run_many(
@@ -184,6 +250,9 @@ def copy_to(
     Returns:
         RunResult with returncode, stdout, and stderr
     """
+    # Rate limit to avoid overwhelming SSH server
+    _rate_limit(host)
+
     local_path = Path(local_path)
     logger.debug(f"SSH | copying {local_path} to {host}:{remote_path}")
     scp_cmd = ["scp", "-o", "BatchMode=yes"]
@@ -232,6 +301,9 @@ def copy_from(
     Returns:
         RunResult with returncode, stdout, and stderr
     """
+    # Rate limit to avoid overwhelming SSH server
+    _rate_limit(host)
+
     logger.debug(f"SSH | copying {host}:{remote_path} to {local_path}")
     scp_cmd = [
         "scp",

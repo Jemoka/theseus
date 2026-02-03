@@ -73,6 +73,9 @@ class SlurmHostConfig:
     mem: str | None = None  # default memory (e.g., "64G"), defaults to 64G if not set
     exclude: list[str] = field(default_factory=list)  # nodes to exclude (--exclude)
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+    chips: dict[str, int] | None = (
+        None  # optional chip_name -> count (limits allocation)
+    )
 
 
 @dataclass
@@ -154,6 +157,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                         )
                     )
             exclude = list(host_cfg.get("exclude", []))
+            chips = dict(host_cfg.get("chips", {})) if host_cfg.get("chips") else None  # type: ignore
             hosts[name] = SlurmHostConfig(
                 ssh=host_cfg.ssh,
                 cluster=host_cfg.cluster,
@@ -164,6 +168,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 mem=host_cfg.get("mem"),
                 exclude=exclude,
                 uv_groups=uv_groups,
+                chips=chips,
             )
 
     plain_count = sum(1 for h in hosts.values() if isinstance(h, PlainHostConfig))

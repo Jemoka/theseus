@@ -56,6 +56,18 @@ hosts:
     exclude: [node001, node002]  # nodes to exclude (--exclude)
     uv_groups: [cuda12]
 
+  # SLURM cluster with explicit chip allocation limits
+  hpc-limited:
+    ssh: hpc
+    cluster: hpc
+    type: slurm
+    partitions: [gpu]
+    account: myproject
+    chips:                       # optional: limit allocation to these chips
+      h100: 8                    # only use up to 8 H100s from this host
+      a100-sxm4-80gb: 16        # only use up to 16 A100-80GBs
+    uv_groups: [cuda12]
+
   cloud:
     ssh: cloud
     cluster: hpc

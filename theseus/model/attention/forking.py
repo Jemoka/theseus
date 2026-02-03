@@ -153,7 +153,6 @@ class ForkingAttention(RopeAttention):
             v,
             cumulative_scores=cumulative_scores,
             token_index=token_index,
-            **kwargs,
         )
 
         y = self.attn(
@@ -163,7 +162,6 @@ class ForkingAttention(RopeAttention):
             mask=padding_mask[:, None, None, :] if padding_mask is not None else None,
             token_index=token_index,
             padding_mask=padding_mask,
-            **kwargs,
         )
 
         if padding_mask is not None and token_index is not None:

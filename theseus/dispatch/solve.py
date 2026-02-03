@@ -148,6 +148,19 @@ def solve(
                 )
 
         elif isinstance(host_cfg, SlurmHostConfig):
+            # Check if this host has an explicit chip limit
+            chip_limit = None
+            if host_cfg.chips is not None:
+                chip_limit = host_cfg.chips.get(chip_name, 0)
+                if chip_limit == 0:
+                    logger.debug(
+                        f"SOLVE | SLURM host '{host_name}': chip '{chip_name}' not in allowed chips list"
+                    )
+                    continue
+                logger.debug(
+                    f"SOLVE | SLURM host '{host_name}': chip limit for {chip_name} = {chip_limit}"
+                )
+
             # Check all partitions and pick the one with most availability
             best_partition = None
             best_available = 0
@@ -194,6 +207,9 @@ def solve(
                     avail = _check_slurm_availability(
                         host_cfg.ssh, part_name, chip_name, config.gres_mapping, timeout
                     )
+                    # Apply chip limit if specified
+                    if chip_limit is not None:
+                        avail = min(avail, chip_limit)
                     logger.debug(
                         f"SOLVE | partition '{part_name}': {avail} chips available"
                     )
@@ -210,7 +226,8 @@ def solve(
                 )
             else:
                 # Assume SLURM can satisfy (let scheduler handle it)
-                available = request.min_chips
+                # But cap at chip limit if specified
+                available = chip_limit if chip_limit is not None else request.min_chips
                 partition = partition_names[0] if partition_names else None
 
             logger.debug(
@@ -244,25 +261,34 @@ def solve(
 
     # Fallback: pick SLURM with most availability (even if < min_chips)
     # For SLURM, we request the full min_chips and let the scheduler queue until available
+    # (but respect chip limit if configured)
     if slurm_fallback:
         slurm_fallback.sort(key=lambda x: x[2], reverse=True)
         host_name, host_cfg, available, partition = slurm_fallback[0]
 
+        # Determine request amount: cap at chip limit if specified
+        fallback_chip_limit = None
+        if host_cfg.chips is not None:
+            fallback_chip_limit = host_cfg.chips.get(chip_name, 0)
+        chips_to_request = request.min_chips
+        if fallback_chip_limit is not None:
+            chips_to_request = min(chips_to_request, fallback_chip_limit)
+
         logger.warning(
             f"SOLVE | no host satisfies request, falling back to SLURM '{host_name}' "
-            f"(available={available}, requesting={request.min_chips})"
+            f"(available={available}, requesting={chips_to_request})"
         )
         cluster = inventory.get_cluster(host_cfg.cluster)
         machine = ClusterMachine(
             name=host_name,
             cluster=cluster,
-            resources={request.chip: request.min_chips},
+            resources={request.chip: chips_to_request},
         )
         return SolveResult(
             result=HardwareResult(
                 chip=request.chip,
                 hosts=[machine],
-                total_chips=request.min_chips,  # Request full amount, let SLURM queue
+                total_chips=chips_to_request,  # Request amount (may be capped by chip limit)
             ),
             host_name=host_name,
             host_config=host_cfg,

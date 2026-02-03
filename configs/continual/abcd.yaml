@@ -63,5 +63,5 @@ logging:
   wandb: true
 job: continual/train/abcd
 request:
-  chip: a6000
+  chip: a100-pcie-40gb
   min_chips: 4
