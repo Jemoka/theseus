@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from abc import abstractmethod
 from typing import Generic, TypeVar, Type, Dict, Any, Optional, List, Tuple, Callable
 
+from omegaconf import OmegaConf
+
 import numpy as np
 
 import jax
@@ -286,7 +288,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             assert current_config() is not None, (
                 "cannot locate configuration in context!"
             )
-            cfg: Dict[Any, Any] = dict(current_config())  # type: ignore
+            cfg: Dict[Any, Any] = OmegaConf.to_object(current_config())
 
             wandb.init(
                 project=spec.project or "theseus",
