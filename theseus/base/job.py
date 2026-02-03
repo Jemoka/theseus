@@ -18,10 +18,10 @@ class JobSpec(BaseModel):
         description="ID (such as for wandb) of the job, could be None", default=None
     )
     project: Optional[str] = Field(
-        description="project this run belongs to", default="theseus"
+        description="project this run belongs to", default="general"
     )
     group: Optional[str] = Field(
-        description="group under the project this run belongs to", default=""
+        description="group under the project this run belongs to", default="default"
     )
 
 

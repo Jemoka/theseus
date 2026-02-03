@@ -43,7 +43,6 @@ Usage:
 """
 
 import json
-import subprocess
 from pathlib import Path
 
 from loguru import logger
@@ -190,60 +189,36 @@ def dispatch(
         )
         logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
 
-    # 4. Generate bootstrap script
+    # 4. Generate bootstrap script (Python script that runs the job)
     logger.debug("DISPATCH | generating bootstrap script")
-    bootstrap_script = _generate_bootstrap(cfg, solve_result.result, spec)
+    bootstrap_py_content = _generate_bootstrap(cfg, solve_result.result, spec)
 
-    # 5. Write bootstrap.py to temp file in repo root (will be included in snapshot)
-    repo_root = _find_repo_root()
-    bootstrap_path = repo_root / "_bootstrap_dispatch.py"
-
-    try:
-        bootstrap_path.write_text(bootstrap_script)
-        logger.debug(f"DISPATCH | wrote bootstrap script to {bootstrap_path}")
-
-        # 6. Submit based on host type
-        if solve_result.is_slurm:
-            logger.info(
-                f"DISPATCH | submitting via SLURM to {solve_result.host_config.ssh}"
-            )
-            return _dispatch_slurm(
-                solve_result,
-                work_dir,
-                cluster,
-                juicefs_mount,
-                dirty,
-                timeout,
-            )
-        else:
-            logger.info(
-                f"DISPATCH | submitting via SSH to {solve_result.host_config.ssh}"
-            )
-            return _dispatch_plain(
-                solve_result,
-                work_dir,
-                cluster,
-                juicefs_mount,
-                dirty,
-                timeout,
-            )
-    finally:
-        # 7. Cleanup temp bootstrap file
-        if bootstrap_path.exists():
-            bootstrap_path.unlink()
-            logger.debug("DISPATCH | cleaned up temp bootstrap file")
-
-
-def _find_repo_root() -> Path:
-    """Find git repository root."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("Not in a git repository")
-    return Path(result.stdout.strip())
+    # 5. Submit based on host type
+    if solve_result.is_slurm:
+        logger.info(
+            f"DISPATCH | submitting via SLURM to {solve_result.host_config.ssh}"
+        )
+        return _dispatch_slurm(
+            solve_result,
+            work_dir,
+            cluster,
+            juicefs_mount,
+            bootstrap_py_content,
+            dirty,
+            timeout,
+        )
+    else:
+        logger.info(f"DISPATCH | submitting via SSH to {solve_result.host_config.ssh}")
+        return _dispatch_plain(
+            solve_result,
+            work_dir,
+            cluster,
+            juicefs_mount,
+            spec,
+            bootstrap_py_content,
+            dirty,
+            timeout,
+        )
 
 
 def _dispatch_slurm(
@@ -251,6 +226,7 @@ def _dispatch_slurm(
     work_dir: str,
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
+    bootstrap_py_content: str,
     dirty: bool,
     timeout: float,
 ) -> SlurmResult:
@@ -268,7 +244,7 @@ def _dispatch_slurm(
         f"DISPATCH | SLURM dispatch: partition={solve_result.partition}, nodes={len(solve_result.result.hosts)}, gpus_per_node={gpus_per_node}"
     )
 
-    # Build SlurmJob
+    # Build SlurmJob with embedded bootstrap Python script
     job = SlurmJob(
         name="theseus-dispatch",
         command="python _bootstrap_dispatch.py",
@@ -281,6 +257,7 @@ def _dispatch_slurm(
         payload_extract_to=work_dir,
         output=f"{cluster.log_dir}/slurm-%j.out",
         juicefs_mount=juicefs_mount,
+        bootstrap_py=bootstrap_py_content,
     )
 
     result = submit_packed(
@@ -305,17 +282,26 @@ def _dispatch_plain(
     work_dir: str,
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
+    spec: JobSpec,
+    bootstrap_py_content: str,
     dirty: bool,
     timeout: float,
 ) -> RunResult:
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
+    from datetime import datetime
+
     assert solve_result.host_config is not None
     assert not isinstance(solve_result.host_config, SlurmHostConfig)
 
     host_config = solve_result.host_config
     ssh_alias = host_config.ssh
     log_dir = cluster.log_dir
-    log_file = f"{log_dir}/dispatch.log"
+
+    # Build log filename with job metadata and timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project = spec.project or "default"
+    group = spec.group or "default"
+    log_file = f"{log_dir}/{project}_{group}_{spec.name}_{timestamp}.log"
 
     logger.debug(f"DISPATCH | SSH dispatch: host={ssh_alias}, work_dir={work_dir}")
 
@@ -327,6 +313,7 @@ def _dispatch_plain(
         uv_groups=host_config.uv_groups,
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
+        bootstrap_py=bootstrap_py_content,
     )
 
     # Generate bootstrap script (without SBATCH directives since partition=None)
@@ -345,9 +332,9 @@ def _dispatch_plain(
 
     logger.debug("DISPATCH | code shipped successfully")
 
-    # Write bootstrap script to remote
+    # Write bootstrap.sh script to remote
     bootstrap_remote = f"{work_dir}/_bootstrap.sh"
-    logger.debug(f"DISPATCH | writing bootstrap script to {bootstrap_remote}")
+    logger.debug(f"DISPATCH | writing bootstrap.sh to {bootstrap_remote}")
     write_cmd = f"cat > {bootstrap_remote} << 'BOOTSTRAP_EOF'\n{script}BOOTSTRAP_EOF"
     write_result = run(write_cmd, ssh_alias, timeout=timeout)
     if not write_result.ok:
@@ -355,6 +342,17 @@ def _dispatch_plain(
             f"DISPATCH | failed to write bootstrap script: {write_result.stderr}"
         )
         return write_result
+
+    # Write _bootstrap_dispatch.py to remote (not included in git archive)
+    bootstrap_py_remote = f"{work_dir}/_bootstrap_dispatch.py"
+    logger.debug(f"DISPATCH | writing _bootstrap_dispatch.py to {bootstrap_py_remote}")
+    write_py_cmd = f"cat > {bootstrap_py_remote} << 'BOOTSTRAP_PY_EOF'\n{bootstrap_py_content}BOOTSTRAP_PY_EOF"
+    write_py_result = run(write_py_cmd, ssh_alias, timeout=timeout)
+    if not write_py_result.ok:
+        logger.error(
+            f"DISPATCH | failed to write bootstrap Python script: {write_py_result.stderr}"
+        )
+        return write_py_result
 
     # Run bootstrap script with nohup (non-blocking)
     logger.debug(f"DISPATCH | launching job via nohup, logs at {log_file}")

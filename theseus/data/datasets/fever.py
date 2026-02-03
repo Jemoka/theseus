@@ -8,7 +8,6 @@ import json
 from typing import Any
 from urllib.request import urlopen
 
-import wikipedia
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
 
@@ -19,6 +18,8 @@ DEV_URL = "https://fever.ai/download/fever/paper_dev.jsonl"
 
 def get_wikipedia_summary(article_title: str) -> str | None:
     """Fetch Wikipedia summary for an article title like 'Oliver_Reed'."""
+    import wikipedia
+
     page_name = (
         article_title.replace("_", " ").replace("-LRB-", "(").replace("-RRB-", ")")
     )

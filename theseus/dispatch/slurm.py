@@ -73,6 +73,9 @@ class SlurmJob:
     # Set to False for plain SSH (skips SBATCH directives)
     is_slurm: bool = True
 
+    # Python bootstrap script content (written to _bootstrap_dispatch.py at runtime)
+    bootstrap_py: str | None = None
+
     def pack(self, tarball: bytes) -> "SlurmJob":
         """Return a new SlurmJob with the given tarball as payload.
 
@@ -190,17 +193,27 @@ JUICEFS_MOUNT_POINT="{self.juicefs_mount.mount_point}"
         script = script.replace("__ENV_VARS__", env_str)
 
         # Payload extraction (for SLURM with embedded payload)
+        payload_extract_parts = []
         if self.payload:
-            payload_extract = f"""
+            payload_extract_parts.append(f"""
 echo "[bootstrap] extracting code payload..."
 mkdir -p {self.payload_extract_to}
 base64 -d <<'__PAYLOAD_EOF__' | tar -xzf - -C {self.payload_extract_to}
 {self.payload}
 __PAYLOAD_EOF__
-"""
-        else:
-            payload_extract = ""
-        script = script.replace("__PAYLOAD_EXTRACT__", payload_extract)
+""")
+
+        # Write Python bootstrap script (not included in git archive, so embedded here)
+        if self.bootstrap_py:
+            workdir = self.payload_extract_to if self.payload else (self.workdir or ".")
+            payload_extract_parts.append(f"""
+echo "[bootstrap] writing _bootstrap_dispatch.py..."
+cat > {workdir}/_bootstrap_dispatch.py << '__BOOTSTRAP_PY_EOF__'
+{self.bootstrap_py}
+__BOOTSTRAP_PY_EOF__
+""")
+
+        script = script.replace("__PAYLOAD_EXTRACT__", "\n".join(payload_extract_parts))
 
         # Working directory - use payload_extract_to for SLURM, workdir for SSH
         if self.payload:

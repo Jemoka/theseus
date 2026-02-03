@@ -2,15 +2,8 @@
 #
 # Theseus bootstrap script - runs on each node (via srun for SLURM, directly for SSH)
 #
-# Placeholders (filled by slurm.py):
-#   __WORKDIR__            - working directory to cd into
-#   __MODULES__            - module load commands
-#   __ENV_VARS__           - export statements
-#   __JUICEFS_MOUNT__      - JuiceFS mount commands
-#   __PAYLOAD_EXTRACT__    - base64 payload extraction (SLURM only)
-#   __UV_SYNC__            - uv sync command with groups
-#   __SETUP_COMMANDS__     - pre-run setup commands
-#   __COMMAND__            - the actual command to run
+# There's a series of placeholders (filled by slurm.py)
+# 
 
 set -euo pipefail
 
@@ -18,6 +11,8 @@ echo "[bootstrap] starting on $(hostname)"
 
 # Track JuiceFS mount point for cleanup
 JUICEFS_MOUNT_POINT=""
+# Track work directory for cleanup
+BOOTSTRAP_WORKDIR=""
 
 cleanup() {
     local exit_code=$?
@@ -29,6 +24,14 @@ cleanup() {
         juicefs umount "$JUICEFS_MOUNT_POINT" 2>/dev/null || \
         juicefs umount --force "$JUICEFS_MOUNT_POINT" 2>/dev/null || \
         echo "[bootstrap] WARNING: failed to unmount JuiceFS"
+    fi
+
+    # Clean up work directory on success
+    if [[ $exit_code -eq 0 ]] && [[ -n "$BOOTSTRAP_WORKDIR" ]] && [[ -d "$BOOTSTRAP_WORKDIR" ]]; then
+        echo "[bootstrap] removing work directory: $BOOTSTRAP_WORKDIR"
+        rm -rf "$BOOTSTRAP_WORKDIR"
+    elif [[ $exit_code -ne 0 ]] && [[ -n "$BOOTSTRAP_WORKDIR" ]]; then
+        echo "[bootstrap] preserving work directory for debugging: $BOOTSTRAP_WORKDIR"
     fi
 
     exit $exit_code
@@ -78,6 +81,23 @@ ensure_juicefs() {
         exit 1
     fi
 
+    # Detect architecture
+    local arch=$(uname -m)
+    local jfs_arch
+    case "$arch" in
+        x86_64)
+            jfs_arch="amd64"
+            ;;
+        aarch64|arm64)
+            jfs_arch="arm64"
+            ;;
+        *)
+            echo "[bootstrap] ERROR: unsupported architecture: $arch"
+            exit 1
+            ;;
+    esac
+    echo "[bootstrap] detected architecture: $arch -> $jfs_arch"
+
     # Get latest release tag
     JFS_LATEST_TAG=$(curl -s https://api.github.com/repos/juicedata/juicefs/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | tr -d 'v')
     if [[ -z "$JFS_LATEST_TAG" ]]; then
@@ -88,8 +108,10 @@ ensure_juicefs() {
     # Download and extract
     local tmpdir=$(mktemp -d)
     cd "$tmpdir"
-    wget -q "https://github.com/juicedata/juicefs/releases/download/v${JFS_LATEST_TAG}/juicefs-${JFS_LATEST_TAG}-linux-amd64.tar.gz"
-    tar -zxf "juicefs-${JFS_LATEST_TAG}-linux-amd64.tar.gz"
+    local download_url="https://github.com/juicedata/juicefs/releases/download/v${JFS_LATEST_TAG}/juicefs-${JFS_LATEST_TAG}-linux-${jfs_arch}.tar.gz"
+    echo "[bootstrap] downloading juicefs v${JFS_LATEST_TAG} for ${jfs_arch}..."
+    wget -q "$download_url"
+    tar -zxf "juicefs-${JFS_LATEST_TAG}-linux-${jfs_arch}.tar.gz"
 
     # Install to ~/.local/bin
     mkdir -p "$HOME/.local/bin"
@@ -129,7 +151,8 @@ __ENV_VARS__
 
 __PAYLOAD_EXTRACT__
 
-cd __WORKDIR__
+BOOTSTRAP_WORKDIR="__WORKDIR__"
+cd "$BOOTSTRAP_WORKDIR"
 echo "[bootstrap] working directory: $(pwd)"
 
 # ============================================================================
