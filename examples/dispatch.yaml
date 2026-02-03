@@ -15,11 +15,15 @@ clusters:
   local:
     root: /data/theseus
     work: /tmp/theseus
+    log: /var/log/theseus  # optional, defaults to {work}/logs
 
   hpc:
     root: /mnt/juicefs/theseus
     work: /scratch/theseus
+    log: /scratch/theseus/logs
     mount: redis://:password@redis.example.com:6379/0  # JuiceFS redis connection
+    cache_size: 100G  # JuiceFS --cache-size
+    cache_dir: /scratch/juicefs-cache  # JuiceFS --cache-dir
 
 hosts:
   # Plain SSH host - direct GPU access, no scheduler

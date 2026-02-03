@@ -64,6 +64,8 @@ from theseus.dispatch.solve import (
     solve_or_raise,
 )
 
+from theseus.dispatch.dispatch import dispatch
+
 __all__ = [
     # SSH
     "RunResult",
@@ -117,4 +119,6 @@ __all__ = [
     "SolveResult",
     "solve",
     "solve_or_raise",
+    # Dispatch
+    "dispatch",
 ]

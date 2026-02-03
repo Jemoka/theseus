@@ -768,6 +768,9 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             {"steps": self.global_step_counter_, "score": self.best_val_score_},
         )
 
+        # Register as latest checkpoint for idempotent dispatch
+        self.register(suffix)
+
         if self.main_process():
             logger.info(
                 "CHECKPOINT | saved checkpoint at {} at step {}, best score {}",

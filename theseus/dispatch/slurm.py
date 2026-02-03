@@ -2,11 +2,17 @@
 SLURM dispatch utilities
 """
 
+from __future__ import annotations
+
 import base64
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from theseus.dispatch.ssh import run, RunResult
+
+if TYPE_CHECKING:
+    from theseus.dispatch.config import JuiceFSMount
 
 # Path to bootstrap template
 BOOTSTRAP_TEMPLATE = Path(__file__).parent / "bootstrap.sh"
@@ -57,6 +63,12 @@ class SlurmJob:
     # Packed payload - base64 encoded tarball extracted at runtime
     payload: str | None = None  # base64-encoded tarball
     payload_extract_to: str = "$SLURM_TMPDIR/code"  # where to extract
+
+    # JuiceFS mount configuration - will mount before running
+    juicefs_mount: JuiceFSMount | None = None
+
+    # Set to False for plain SSH (skips SBATCH directives)
+    is_slurm: bool = True
 
     def pack(self, tarball: bytes) -> "SlurmJob":
         """Return a new SlurmJob with the given tarball as payload.
@@ -138,8 +150,36 @@ class SlurmJob:
         """Generate the sbatch script from bootstrap.sh template."""
         template = BOOTSTRAP_TEMPLATE.read_text()
 
-        # SBATCH directives
-        script = template.replace("__SBATCH_DIRECTIVES__", self._sbatch_directives())
+        # SBATCH directives (only for SLURM mode)
+        if self.is_slurm:
+            script = template.replace(
+                "__SBATCH_DIRECTIVES__", self._sbatch_directives()
+            )
+        else:
+            # For SSH mode, replace with cd to workdir if specified
+            cd_cmd = f"cd {self.workdir}" if self.workdir else ""
+            script = template.replace("__SBATCH_DIRECTIVES__", cd_cmd)
+
+        # JuiceFS mount
+        if self.juicefs_mount:
+            mount_opts = []
+            if self.juicefs_mount.cache_size:
+                mount_opts.append(f"--cache-size {self.juicefs_mount.cache_size}")
+            if self.juicefs_mount.cache_dir:
+                mount_opts.append(f"--cache-dir {self.juicefs_mount.cache_dir}")
+            opts_str = " ".join(mount_opts)
+            juicefs_str = f"""
+if ! mountpoint -q {self.juicefs_mount.mount_point}; then
+    echo "[bootstrap] mounting JuiceFS at {self.juicefs_mount.mount_point}..."
+    mkdir -p {self.juicefs_mount.mount_point}
+    juicefs mount -d {opts_str} {self.juicefs_mount.redis_url} {self.juicefs_mount.mount_point}
+fi
+# Track mount point for cleanup on exit/preemption
+JUICEFS_MOUNT_POINT="{self.juicefs_mount.mount_point}"
+"""
+        else:
+            juicefs_str = ""
+        script = script.replace("__JUICEFS_MOUNT__", juicefs_str)
 
         # Modules
         if self.modules:

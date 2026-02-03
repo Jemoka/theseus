@@ -35,9 +35,9 @@ def solve(
     """Solve for hardware allocation given a request and config.
 
     Strategy:
-    1. Check plain hosts (in priority order) for matching chips
-    2. Fall back to SLURM clusters (in priority order)
-    3. For SLURM, optionally check real-time GPU availability
+    1. Check all hosts in priority order (plain and SLURM equally)
+    2. Return first host that can satisfy the request
+    3. If none satisfy, fall back to SLURM with most availability
 
     Args:
         request: Hardware requirements (chip type, min chips)
@@ -57,71 +57,81 @@ def solve(
         if host not in ordered_hosts:
             ordered_hosts.append(host)
 
-    # Phase 1: Check plain hosts with static chip counts
+    # Track SLURM candidates for fallback (with their availability)
+    slurm_fallback: list[tuple[str, SlurmHostConfig, int, str | None]] = []
+
+    # Check all hosts in priority order
     for host_name in ordered_hosts:
         if host_name not in config.hosts:
             continue
 
         host_cfg = config.hosts[host_name]
-        if not isinstance(host_cfg, PlainHostConfig):
-            continue
 
-        available = host_cfg.chips.get(chip_name, 0)
-        if available >= request.min_chips:
-            cluster = inventory.get_cluster(host_cfg.cluster)
-            machine = ClusterMachine(
-                name=host_name,
-                cluster=cluster,
-                resources={request.chip: available},
-            )
-            return SolveResult(
-                result=HardwareResult(
-                    chip=request.chip,
-                    hosts=[machine],
-                    total_chips=available,
-                ),
-                host_name=host_name,
-                host_config=host_cfg,
-                is_slurm=False,
-                partition=None,
-            )
+        if isinstance(host_cfg, PlainHostConfig):
+            available = host_cfg.chips.get(chip_name, 0)
+            if available >= request.min_chips:
+                cluster = inventory.get_cluster(host_cfg.cluster)
+                machine = ClusterMachine(
+                    name=host_name,
+                    cluster=cluster,
+                    resources={request.chip: available},
+                )
+                return SolveResult(
+                    result=HardwareResult(
+                        chip=request.chip,
+                        hosts=[machine],
+                        total_chips=available,
+                    ),
+                    host_name=host_name,
+                    host_config=host_cfg,
+                    is_slurm=False,
+                    partition=None,
+                )
 
-    # Phase 2: Check SLURM clusters
-    slurm_candidates: list[tuple[str, SlurmHostConfig, int, str | None]] = []
+        elif isinstance(host_cfg, SlurmHostConfig):
+            # Get partition (prefer default, or first)
+            partition = None
+            for p in host_cfg.partitions:
+                if p.default:
+                    partition = p.name
+                    break
+            if partition is None and host_cfg.partitions:
+                partition = host_cfg.partitions[0].name
 
-    for host_name in ordered_hosts:
-        if host_name not in config.hosts:
-            continue
+            if check_availability:
+                available = _check_slurm_availability(
+                    host_cfg.ssh, partition, chip_name, config.gres_mapping, timeout
+                )
+            else:
+                # Assume SLURM can satisfy (let scheduler handle it)
+                available = request.min_chips
 
-        host_cfg = config.hosts[host_name]
-        if not isinstance(host_cfg, SlurmHostConfig):
-            continue
+            # Track for fallback regardless of availability
+            slurm_fallback.append((host_name, host_cfg, available, partition))
 
-        # Get partition (prefer default, or first)
-        partition = None
-        for p in host_cfg.partitions:
-            if p.default:
-                partition = p.name
-                break
-        if partition is None and host_cfg.partitions:
-            partition = host_cfg.partitions[0].name
+            if available >= request.min_chips:
+                cluster = inventory.get_cluster(host_cfg.cluster)
+                machine = ClusterMachine(
+                    name=host_name,
+                    cluster=cluster,
+                    resources={request.chip: available},
+                )
+                return SolveResult(
+                    result=HardwareResult(
+                        chip=request.chip,
+                        hosts=[machine],
+                        total_chips=min(available, request.min_chips),
+                    ),
+                    host_name=host_name,
+                    host_config=host_cfg,
+                    is_slurm=True,
+                    partition=partition,
+                )
 
-        if check_availability:
-            # Query real-time availability
-            available = _check_slurm_availability(
-                host_cfg.ssh, partition, chip_name, config.gres_mapping, timeout
-            )
-        else:
-            # Assume SLURM can satisfy (let scheduler handle it)
-            available = request.min_chips
-
-        if available >= request.min_chips:
-            slurm_candidates.append((host_name, host_cfg, available, partition))
-
-    # Pick best SLURM candidate (most availability)
-    if slurm_candidates:
-        slurm_candidates.sort(key=lambda x: x[2], reverse=True)
-        host_name, host_cfg, available, partition = slurm_candidates[0]
+    # Fallback: pick SLURM with most availability (even if < min_chips)
+    if slurm_fallback:
+        slurm_fallback.sort(key=lambda x: x[2], reverse=True)
+        host_name, host_cfg, available, partition = slurm_fallback[0]
 
         cluster = inventory.get_cluster(host_cfg.cluster)
         machine = ClusterMachine(
@@ -133,7 +143,7 @@ def solve(
             result=HardwareResult(
                 chip=request.chip,
                 hosts=[machine],
-                total_chips=min(available, request.min_chips),
+                total_chips=available,
             ),
             host_name=host_name,
             host_config=host_cfg,

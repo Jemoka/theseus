@@ -13,6 +13,12 @@ class Cluster(BaseModel):
     name: str
     root: str  # root directory of checkpoints, code, etc.
     work: str  # work directory (where mirrors will be copied)
+    log: Optional[str] = None  # log directory (defaults to {work}/logs)
+
+    @property
+    def log_dir(self) -> str:
+        """Log directory path, defaults to {work}/logs if not configured."""
+        return self.log if self.log else f"{self.work}/logs"
 
     @property
     def root_dir(self) -> Path:

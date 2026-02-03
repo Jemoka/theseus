@@ -214,6 +214,23 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         """Restore job state from checkpoint with given suffix"""
         raise NotImplementedError()
 
+    def register(self, suffix: str | Path) -> None:
+        """Register this checkpoint as the latest, for idempotent restore."""
+        if not self.main_process():
+            return
+        path = self._get_checkpoint_path(self.spec, "latest")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(suffix))
+        logger.debug(f"CHECKPOINT | registered {suffix} as latest")
+
+    @classmethod
+    def latest(cls, spec: ExecutionSpec) -> str | None:
+        """Get the latest checkpoint suffix, or None if no checkpoint exists."""
+        path = CheckpointedJob._get_checkpoint_path(spec, "latest")
+        if not path.exists():
+            return None
+        return path.read_text().strip()
+
     @classmethod
     def from_checkpoint(
         cls, suffix: str | Path, spec: ExecutionSpec

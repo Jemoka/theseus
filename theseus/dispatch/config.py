@@ -15,12 +15,25 @@ from theseus.base.hardware import Cluster
 
 
 @dataclass
+class JuiceFSMount:
+    """JuiceFS mount configuration."""
+
+    redis_url: str
+    mount_point: str
+    cache_size: str | None = None
+    cache_dir: str | None = None
+
+
+@dataclass
 class ClusterConfig:
     """Configuration for a compute cluster's paths."""
 
     root: str  # root directory for checkpoints, data, etc.
     work: str  # work/scratch directory
+    log: str | None = None  # log directory (defaults to {work}/logs)
     mount: str | None = None  # Redis connection string for JuiceFS mount at root
+    cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
+    cache_dir: str | None = None  # JuiceFS --cache-dir path
 
 
 @dataclass
@@ -95,7 +108,10 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
         clusters[name] = ClusterConfig(
             root=cluster_cfg.root,
             work=cluster_cfg.work,
+            log=cluster_cfg.get("log"),
             mount=cluster_cfg.get("mount"),
+            cache_size=cluster_cfg.get("cache_size"),
+            cache_dir=cluster_cfg.get("cache_dir"),
         )
 
     hosts: dict[str, PlainHostConfig | SlurmHostConfig] = {}
@@ -161,6 +177,7 @@ class RemoteInventory:
                 name=name,
                 root=cfg.root,
                 work=cfg.work,
+                log=cfg.log,
             )
         return self._clusters[name]
 
