@@ -19,9 +19,8 @@ from theseus.quick import quick
 with quick("continual/train/abcd", "/sailhome/houjun/theseus", "test") as j:
     j.config.logging.checkpoint_interval = 4096
     j.config.logging.validation_interval = 1024
-    j.config.training.per_device_batch_size = 8
+    j.config.training.per_device_batch_size = 14
     j.config.architecture.n_layers = 16
+    j.config.training.validation = False
 
-
-    # j.save("./configs/continual/abcd.yaml", "a6000", 4)
-
+    j.save("./configs/continual/abcd.yaml", "h200", 1)

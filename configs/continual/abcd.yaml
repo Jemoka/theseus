@@ -2,13 +2,13 @@
 
 architecture:
   n_embd: 2048
-  n_layers: 16
   bias: true
-  dropout: 0.0
-  n_head: 16
+  n_layers: 16
   rope: true
   block_size: 512
+  dropout: 0.0
   vocab_size: 100288
+  n_head: 16
   vram_calib_factor: 1.0
 eval:
   evaluations:
@@ -23,7 +23,7 @@ optimization:
   lr: 0.0003
 training:
   batch_size: 512
-  per_device_batch_size: 2
+  per_device_batch_size: 14
   tokens:
   - 1000000000
   - 100000000
@@ -63,5 +63,5 @@ logging:
   wandb: true
 job: continual/train/abcd
 request:
-  chip: a100-pcie-40gb
-  min_chips: 4
+  chip: h200
+  min_chips: 1
