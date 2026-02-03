@@ -307,6 +307,7 @@ def run(
     "--chip", default=None, help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})"
 )  # type: ignore[misc]
 @click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
 @click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
@@ -318,6 +319,7 @@ def submit(
     group: str | None,
     chip: str | None,
     chips: int | None,
+    mem: str | None,
     dirty: bool,
     overrides: tuple[str, ...],
 ) -> None:
@@ -442,6 +444,8 @@ def submit(
     console.print(f"[blue]Submitting job '{job}':[/blue]")
     console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
     console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
+    if mem:
+        console.print(f"[blue]Memory:[/blue] {mem}")
     console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
     console.print(f"[blue]Dirty:[/blue] {dirty}")
 
@@ -452,6 +456,7 @@ def submit(
         hardware=hardware_request,
         dispatch_config=dispatch_cfg,
         dirty=dirty,
+        mem=mem,
     )
 
     if not result.ok:

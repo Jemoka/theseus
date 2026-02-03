@@ -14,42 +14,15 @@ logger.add(
 )
 
 
-from omegaconf import OmegaConf
-from theseus.base.hardware import HardwareRequest
-from theseus.base.chip import SUPPORTED_CHIPS
-from theseus.base.job import JobSpec
-from theseus.dispatch import dispatch, load_dispatch_config
+from theseus.quick import quick
 
-# Load dispatch configuration
-dispatch_config = load_dispatch_config("/Users/houjun/.theseus.yaml")
-dispatch_config
+with quick("continual/train/abcd", "/sailhome/houjun/theseus", "test") as j:
+    j.config.logging.checkpoint_interval = 4096
+    j.config.logging.validation_interval = 1024
+    j.config.training.per_device_batch_size = 4
+    j.config.architecture.n_layers = 16
+    j.config.logging.report_interval
 
-# Define job config (must have 'job' key pointing to registered job)
-cfg = OmegaConf.load("/Users/houjun/Downloads/test.yaml")
 
-# Define job specification
-spec = JobSpec(
-    name="test",
-)
-
-# Define hardware requirements
-hardware = HardwareRequest(
-    chip=SUPPORTED_CHIPS["gb10"],
-    min_chips=1,
-)
-
-# Dispatch! Returns SlurmResult or RunResult
-result = dispatch(
-    cfg=cfg,
-    spec=spec,
-    hardware=hardware,
-    dispatch_config=dispatch_config,
-    dirty=True,  # include uncommitted changes
-)
-
-if result.ok:
-    print(f"Job dispatched: {result}")
-else:
-    print(f"Failed: {result.stderr}")
-
+    j.save("./configs/continual/abcd.yaml", "a6000", 4)
 

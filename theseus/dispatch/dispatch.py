@@ -123,6 +123,7 @@ def dispatch(
     dispatch_config: DispatchConfig,
     dirty: bool = False,
     check_availability: bool = True,
+    mem: str | None = None,
     timeout: float = 60.0,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
@@ -140,6 +141,7 @@ def dispatch(
         dispatch_config: Remote host/cluster configuration
         dirty: Include uncommitted changes (default: False)
         check_availability: Check real-time GPU availability (default: True)
+        mem: Memory override for SLURM jobs (e.g., "64G", "128G")
         timeout: SSH timeout in seconds
 
     Returns:
@@ -218,6 +220,7 @@ def dispatch(
             cluster,
             juicefs_mount,
             bootstrap_py_content,
+            mem,
             dirty,
             timeout,
         )
@@ -244,6 +247,7 @@ def _dispatch_slurm(
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
     bootstrap_py_content: str,
+    mem: str | None,
     dirty: bool,
     timeout: float,
 ) -> SlurmResult:
@@ -261,8 +265,11 @@ def _dispatch_slurm(
     chip_name = solve_result.result.chip.name if solve_result.result.chip else None
     gpu_type = dispatch_config.gres_mapping.get(chip_name) if chip_name else None
 
+    # Use mem override if provided, otherwise fall back to host config
+    job_mem = mem or host_config.mem
+
     logger.debug(
-        f"DISPATCH | SLURM dispatch: partition={solve_result.partition}, nodes={len(solve_result.result.hosts)}, gpus_per_node={gpus_per_node}, gpu_type={gpu_type}"
+        f"DISPATCH | SLURM dispatch: partition={solve_result.partition}, nodes={len(solve_result.result.hosts)}, gpus_per_node={gpus_per_node}, gpu_type={gpu_type}, mem={job_mem}"
     )
 
     # Build job name from spec
@@ -278,7 +285,7 @@ def _dispatch_slurm(
         nodes=len(solve_result.result.hosts),
         gpus_per_node=gpus_per_node,
         gpu_type=gpu_type,
-        mem=host_config.mem,  # uses config value or defaults to 64G in slurm.py
+        mem=job_mem,  # uses CLI override, then config value, then defaults to 64G in slurm.py
         account=host_config.account,
         qos=host_config.qos,
         exclude=host_config.exclude,
