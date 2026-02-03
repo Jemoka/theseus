@@ -106,6 +106,10 @@ def _generate_bootstrap(
     script = script.replace("__PROJECT__", spec.project or "")
     script = script.replace("__GROUP__", spec.group or "")
 
+    # Check if rightsizing is enabled (per_device_batch_size == -1)
+    rightsizing_enabled = OmegaConf.select(cfg, "training.per_device_batch_size") == -1
+    script = script.replace("__RIGHTSIZING_ENABLED__", str(rightsizing_enabled))
+
     return script
 
 
