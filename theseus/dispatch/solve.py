@@ -11,6 +11,7 @@ from loguru import logger
 from theseus.base.hardware import ClusterMachine, HardwareRequest, HardwareResult
 from theseus.dispatch.config import (
     DispatchConfig,
+    PartitionConfig,
     PlainHostConfig,
     SlurmHostConfig,
     RemoteInventory,
@@ -74,9 +75,24 @@ def solve(
         host_cfg = config.hosts[host_name]
 
         if isinstance(host_cfg, PlainHostConfig):
-            available = host_cfg.chips.get(chip_name, 0)
+            configured = host_cfg.chips.get(chip_name, 0)
+            if configured == 0:
+                logger.debug(
+                    f"SOLVE | plain host '{host_name}': no {chip_name} configured"
+                )
+                continue
+
+            # Check real-time availability if requested
+            if check_availability:
+                logger.debug(f"SOLVE | checking GPU availability on '{host_name}'")
+                available = _check_plain_host_availability(
+                    host_cfg.ssh, configured, timeout
+                )
+            else:
+                available = configured
+
             logger.debug(
-                f"SOLVE | plain host '{host_name}': {available} {chip_name} available"
+                f"SOLVE | plain host '{host_name}': {available}/{configured} {chip_name} available"
             )
             if available >= request.min_chips:
                 logger.info(
@@ -101,31 +117,76 @@ def solve(
                 )
 
         elif isinstance(host_cfg, SlurmHostConfig):
-            # Get partition (prefer default, or first)
-            partition = None
+            # Check all partitions and pick the one with most availability
+            best_partition = None
+            best_available = 0
+
+            # Get the GRES type name for this chip
+            gres_type = config.gres_mapping.get(chip_name)
+
+            # Query GPU types for all partitions on this host (single SSH call)
+            from theseus.dispatch.slurm import partition_gpu_types
+
+            partition_names_to_check = [p.name for p in host_cfg.partitions]
+            gpu_types_by_partition = partition_gpu_types(
+                host_cfg.ssh, partition_names_to_check, timeout=timeout
+            )
+
+            # Build partition list: filter by chip type, default first
+            # Only consider partitions that have the requested GPU type
+            eligible_partitions: list[PartitionConfig] = []
             for p in host_cfg.partitions:
+                partition_types = gpu_types_by_partition.get(p.name, set())
+                if gres_type and gres_type not in partition_types:
+                    logger.debug(
+                        f"SOLVE | skipping partition '{p.name}': doesn't have {gres_type} (has: {partition_types})"
+                    )
+                    continue
                 if p.default:
-                    partition = p.name
-                    break
-            if partition is None and host_cfg.partitions:
-                partition = host_cfg.partitions[0].name
+                    eligible_partitions.insert(0, p)
+                else:
+                    eligible_partitions.append(p)
+
+            if not eligible_partitions:
+                logger.debug(
+                    f"SOLVE | SLURM host '{host_name}': no partitions have {gres_type or chip_name}"
+                )
+                continue
+
+            partition_names = [p.name for p in eligible_partitions]
 
             if check_availability:
-                logger.debug(
-                    f"SOLVE | checking SLURM availability on '{host_name}' partition='{partition}'"
-                )
-                available = _check_slurm_availability(
-                    host_cfg.ssh, partition, chip_name, config.gres_mapping, timeout
+                for part_name in partition_names:
+                    logger.debug(
+                        f"SOLVE | checking SLURM availability on '{host_name}' partition='{part_name}'"
+                    )
+                    avail = _check_slurm_availability(
+                        host_cfg.ssh, part_name, chip_name, config.gres_mapping, timeout
+                    )
+                    logger.debug(
+                        f"SOLVE | partition '{part_name}': {avail} chips available"
+                    )
+                    if avail > best_available:
+                        best_available = avail
+                        best_partition = part_name
+                    # Early exit if we found enough
+                    if avail >= request.min_chips:
+                        break
+
+                available = best_available
+                partition = best_partition or (
+                    partition_names[0] if partition_names else None
                 )
             else:
                 # Assume SLURM can satisfy (let scheduler handle it)
                 available = request.min_chips
+                partition = partition_names[0] if partition_names else None
 
             logger.debug(
                 f"SOLVE | SLURM host '{host_name}': {available} chips available (partition={partition})"
             )
 
-            # Track for fallback regardless of availability
+            # Track for fallback - partition is known to have this chip type
             slurm_fallback.append((host_name, host_cfg, available, partition))
 
             if available >= request.min_chips:
@@ -185,6 +246,59 @@ def solve(
         is_slurm=False,
         partition=None,
     )
+
+
+def _check_plain_host_availability(
+    ssh_alias: str,
+    configured_chips: int,
+    timeout: float,
+) -> int:
+    """Check if GPUs on a plain SSH host are available (no running processes).
+
+    Runs nvidia-smi to check if any GPU has processes. If processes are running,
+    returns 0 (host is busy). Otherwise returns the configured chip count.
+
+    Args:
+        ssh_alias: SSH config alias
+        configured_chips: Number of chips configured for this host
+        timeout: SSH timeout
+
+    Returns:
+        Available chip count (0 if busy, configured_chips if free)
+    """
+    from theseus.dispatch.ssh import run
+
+    try:
+        # Query nvidia-smi for processes on each GPU
+        # This returns CSV with gpu index, process ID, process name
+        result = run(
+            "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader,nounits",
+            ssh_alias,
+            timeout=timeout,
+        )
+
+        if not result.ok:
+            # nvidia-smi failed - maybe no CUDA, treat as unavailable
+            logger.warning(f"SOLVE | nvidia-smi failed on {ssh_alias}: {result.stderr}")
+            return 0
+
+        # If output is empty, no processes running - GPUs are free
+        if not result.stdout.strip():
+            logger.debug(f"SOLVE | {ssh_alias}: no GPU processes running, host is free")
+            return configured_chips
+
+        # Count processes (non-empty lines)
+        process_lines = [
+            line for line in result.stdout.strip().split("\n") if line.strip()
+        ]
+        logger.debug(
+            f"SOLVE | {ssh_alias}: {len(process_lines)} GPU processes running, host is busy"
+        )
+        return 0
+
+    except Exception as e:
+        logger.warning(f"SOLVE | failed to check GPU availability on {ssh_alias}: {e}")
+        return 0
 
 
 def _check_slurm_availability(

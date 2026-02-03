@@ -122,6 +122,7 @@ def dispatch(
     hardware: HardwareRequest,
     dispatch_config: DispatchConfig,
     dirty: bool = False,
+    check_availability: bool = True,
     timeout: float = 60.0,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
@@ -138,6 +139,7 @@ def dispatch(
         hardware: Hardware requirements
         dispatch_config: Remote host/cluster configuration
         dirty: Include uncommitted changes (default: False)
+        check_availability: Check real-time GPU availability (default: True)
         timeout: SSH timeout in seconds
 
     Returns:
@@ -164,7 +166,12 @@ def dispatch(
 
     # 2. Solve for hardware
     logger.debug("DISPATCH | solving for hardware allocation...")
-    solve_result = solve_or_raise(hardware, dispatch_config, timeout=timeout)
+    solve_result = solve_or_raise(
+        hardware,
+        dispatch_config,
+        check_availability=check_availability,
+        timeout=timeout,
+    )
     assert solve_result.result is not None
     assert solve_result.host_config is not None
     logger.info(
@@ -176,7 +183,11 @@ def dispatch(
     cluster_config = dispatch_config.clusters[solve_result.host_config.cluster]
     cluster = inventory.get_cluster(solve_result.host_config.cluster)
     work_dir = _get_work_dir(cluster.work, spec)
-    logger.debug(f"DISPATCH | work_dir={work_dir}, cluster={cluster.name}")
+    # Shared dir for scripts visible to all nodes (login + compute)
+    share_dir = cluster_config.share or f"{cluster.work}/.dispatch"
+    logger.debug(
+        f"DISPATCH | work_dir={work_dir}, share_dir={share_dir}, cluster={cluster.name}"
+    )
 
     # JuiceFS mount info if configured
     juicefs_mount: JuiceFSMount | None = None
@@ -200,7 +211,10 @@ def dispatch(
         )
         return _dispatch_slurm(
             solve_result,
+            spec,
+            dispatch_config,
             work_dir,
+            share_dir,
             cluster,
             juicefs_mount,
             bootstrap_py_content,
@@ -223,7 +237,10 @@ def dispatch(
 
 def _dispatch_slurm(
     solve_result: SolveResult,
+    spec: JobSpec,
+    dispatch_config: DispatchConfig,
     work_dir: str,
+    share_dir: str,
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
     bootstrap_py_content: str,
@@ -240,22 +257,34 @@ def _dispatch_slurm(
         len(solve_result.result.hosts), 1
     )
 
+    # Look up GPU type from gres_mapping using chip name
+    chip_name = solve_result.result.chip.name if solve_result.result.chip else None
+    gpu_type = dispatch_config.gres_mapping.get(chip_name) if chip_name else None
+
     logger.debug(
-        f"DISPATCH | SLURM dispatch: partition={solve_result.partition}, nodes={len(solve_result.result.hosts)}, gpus_per_node={gpus_per_node}"
+        f"DISPATCH | SLURM dispatch: partition={solve_result.partition}, nodes={len(solve_result.result.hosts)}, gpus_per_node={gpus_per_node}, gpu_type={gpu_type}"
     )
+
+    # Build job name from spec
+    project = spec.project or "default"
+    group = spec.group or "default"
+    job_name = f"{project}-{group}-{spec.name}"
 
     # Build SlurmJob with embedded bootstrap Python script
     job = SlurmJob(
-        name="theseus-dispatch",
+        name=job_name,
         command="python _bootstrap_dispatch.py",
         partition=solve_result.partition,
         nodes=len(solve_result.result.hosts),
         gpus_per_node=gpus_per_node,
+        gpu_type=gpu_type,
+        mem=host_config.mem,  # uses config value or defaults to 64G in slurm.py
         account=host_config.account,
         qos=host_config.qos,
+        exclude=host_config.exclude,
         uv_groups=host_config.uv_groups,
         payload_extract_to=work_dir,
-        output=f"{cluster.log_dir}/slurm-%j.out",
+        output=f"{cluster.log_dir}/{job_name}-%j.out",
         juicefs_mount=juicefs_mount,
         bootstrap_py=bootstrap_py_content,
     )
@@ -263,6 +292,7 @@ def _dispatch_slurm(
     result = submit_packed(
         job,
         host_config.ssh,
+        share_dir=share_dir,
         dirty=dirty,
         timeout=timeout,
     )
@@ -365,9 +395,8 @@ def _dispatch_plain(
 
     # Include log path in stdout for user reference
     if result.ok:
-        logger.info(
-            f"DISPATCH | SSH job started in background, logs at {ssh_alias}:{log_file}"
-        )
+        logger.info(f"DISPATCH | SSH job started in background on {ssh_alias}")
+        logger.debug(f"DISPATCH | logs at {ssh_alias}:{log_file}")
         return RunResult(
             returncode=result.returncode,
             stdout=f"Job started in background. Logs: {ssh_alias}:{log_file}\n{result.stdout}",

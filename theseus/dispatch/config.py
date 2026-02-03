@@ -32,6 +32,9 @@ class ClusterConfig:
     root: str  # root directory for checkpoints, data, etc.
     work: str  # work/scratch directory
     log: str | None = None  # log directory (defaults to {work}/logs)
+    share: str | None = (
+        None  # shared temp dir visible to all nodes (defaults to {work}/.dispatch)
+    )
     mount: str | None = None  # Redis connection string for JuiceFS mount at root
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
@@ -67,6 +70,8 @@ class SlurmHostConfig:
     partitions: list[PartitionConfig] = field(default_factory=list)
     account: str | None = None  # default SLURM account
     qos: str | None = None  # default QoS
+    mem: str | None = None  # default memory (e.g., "64G"), defaults to 64G if not set
+    exclude: list[str] = field(default_factory=list)  # nodes to exclude (--exclude)
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
 
 
@@ -91,7 +96,8 @@ def load_dispatch_config(path: str | Path) -> DispatchConfig:
     Returns:
         Parsed DispatchConfig
     """
-    logger.info(f"CONFIG | loading dispatch config from {path}")
+    logger.info("CONFIG | loading dispatch config")
+    logger.debug(f"CONFIG | config path: {path}")
     cfg = OmegaConf.load(path)
     return parse_dispatch_config(cfg)
 
@@ -112,6 +118,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             root=cluster_cfg.root,
             work=cluster_cfg.work,
             log=cluster_cfg.get("log"),
+            share=cluster_cfg.get("share"),
             mount=cluster_cfg.get("mount"),
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
@@ -146,6 +153,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                             constraint=p.get("constraint"),
                         )
                     )
+            exclude = list(host_cfg.get("exclude", []))
             hosts[name] = SlurmHostConfig(
                 ssh=host_cfg.ssh,
                 cluster=host_cfg.cluster,
@@ -153,6 +161,8 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 partitions=partitions,
                 account=host_cfg.get("account"),
                 qos=host_cfg.get("qos"),
+                mem=host_cfg.get("mem"),
+                exclude=exclude,
                 uv_groups=uv_groups,
             )
 

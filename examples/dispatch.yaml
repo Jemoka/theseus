@@ -21,6 +21,7 @@ clusters:
     root: /mnt/juicefs/theseus
     work: /scratch/theseus
     log: /scratch/theseus/logs
+    share: /scratch/theseus/.dispatch  # shared dir for scripts (visible to all nodes)
     mount: redis://:password@redis.example.com:6379/0  # JuiceFS redis connection
     cache_size: 100G  # JuiceFS --cache-size
     cache_dir: /scratch/juicefs-cache  # JuiceFS --cache-dir
@@ -51,6 +52,8 @@ hosts:
     partitions: [gpu, cpu]
     account: myproject
     qos: normal
+    mem: 64G                     # default memory per job (default: 64G if not set)
+    exclude: [node001, node002]  # nodes to exclude (--exclude)
     uv_groups: [cuda12]
 
   cloud:

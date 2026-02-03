@@ -5,10 +5,30 @@ ssh utilities for remote dispatch
 import subprocess
 import shlex
 import re
+import time
+import threading
 from pathlib import Path
 from dataclasses import dataclass
 
 from loguru import logger
+
+# Per-host rate limiting to avoid SSH connection throttling
+_host_last_call: dict[str, float] = {}
+_host_lock = threading.Lock()
+_MIN_CALL_INTERVAL = 0.3  # seconds between calls to same host
+
+
+def _rate_limit(host: str) -> None:
+    """Wait if needed to avoid overwhelming the SSH server."""
+    with _host_lock:
+        now = time.time()
+        last_call = _host_last_call.get(host, 0)
+        elapsed = now - last_call
+        if elapsed < _MIN_CALL_INTERVAL:
+            wait_time = _MIN_CALL_INTERVAL - elapsed
+            logger.debug(f"SSH | rate limiting: waiting {wait_time:.2f}s for {host}")
+            time.sleep(wait_time)
+        _host_last_call[host] = time.time()
 
 
 def _shell_quote(s: str) -> str:
@@ -73,6 +93,9 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
     Returns:
         RunResult with returncode, stdout, and stderr
     """
+    # Rate limit to avoid overwhelming SSH server
+    _rate_limit(host)
+
     if isinstance(cmd, list):
         cmd = " ".join(cmd)
 

@@ -57,7 +57,8 @@ def ship(
     Returns:
         RunResult from extraction
     """
-    logger.info(f"SYNC | shipping to {host}:{remote_path} (ref={ref})")
+    logger.info(f"SYNC | shipping to {host}")
+    logger.debug(f"SYNC | remote_path={remote_path}, ref={ref}")
     tarball = snapshot(repo_path, ref)
 
     # Create remote directory and extract tarball via stdin
@@ -68,7 +69,7 @@ def ship(
     result = _run_with_stdin(extract_cmd, host, tarball, timeout=timeout)
 
     if result.ok:
-        logger.info(f"SYNC | shipped successfully to {host}:{remote_path}")
+        logger.info(f"SYNC | shipped successfully to {host}")
     else:
         logger.error(f"SYNC | ship failed: {result.stderr}")
 
@@ -95,7 +96,8 @@ def ship_dirty(
     Returns:
         RunResult from extraction
     """
-    logger.info(f"SYNC | shipping dirty to {host}:{remote_path}")
+    logger.info(f"SYNC | shipping dirty to {host}")
+    logger.debug(f"SYNC | remote_path={remote_path}")
     repo_path = Path(repo_path) if repo_path else Path.cwd()
 
     # Create tarball of tracked files including working tree changes
@@ -138,7 +140,8 @@ def ship_files(
     Returns:
         RunResult from extraction
     """
-    logger.info(f"SYNC | shipping {len(files)} files to {host}:{remote_path}")
+    logger.info(f"SYNC | shipping {len(files)} files to {host}")
+    logger.debug(f"SYNC | remote_path={remote_path}")
     base_path = Path(base_path) if base_path else Path.cwd()
 
     # Create tarball of specified files
@@ -212,7 +215,8 @@ def sync(
     Returns:
         RunResult from rsync
     """
-    logger.info(f"SYNC | rsync to {host}:{remote_path} (delete={delete})")
+    logger.info(f"SYNC | rsync to {host} (delete={delete})")
+    logger.debug(f"SYNC | remote_path={remote_path}")
     repo_path = Path(repo_path) if repo_path else Path.cwd()
 
     cmd = [

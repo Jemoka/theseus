@@ -5,6 +5,8 @@ SLURM dispatch utilities
 from __future__ import annotations
 
 import base64
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +21,41 @@ if TYPE_CHECKING:
 # Path to templates
 BOOTSTRAP_TEMPLATE = Path(__file__).parent / "bootstrap.sh"
 SBATCH_TEMPLATE = Path(__file__).parent / "sbatch.sh"
+
+
+def _scp_content(
+    content: str, host: str, remote_path: str, timeout: float | None = None
+) -> RunResult:
+    """Write content to a remote file via scp.
+
+    Creates a temp file locally, scps it to remote, then cleans up.
+    Better for large files than using SSH stdin with heredoc.
+    """
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+        f.write(content)
+        local_path = f.name
+
+    try:
+        scp_cmd = ["scp", "-o", "BatchMode=yes", local_path, f"{host}:{remote_path}"]
+        result = subprocess.run(
+            scp_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return RunResult(
+            returncode=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+    except subprocess.TimeoutExpired:
+        return RunResult(
+            returncode=-1,
+            stdout="",
+            stderr=f"scp timed out after {timeout}s",
+        )
+    finally:
+        Path(local_path).unlink(missing_ok=True)
 
 
 @dataclass
@@ -58,6 +95,7 @@ class SlurmJob:
     constraint: str | None = None  # e.g., "gpu80g"
     account: str | None = None
     qos: str | None = None
+    exclude: list[str] = field(default_factory=list)  # nodes to exclude
 
     # Extras
     extra_directives: list[str] = field(default_factory=list)
@@ -108,23 +146,29 @@ class SlurmJob:
         if self.cpus_per_task:
             lines.append(f"#SBATCH --cpus-per-task={self.cpus_per_task}")
 
+        # GPU allocation via --gres (more widely compatible than --gpus)
         if self.gpus:
-            gpu_spec = (
-                f"{self.gpu_type}:{self.gpus}" if self.gpu_type else str(self.gpus)
-            )
-            lines.append(f"#SBATCH --gpus={gpu_spec}")
-        elif self.gpus_per_node:
-            gpu_spec = (
-                f"{self.gpu_type}:{self.gpus_per_node}"
+            gres_spec = (
+                f"gpu:{self.gpu_type}:{self.gpus}"
                 if self.gpu_type
-                else str(self.gpus_per_node)
+                else f"gpu:{self.gpus}"
             )
-            lines.append(f"#SBATCH --gpus-per-node={gpu_spec}")
+            lines.append(f"#SBATCH --gres={gres_spec}")
+        elif self.gpus_per_node:
+            gres_spec = (
+                f"gpu:{self.gpu_type}:{self.gpus_per_node}"
+                if self.gpu_type
+                else f"gpu:{self.gpus_per_node}"
+            )
+            lines.append(f"#SBATCH --gres={gres_spec}")
 
+        # Memory: use specified value or default to 64G
         if self.mem:
             lines.append(f"#SBATCH --mem={self.mem}")
         elif self.mem_per_cpu:
             lines.append(f"#SBATCH --mem-per-cpu={self.mem_per_cpu}")
+        else:
+            lines.append("#SBATCH --mem=64G")
 
         if self.time:
             lines.append(f"#SBATCH --time={self.time}")
@@ -146,6 +190,8 @@ class SlurmJob:
             lines.append(f"#SBATCH --account={self.account}")
         if self.qos:
             lines.append(f"#SBATCH --qos={self.qos}")
+        if self.exclude:
+            lines.append(f"#SBATCH --exclude={','.join(self.exclude)}")
 
         for directive in self.extra_directives:
             lines.append(f"#SBATCH {directive}")
@@ -249,12 +295,6 @@ __BOOTSTRAP_PY_EOF__
         template = SBATCH_TEMPLATE.read_text()
 
         script = template.replace("__SBATCH_DIRECTIVES__", self._sbatch_directives())
-
-        # Working directory for sbatch --chdir
-        workdir = self.payload_extract_to if self.payload else (self.workdir or ".")
-        script = script.replace("__WORKDIR__", workdir)
-
-        # Path to bootstrap script
         script = script.replace("__BOOTSTRAP_SCRIPT__", bootstrap_script_path)
 
         return script
@@ -371,6 +411,7 @@ class JobInfoResult:
 def submit(
     job: SlurmJob,
     host: str,
+    share_dir: str | None = None,
     script_path: str | None = None,
     timeout: float | None = None,
 ) -> SlurmResult:
@@ -383,13 +424,15 @@ def submit(
     Args:
         job: SlurmJob configuration
         host: SSH host with SLURM access
-        script_path: Optional remote path prefix for scripts (uses mktemp if not provided)
+        share_dir: Shared directory visible to all nodes (required for multi-node jobs)
+        script_path: Optional remote path prefix for scripts
         timeout: SSH timeout in seconds
 
     Returns:
         SlurmResult with job_id and SSH result
     """
     import re
+    import uuid
 
     logger.info(f"SLURM | submitting job '{job.name}' to {host}")
     logger.debug(
@@ -402,9 +445,21 @@ def submit(
     if script_path:
         remote_sbatch = script_path
         remote_bootstrap = script_path.replace(".sbatch", "_bootstrap.sh")
+    elif share_dir:
+        # Use shared directory visible to all nodes
+        script_id = uuid.uuid4().hex[:8]
+        remote_sbatch = f"{share_dir}/{job.name}_{script_id}.sbatch"
+        remote_bootstrap = f"{share_dir}/{job.name}_{script_id}_bootstrap.sh"
+        # Ensure share_dir exists
+        mkdir_result = run(f"mkdir -p {share_dir}", host, timeout=timeout)
+        if not mkdir_result.ok:
+            logger.error(f"SLURM | failed to create share_dir: {mkdir_result.stderr}")
+            return SlurmResult(job_id=None, ssh_result=mkdir_result)
     else:
-        # Use mktemp on remote for both scripts
-        logger.debug(f"SLURM | creating temp script paths on {host}")
+        # Fallback to mktemp (only works for single-node jobs)
+        logger.warning(
+            "SLURM | no share_dir provided, using /tmp (may fail on multi-node jobs)"
+        )
         mktemp_result = run("mktemp --suffix=.sbatch", host, timeout=timeout)
         if not mktemp_result.ok:
             logger.error(f"SLURM | failed to create temp file: {mktemp_result.stderr}")
@@ -419,12 +474,11 @@ def submit(
     # Generate sbatch wrapper that calls srun on bootstrap
     sbatch_content = job.to_sbatch_script(remote_bootstrap)
 
-    # Write bootstrap script to remote
-    logger.debug(f"SLURM | writing bootstrap script to {remote_bootstrap}")
-    write_bootstrap = (
-        f"cat > {remote_bootstrap} << 'BOOTSTRAP_EOF'\n{bootstrap_content}BOOTSTRAP_EOF"
+    # Write bootstrap script to remote via scp (can be large due to embedded payload)
+    logger.debug(f"SLURM | writing bootstrap script to {remote_bootstrap} via scp")
+    write_result = _scp_content(
+        bootstrap_content, host, remote_bootstrap, timeout=timeout
     )
-    write_result = run(write_bootstrap, host, timeout=timeout)
     if not write_result.ok:
         logger.error(f"SLURM | failed to write bootstrap script: {write_result.stderr}")
         return SlurmResult(job_id=None, ssh_result=write_result)
@@ -435,10 +489,9 @@ def submit(
         logger.error(f"SLURM | failed to chmod bootstrap script: {chmod_result.stderr}")
         return SlurmResult(job_id=None, ssh_result=chmod_result)
 
-    # Write sbatch wrapper to remote
-    logger.debug(f"SLURM | writing sbatch script to {remote_sbatch}")
-    write_sbatch = f"cat > {remote_sbatch} << 'SBATCH_EOF'\n{sbatch_content}SBATCH_EOF"
-    write_result = run(write_sbatch, host, timeout=timeout)
+    # Write sbatch wrapper to remote via scp
+    logger.debug(f"SLURM | writing sbatch script to {remote_sbatch} via scp")
+    write_result = _scp_content(sbatch_content, host, remote_sbatch, timeout=timeout)
     if not write_result.ok:
         logger.error(f"SLURM | failed to write sbatch script: {write_result.stderr}")
         return SlurmResult(job_id=None, ssh_result=write_result)
@@ -464,6 +517,7 @@ def submit_packed(
     job: SlurmJob,
     host: str,
     repo_path: str | None = None,
+    share_dir: str | None = None,
     dirty: bool = False,
     script_path: str | None = None,
     timeout: float | None = None,
@@ -477,6 +531,7 @@ def submit_packed(
         job: SlurmJob configuration
         host: SSH host with SLURM access
         repo_path: Local git repo to pack (default: cwd)
+        share_dir: Shared directory visible to all nodes for scripts
         dirty: Include uncommitted changes (default: False)
         script_path: Optional remote path for script
         timeout: SSH timeout in seconds
@@ -508,7 +563,9 @@ def submit_packed(
     logger.debug(f"SLURM | tarball size: {len(tarball)} bytes")
     packed_job = job.pack(tarball)
 
-    return submit(packed_job, host, script_path, timeout)
+    return submit(
+        packed_job, host, share_dir=share_dir, script_path=script_path, timeout=timeout
+    )
 
 
 def _parse_squeue_line(line: str) -> JobStatus | None:
@@ -939,6 +996,9 @@ def available_gpus(
 ) -> list[tuple[str, int]]:
     """Find nodes with available GPUs in a partition.
 
+    Uses a single sinfo command to get all node GPU info efficiently,
+    avoiding rate limits from multiple SSH connections.
+
     Args:
         partition: Partition name
         host: SSH host with SLURM access
@@ -948,28 +1008,149 @@ def available_gpus(
     Returns:
         List of (nodename, available_gpu_count) tuples, sorted by availability descending
     """
+    import re
+
     logger.debug(
         f"SLURM | checking available GPUs in partition '{partition}' (type={gpu_type})"
     )
-    node_names = partition_nodes(partition, host, timeout=timeout)
-    if not node_names:
-        logger.debug(f"SLURM | no nodes found in partition '{partition}'")
+
+    # Single sinfo command to get node, gres configured, and gres used
+    # Format: NodeList|Gres|GresUsed|State
+    result = run(
+        f"sinfo -p {partition} --Node -h -O NodeList,Gres,GresUsed,StateCompact",
+        host,
+        timeout=timeout,
+    )
+
+    if not result.ok:
+        logger.warning(f"SLURM | sinfo failed: {result.stderr}")
         return []
 
-    infos = nodes_info(node_names, host, timeout=timeout)
-
     available: list[tuple[str, int]] = []
-    for name, info in infos.items():
-        gpu = info.get_gres("gpu")
-        if gpu and gpu.available > 0:
-            if gpu_type is None or gpu.type == gpu_type:
-                available.append((name, gpu.available))
+
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+
+        # sinfo -O output can have fields run together due to fixed-width columns
+        # e.g.: "jagupard38  gpu:a6000ada:8  gpu:a6000ada:0(IDX:Nidle"
+        # Parse by extracting state from end (known patterns), then split rest
+
+        # Extract state from end of line (known SLURM states)
+        state_match = re.search(
+            r"(idle|mix|alloc|allocated|drain|drng|down|comp|resv|unk|maint|planned)\*?$",
+            line,
+            re.IGNORECASE,
+        )
+        if not state_match:
+            logger.debug(f"SLURM | skipping line, no state match: {line[:60]}")
+            continue
+
+        state = state_match.group(1).lower()
+
+        # Skip down/drained nodes
+        if state in ("down", "drain", "drng", "maint"):
+            continue
+
+        # Remove state from line and parse remaining fields
+        rest = line[: state_match.start()].strip()
+        parts = rest.split()
+        if len(parts) < 3:
+            continue
+
+        node_name = parts[0]
+        gres_str = parts[1]  # e.g., "gpu:a100:8" or "gpu:8" or "(null)"
+        gres_used_str = parts[2]  # e.g., "gpu:a100:4(IDX:0-3)" or "gpu:0"
+
+        # Parse GRES: gpu:type:count or gpu:count
+        gres_match = re.search(r"gpu:(\w+):(\d+)", gres_str)
+        if not gres_match:
+            # Try without type: gpu:count
+            gres_match = re.search(r"gpu:(\d+)", gres_str)
+            if gres_match:
+                gres_type = None
+                gres_total = int(gres_match.group(1))
+            else:
+                continue
+        else:
+            gres_type = gres_match.group(1)
+            gres_total = int(gres_match.group(2))
+
+        # Filter by GPU type if specified
+        if gpu_type and gres_type and gres_type != gpu_type:
+            continue
+
+        # Parse GRES used - extract count from "gpu:type:N(IDX:...)" or "gpu:N"
+        used_match = re.search(r"gpu(?::\w+)?:(\d+)", gres_used_str)
+        gres_used = int(used_match.group(1)) if used_match else 0
+
+        gres_available = gres_total - gres_used
+        if gres_available > 0:
+            available.append((node_name, gres_available))
 
     total_available = sum(count for _, count in available)
     logger.debug(
         f"SLURM | found {total_available} available GPUs across {len(available)} nodes"
     )
     return sorted(available, key=lambda x: x[1], reverse=True)
+
+
+def partition_gpu_types(
+    host: str, partitions: list[str] | None = None, timeout: float | None = None
+) -> dict[str, set[str]]:
+    """Get GPU types for all partitions on a host in a single query.
+
+    Args:
+        host: SSH host with SLURM access
+        partitions: Optional list of partitions to filter (queries all if None)
+        timeout: SSH timeout
+
+    Returns:
+        Dict mapping partition name -> set of GPU type names
+    """
+    import re
+
+    logger.debug(f"SLURM | detecting GPU types for partitions on {host}")
+
+    # Query all partitions with one sinfo call
+    # Format: Partition|Gres (one line per node)
+    result = run(
+        "sinfo --Node -h -o '%P|%G'",
+        host,
+        timeout=timeout,
+    )
+
+    if not result.ok:
+        logger.warning(f"SLURM | sinfo failed: {result.stderr}")
+        return {}
+
+    partition_types: dict[str, set[str]] = {}
+
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip() or "|" not in line:
+            continue
+
+        parts = line.split("|")
+        if len(parts) < 2:
+            continue
+
+        part_name = parts[0].rstrip("*")  # remove default marker
+        gres_str = parts[1]
+
+        # Filter to requested partitions if specified
+        if partitions and part_name not in partitions:
+            continue
+
+        if part_name not in partition_types:
+            partition_types[part_name] = set()
+
+        # Parse GRES: gpu:type:count
+        match = re.search(r"gpu:(\w+):\d+", gres_str)
+        if match:
+            partition_types[part_name].add(match.group(1))
+
+    logger.debug(f"SLURM | partition GPU types: {partition_types}")
+    return partition_types
 
 
 def wait(
