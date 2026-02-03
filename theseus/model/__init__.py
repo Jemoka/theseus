@@ -1,3 +1,3 @@
-from .models import GPT
+from .models import GPT, Thoughtbubbles
 
-__all__ = ["GPT"]
+__all__ = ["GPT", "Thoughtbubbles"]
