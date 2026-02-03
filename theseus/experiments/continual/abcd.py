@@ -1,7 +1,9 @@
 import optax
+import wandb
 import numpy as np
 
 from typing import List, Tuple
+from loguru import logger
 
 from dataclasses import dataclass
 from theseus.config import field
@@ -116,6 +118,9 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
             for i in self.strategies
         ]
 
+        # Track current dataset index for logging switches
+        self._current_dl_idx: int = 0
+
     def batch(self, slice: str = "train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """get the next batch from the dataset strategy"""
 
@@ -134,6 +139,26 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
             if current_ntok < cumulative:
                 dl_idx = i
                 break
+
+        # Log dataset switch if the index changed
+        if dl_idx != self._current_dl_idx:
+            dataset_names = [s.name for s in self.args.datasets[dl_idx]]
+            logger.info(
+                "DATASET | switching from dataset {} to {} (datasets: {}) at {} tokens",
+                self._current_dl_idx,
+                dl_idx,
+                dataset_names,
+                current_ntok,
+            )
+            if self.main_process():
+                wandb.log(
+                    {
+                        "dataset/index": dl_idx,
+                        "dataset/switch_at_tokens": current_ntok,
+                    },
+                    step=self.global_step_counter_ // self.accumulate_steps,
+                )
+            self._current_dl_idx = dl_idx
 
         x: np.ndarray
         y: np.ndarray
