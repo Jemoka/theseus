@@ -1,3 +1,5 @@
+# uv run theseus submit 1B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e0 --mem 64G
+
 architecture:
   n_embd: 2048
   n_layers: 16
@@ -30,7 +32,7 @@ training:
   - 100000000
   warmup_pct: 0.01
   decay_pct: 0.1
-  validation: true
+  validation: false
   evaluate: true
   dataset:
   - - name: fineweb
