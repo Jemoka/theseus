@@ -716,6 +716,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     score = val_score
                     val_metrics.update(metrics)
                 if self.args.evaluate:
+                    self.inference.state = self.state
                     eval_metrics = self.inference.evaluate()
                     if len(eval_metrics) > 0:
                         eval_score = sum(eval_metrics.values()) / len(eval_metrics)

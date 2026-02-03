@@ -15,12 +15,11 @@ logger.add(
 
 
 from theseus.quick import quick
+from theseus.data.tokenize import TokenizeVariableDatasetJob
 
-with quick("continual/train/abcd", "/sailhome/houjun/theseus", "test") as j:
-    j.config.logging.checkpoint_interval = 4096
-    j.config.logging.validation_interval = 1024
-    j.config.training.per_device_batch_size = 14
-    j.config.architecture.n_layers = 16
-    j.config.training.validation = False
+with quick(TokenizeVariableDatasetJob, "/Users/houjun/theseus", "test") as j:
+    j.config.data.dataset = "mnli"
+    j.save("./configs/data/chicken.yaml")
 
-    j.save("./configs/continual/abcd.yaml", "h200", 1)
+
+
