@@ -43,7 +43,7 @@ def solve(
     3. If none satisfy, fall back to SLURM with most availability
 
     Args:
-        request: Hardware requirements (chip type, min chips)
+        request: Hardware requirements (chip type, min chips, cluster preferences)
         config: Dispatch configuration with hosts
         check_availability: If True, query SLURM for real-time availability
         timeout: SSH timeout for availability checks
@@ -60,6 +60,37 @@ def solve(
     for host in config.hosts:
         if host not in ordered_hosts:
             ordered_hosts.append(host)
+
+    # Filter hosts by cluster membership (from HardwareRequest)
+    preferred_set = (
+        set(request.preferred_clusters) if request.preferred_clusters else None
+    )
+    forbidden_set = (
+        set(request.forbidden_clusters) if request.forbidden_clusters else set()
+    )
+
+    if preferred_set or forbidden_set:
+        filtered_hosts = []
+        for host_name in ordered_hosts:
+            if host_name not in config.hosts:
+                continue
+            host_cfg = config.hosts[host_name]
+            host_cluster = host_cfg.cluster
+
+            if host_cluster in forbidden_set:
+                logger.debug(
+                    f"SOLVE | excluding host '{host_name}' (cluster '{host_cluster}' is forbidden)"
+                )
+                continue
+            if preferred_set and host_cluster not in preferred_set:
+                logger.debug(
+                    f"SOLVE | skipping host '{host_name}' (cluster '{host_cluster}' not in preferred list)"
+                )
+                continue
+            filtered_hosts.append(host_name)
+
+        ordered_hosts = filtered_hosts
+        logger.debug(f"SOLVE | after cluster filtering: {ordered_hosts}")
 
     logger.debug(f"SOLVE | checking hosts in order: {ordered_hosts}")
 

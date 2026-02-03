@@ -79,21 +79,21 @@ class HardwareRequest(BaseModel):
         int,
         Field(ge=1, description="minimum number of chips requested"),
     ]
-    preferred_hosts: Annotated[
-        list[ClusterMachine],
-        Field(default_factory=list, description="hosts to prefer"),
+    preferred_clusters: Annotated[
+        list[str],
+        Field(default_factory=list, description="clusters to prefer (by name)"),
     ]
-    forbidden_hosts: Annotated[
-        list[ClusterMachine],
-        Field(default_factory=list, description="hosts to avoid"),
+    forbidden_clusters: Annotated[
+        list[str],
+        Field(default_factory=list, description="clusters to avoid (by name)"),
     ]
 
     @model_validator(mode="after")
     def _validate(self) -> "HardwareRequest":
-        overlap = set(self.preferred_hosts) & set(self.forbidden_hosts)
+        overlap = set(self.preferred_clusters) & set(self.forbidden_clusters)
         if overlap:
             raise ValueError(
-                f"Hosts cannot be both preferred and forbidden: {sorted([i.name for i in overlap])}"
+                f"Clusters cannot be both preferred and forbidden: {sorted(overlap)}"
             )
 
         return self

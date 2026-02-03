@@ -137,7 +137,7 @@ def dispatch(
     Args:
         cfg: Job configuration (must have cfg.job pointing to a registered job)
         spec: Job specification (name, project, group)
-        hardware: Hardware requirements
+        hardware: Hardware requirements (includes cluster preferences)
         dispatch_config: Remote host/cluster configuration
         dirty: Include uncommitted changes (default: False)
         check_availability: Check real-time GPU availability (default: True)

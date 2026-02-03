@@ -308,6 +308,12 @@ def run(
 )  # type: ignore[misc]
 @click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option(
+    "--cluster", default=None, help="Only use these clusters (comma-separated)"
+)  # type: ignore[misc]
+@click.option(
+    "--exclude-cluster", default=None, help="Exclude these clusters (comma-separated)"
+)  # type: ignore[misc]
 @click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
@@ -320,6 +326,8 @@ def submit(
     chip: str | None,
     chips: int | None,
     mem: str | None,
+    cluster: str | None,
+    exclude_cluster: str | None,
     dirty: bool,
     overrides: tuple[str, ...],
 ) -> None:
@@ -424,12 +432,18 @@ def submit(
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
 
+    # Parse cluster filters
+    preferred_clusters = [c.strip() for c in cluster.split(",")] if cluster else []
+    forbidden_clusters = (
+        [c.strip() for c in exclude_cluster.split(",")] if exclude_cluster else []
+    )
+
     # Build hardware request
     hardware_request = HardwareRequest(
         chip=SUPPORTED_CHIPS[request_chip],
         min_chips=request_chips,
-        preferred_hosts=[],
-        forbidden_hosts=[],
+        preferred_clusters=preferred_clusters,
+        forbidden_clusters=forbidden_clusters,
     )
 
     # Build job spec
@@ -446,6 +460,12 @@ def submit(
     console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
     if mem:
         console.print(f"[blue]Memory:[/blue] {mem}")
+    if preferred_clusters:
+        console.print(f"[blue]Clusters:[/blue] {', '.join(preferred_clusters)}")
+    if forbidden_clusters:
+        console.print(
+            f"[blue]Excluded clusters:[/blue] {', '.join(forbidden_clusters)}"
+        )
     console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
     console.print(f"[blue]Dirty:[/blue] {dirty}")
 
