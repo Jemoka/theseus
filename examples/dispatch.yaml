@@ -1,0 +1,57 @@
+# Host priority order for solver (first match wins)
+priority:
+  - workstation       # prefer local workstation
+  - devbox            # then devbox
+  - hpc-login         # then HPC cluster
+  - cloud             # cloud as last resort
+
+# Map chip names to SLURM GRES types (cluster-specific)
+gres_mapping:
+  h100: h100_80gb           # your cluster's GRES name for H100
+  a100-sxm4-80gb: a100_80g  # GRES name for A100 80GB
+  a100-pcie-40gb: a100_40g  # GRES name for A100 40GB
+
+clusters:
+  local:
+    root: /data/theseus
+    work: /tmp/theseus
+
+  hpc:
+    root: /mnt/juicefs/theseus
+    work: /scratch/theseus
+    mount: redis://:password@redis.example.com:6379/0  # JuiceFS redis connection
+
+hosts:
+  # Plain SSH host - direct GPU access, no scheduler
+  workstation:
+    ssh: gpu-workstation        # alias from ~/.ssh/config
+    cluster: local
+    type: plain
+    chips:
+      h100: 4
+    uv_groups: [cuda12]         # uv sync --group cuda12
+
+  devbox:
+    ssh: devbox
+    cluster: local
+    type: plain
+    chips:
+      a100-sxm4-80gb: 8
+    uv_groups: [cuda12, dev]
+
+  # SLURM cluster - jobs submitted via sbatch
+  hpc-login:
+    ssh: hpc
+    cluster: hpc
+    type: slurm
+    partitions: [gpu, cpu]
+    account: myproject
+    qos: normal
+    uv_groups: [cuda12]
+
+  cloud:
+    ssh: cloud
+    cluster: hpc
+    type: slurm
+    partitions: [a100, h100]
+    uv_groups: [cuda11]         # older CUDA on this cluster
