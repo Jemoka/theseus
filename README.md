@@ -103,6 +103,17 @@ clusters:
     cache_dir: /scratch/juicefs-cache
 ```
 
+## (an incomplete list of) Features
+
+- **CLI & Programmatic API**: Configure and run jobs via `theseus` CLI or the `quick()` Python API
+- **Remote Dispatch**: Submit jobs to SLURM clusters or plain SSH hosts via `~/.theseus.yaml`
+- **Checkpointing & Recovery**: Jobs are `RestoreableJob`s with built-in checkpoint/restore support
+- **Data Pipelines**: Tokenize datasets (blockwise or streaming) with `data/tokenize_*` jobs
+- **JuiceFS Integration**: Distributed filesystem support for sharing data across clusters
+- **Multi-backend**: CUDA 11/12/13, TPU, and CPU via `uv sync --group`
+- **Extensible**: Add models in `theseus.model.models`, experiments in `theseus.experiments`, and datasets in `theseus.data.datasets`
+- **Dataclass Configs**: Type-safe configuration via dataclasses with OmegaConf, easy configuration with `theseus.config.field` dataclass extension, and Hydra-style cheeky cli overrides (`model.hidden_size=1024`)
+
 ---
 
 <p align="center">
