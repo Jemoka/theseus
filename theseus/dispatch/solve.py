@@ -212,24 +212,26 @@ def solve(
                 )
 
     # Fallback: pick SLURM with most availability (even if < min_chips)
+    # For SLURM, we request the full min_chips and let the scheduler queue until available
     if slurm_fallback:
         slurm_fallback.sort(key=lambda x: x[2], reverse=True)
         host_name, host_cfg, available, partition = slurm_fallback[0]
 
         logger.warning(
-            f"SOLVE | no host satisfies request, falling back to SLURM '{host_name}' with {available} chips"
+            f"SOLVE | no host satisfies request, falling back to SLURM '{host_name}' "
+            f"(available={available}, requesting={request.min_chips})"
         )
         cluster = inventory.get_cluster(host_cfg.cluster)
         machine = ClusterMachine(
             name=host_name,
             cluster=cluster,
-            resources={request.chip: available},
+            resources={request.chip: request.min_chips},
         )
         return SolveResult(
             result=HardwareResult(
                 chip=request.chip,
                 hosts=[machine],
-                total_chips=available,
+                total_chips=request.min_chips,  # Request full amount, let SLURM queue
             ),
             host_name=host_name,
             host_config=host_cfg,

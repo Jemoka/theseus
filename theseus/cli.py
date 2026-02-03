@@ -444,7 +444,6 @@ def submit(
     console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
     console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
     console.print(f"[blue]Dirty:[/blue] {dirty}")
-    console.print()
 
     # Dispatch the job
     result = dispatch(
@@ -455,13 +454,7 @@ def submit(
         dirty=dirty,
     )
 
-    if result.ok:
-        console.print("\n[green]Job submitted successfully![/green]")
-        if hasattr(result, "job_id") and result.job_id:
-            console.print(f"[green]SLURM Job ID: {result.job_id}[/green]")
-        if hasattr(result, "stdout") and result.stdout:
-            console.print(f"[dim]{result.stdout}[/dim]")
-    else:
+    if not result.ok:
         console.print("\n[red]Job submission failed[/red]")
         stderr = getattr(result, "stderr", None) or getattr(
             getattr(result, "ssh_result", None), "stderr", ""

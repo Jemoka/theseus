@@ -111,7 +111,7 @@ def _generate_bootstrap(
 
 def _get_work_dir(cluster_work: str, spec: JobSpec) -> str:
     """Compute work directory path."""
-    project = spec.project or "default"
+    project = spec.project or "general"
     group = spec.group or "default"
     return f"{cluster_work}/{project}/{group}/{spec.name}"
 
@@ -266,7 +266,7 @@ def _dispatch_slurm(
     )
 
     # Build job name from spec
-    project = spec.project or "default"
+    project = spec.project or "general"
     group = spec.group or "default"
     job_name = f"{project}-{group}-{spec.name}"
 
@@ -329,7 +329,7 @@ def _dispatch_plain(
 
     # Build log filename with job metadata and timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    project = spec.project or "default"
+    project = spec.project or "general"
     group = spec.group or "default"
     log_file = f"{log_dir}/{project}_{group}_{spec.name}_{timestamp}.log"
 
