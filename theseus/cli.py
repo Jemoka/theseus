@@ -488,8 +488,6 @@ def submit(
             console.print(f"[red]{stderr}[/red]")
         sys.exit(1)
 
-    console.print()
-
 
 @theseus.command()  # type: ignore[misc]
 @click.argument("name")  # type: ignore[misc]
