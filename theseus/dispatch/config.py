@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+from loguru import logger
 from omegaconf import OmegaConf, DictConfig
 
 from theseus.base.chip import Chip, SUPPORTED_CHIPS
@@ -90,6 +91,7 @@ def load_dispatch_config(path: str | Path) -> DispatchConfig:
     Returns:
         Parsed DispatchConfig
     """
+    logger.info(f"CONFIG | loading dispatch config from {path}")
     cfg = OmegaConf.load(path)
     return parse_dispatch_config(cfg)
 
@@ -103,6 +105,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
     Returns:
         Parsed DispatchConfig
     """
+    logger.debug("CONFIG | parsing dispatch config")
     clusters: dict[str, ClusterConfig] = {}
     for name, cluster_cfg in cfg.get("clusters", {}).items():
         clusters[name] = ClusterConfig(
@@ -113,6 +116,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
         )
+    logger.debug(f"CONFIG | parsed {len(clusters)} clusters")
 
     hosts: dict[str, PlainHostConfig | SlurmHostConfig] = {}
     for name, host_cfg in cfg.get("hosts", {}).items():
@@ -152,9 +156,18 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 uv_groups=uv_groups,
             )
 
+    plain_count = sum(1 for h in hosts.values() if isinstance(h, PlainHostConfig))
+    slurm_count = sum(1 for h in hosts.values() if isinstance(h, SlurmHostConfig))
+    logger.debug(
+        f"CONFIG | parsed {len(hosts)} hosts ({plain_count} plain, {slurm_count} slurm)"
+    )
+
     priority = list(cfg.get("priority", []))
     gres_mapping = dict(cfg.get("gres_mapping", {}))
 
+    logger.info(
+        f"CONFIG | loaded config with {len(clusters)} clusters, {len(hosts)} hosts"
+    )
     return DispatchConfig(
         clusters=clusters, hosts=hosts, priority=priority, gres_mapping=gres_mapping
     )
@@ -245,6 +258,7 @@ def discover_plain_host(ssh_alias: str, timeout: float = 30.0) -> dict[str, int]
     """
     from theseus.dispatch.ssh import run
 
+    logger.info(f"CONFIG | discovering GPUs on {ssh_alias}")
     result = run(
         "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits",
         ssh_alias,
@@ -252,6 +266,7 @@ def discover_plain_host(ssh_alias: str, timeout: float = 30.0) -> dict[str, int]
     )
 
     if not result.ok:
+        logger.warning(f"CONFIG | nvidia-smi failed on {ssh_alias}: {result.stderr}")
         return {}
 
     chips: dict[str, int] = {}
@@ -267,7 +282,10 @@ def discover_plain_host(ssh_alias: str, timeout: float = 30.0) -> dict[str, int]
         matched = _match_gpu_to_chip(gpu_name, mem_mb)
         if matched:
             chips[matched] = chips.get(matched, 0) + 1
+        else:
+            logger.debug(f"CONFIG | unmatched GPU: {gpu_name} ({mem_mb}MB)")
 
+    logger.info(f"CONFIG | discovered on {ssh_alias}: {chips}")
     return chips
 
 
@@ -309,6 +327,7 @@ def discover_slurm_partitions(
     """
     from theseus.dispatch.slurm import partitions
 
+    logger.info(f"CONFIG | discovering SLURM partitions on {ssh_alias}")
     parts = partitions(ssh_alias, timeout=timeout)
 
     configs = []
@@ -320,4 +339,5 @@ def discover_slurm_partitions(
             )
         )
 
+    logger.info(f"CONFIG | discovered {len(configs)} partitions on {ssh_alias}")
     return configs

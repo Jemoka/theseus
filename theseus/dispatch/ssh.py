@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 from dataclasses import dataclass
 
+from loguru import logger
+
 
 def _shell_quote(s: str) -> str:
     """Quote a string for safe shell execution."""
@@ -36,6 +38,7 @@ def hosts() -> list[str]:
     config_path = Path.home() / ".ssh" / "config"
 
     if not config_path.exists():
+        logger.debug("SSH | no ~/.ssh/config found")
         return []
 
     hosts_list: list[str] = []
@@ -53,6 +56,7 @@ def hosts() -> list[str]:
                 continue
             hosts_list.append(entry)
 
+    logger.debug(f"SSH | found {len(hosts_list)} hosts in ssh config")
     return hosts_list
 
 
@@ -77,6 +81,10 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
     wrapped_cmd = f"$SHELL -l -c {_shell_quote(cmd)}"
     ssh_cmd = ["ssh", "-o", "BatchMode=yes", host, wrapped_cmd]
 
+    # Truncate cmd for logging if too long
+    cmd_preview = cmd[:80] + "..." if len(cmd) > 80 else cmd
+    logger.debug(f"SSH | running on {host}: {cmd_preview}")
+
     try:
         result = subprocess.run(
             ssh_cmd,
@@ -84,12 +92,17 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
             text=True,
             timeout=timeout,
         )
+        if result.returncode != 0:
+            logger.debug(
+                f"SSH | command failed (rc={result.returncode}): {result.stderr[:200] if result.stderr else 'no stderr'}"
+            )
         return RunResult(
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
     except subprocess.TimeoutExpired as e:
+        logger.warning(f"SSH | command timed out after {timeout}s on {host}")
         return RunResult(
             returncode=-1,
             stdout=e.stdout or ""
@@ -114,6 +127,7 @@ def run_many(
     """
     import concurrent.futures
 
+    logger.debug(f"SSH | running command on {len(hosts)} hosts in parallel")
     results: dict[str, RunResult] = {}
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as executor:
@@ -125,8 +139,11 @@ def run_many(
             try:
                 results[host] = future.result()
             except Exception as e:
+                logger.warning(f"SSH | exception running on {host}: {e}")
                 results[host] = RunResult(returncode=-1, stdout="", stderr=str(e))
 
+    success_count = sum(1 for r in results.values() if r.ok)
+    logger.debug(f"SSH | run_many completed: {success_count}/{len(hosts)} succeeded")
     return results
 
 
@@ -145,6 +162,7 @@ def copy_to(
         RunResult with returncode, stdout, and stderr
     """
     local_path = Path(local_path)
+    logger.debug(f"SSH | copying {local_path} to {host}:{remote_path}")
     scp_cmd = ["scp", "-o", "BatchMode=yes"]
 
     if local_path.is_dir():
@@ -159,12 +177,17 @@ def copy_to(
             text=True,
             timeout=timeout,
         )
+        if result.returncode == 0:
+            logger.debug("SSH | copy_to succeeded")
+        else:
+            logger.warning(f"SSH | copy_to failed: {result.stderr}")
         return RunResult(
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
     except subprocess.TimeoutExpired:
+        logger.warning(f"SSH | scp timed out after {timeout}s")
         return RunResult(
             returncode=-1,
             stdout="",
@@ -186,6 +209,7 @@ def copy_from(
     Returns:
         RunResult with returncode, stdout, and stderr
     """
+    logger.debug(f"SSH | copying {host}:{remote_path} to {local_path}")
     scp_cmd = [
         "scp",
         "-o",
@@ -202,12 +226,17 @@ def copy_from(
             text=True,
             timeout=timeout,
         )
+        if result.returncode == 0:
+            logger.debug("SSH | copy_from succeeded")
+        else:
+            logger.warning(f"SSH | copy_from failed: {result.stderr}")
         return RunResult(
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
     except subprocess.TimeoutExpired:
+        logger.warning(f"SSH | scp timed out after {timeout}s")
         return RunResult(
             returncode=-1,
             stdout="",
@@ -225,5 +254,8 @@ def is_reachable(host: str, timeout: float = 5.0) -> bool:
     Returns:
         True if host is reachable
     """
+    logger.debug(f"SSH | checking if {host} is reachable")
     result = run("echo ok", host, timeout=timeout)
-    return result.ok and "ok" in result.stdout
+    reachable = result.ok and "ok" in result.stdout
+    logger.debug(f"SSH | {host} reachable={reachable}")
+    return reachable

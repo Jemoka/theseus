@@ -5,6 +5,8 @@ Code synchronization utilities for shipping repos to remote hosts.
 import subprocess
 from pathlib import Path
 
+from loguru import logger
+
 from theseus.dispatch.ssh import RunResult
 
 
@@ -20,6 +22,7 @@ def snapshot(repo_path: str | Path | None = None, ref: str = "HEAD") -> bytes:
     Returns:
         Tarball bytes (gzip compressed)
     """
+    logger.debug(f"SYNC | creating snapshot of {repo_path or 'cwd'} at ref={ref}")
     cmd = ["git", "archive", "--format=tar.gz", ref]
 
     result = subprocess.run(
@@ -29,6 +32,7 @@ def snapshot(repo_path: str | Path | None = None, ref: str = "HEAD") -> bytes:
         check=True,
     )
 
+    logger.debug(f"SYNC | snapshot created: {len(result.stdout)} bytes")
     return result.stdout
 
 
@@ -53,13 +57,20 @@ def ship(
     Returns:
         RunResult from extraction
     """
+    logger.info(f"SYNC | shipping to {host}:{remote_path} (ref={ref})")
     tarball = snapshot(repo_path, ref)
 
     # Create remote directory and extract tarball via stdin
     # Using -m to avoid timestamp issues with NFS/distributed filesystems
     extract_cmd = f"mkdir -p {remote_path} && tar -xzf - -C {remote_path} -m"
 
+    logger.debug(f"SYNC | extracting {len(tarball)} bytes on remote")
     result = _run_with_stdin(extract_cmd, host, tarball, timeout=timeout)
+
+    if result.ok:
+        logger.info(f"SYNC | shipped successfully to {host}:{remote_path}")
+    else:
+        logger.error(f"SYNC | ship failed: {result.stderr}")
 
     return result
 
@@ -84,10 +95,12 @@ def ship_dirty(
     Returns:
         RunResult from extraction
     """
+    logger.info(f"SYNC | shipping dirty to {host}:{remote_path}")
     repo_path = Path(repo_path) if repo_path else Path.cwd()
 
     # Create tarball of tracked files including working tree changes
     # git stash create makes a commit object without actually stashing
+    logger.debug("SYNC | capturing dirty state via git stash create")
     stash_result = subprocess.run(
         ["git", "stash", "create"],
         cwd=repo_path,
@@ -98,6 +111,10 @@ def ship_dirty(
     # If there are changes, stash create returns a commit hash
     # If no changes, it returns empty (use HEAD)
     ref = stash_result.stdout.strip() or "HEAD"
+    if ref != "HEAD":
+        logger.debug(f"SYNC | dirty ref: {ref[:12]}")
+    else:
+        logger.debug("SYNC | no uncommitted changes, using HEAD")
 
     return ship(host, remote_path, repo_path, ref, timeout)
 
@@ -121,6 +138,7 @@ def ship_files(
     Returns:
         RunResult from extraction
     """
+    logger.info(f"SYNC | shipping {len(files)} files to {host}:{remote_path}")
     base_path = Path(base_path) if base_path else Path.cwd()
 
     # Create tarball of specified files
@@ -132,8 +150,10 @@ def ship_files(
             p = p.relative_to(base_path)
         cmd.append(str(p))
 
+    logger.debug(f"SYNC | creating tarball of {len(files)} files")
     result = subprocess.run(cmd, capture_output=True, check=True)
     tarball = result.stdout
+    logger.debug(f"SYNC | tarball size: {len(tarball)} bytes")
 
     extract_cmd = f"mkdir -p {remote_path} && tar -xzf - -C {remote_path} -m"
     return _run_with_stdin(extract_cmd, host, tarball, timeout=timeout)
@@ -192,6 +212,7 @@ def sync(
     Returns:
         RunResult from rsync
     """
+    logger.info(f"SYNC | rsync to {host}:{remote_path} (delete={delete})")
     repo_path = Path(repo_path) if repo_path else Path.cwd()
 
     cmd = [
@@ -215,6 +236,7 @@ def sync(
     if exclude:
         for pattern in exclude:
             cmd.append(f"--exclude={pattern}")
+        logger.debug(f"SYNC | additional excludes: {exclude}")
 
     if delete:
         cmd.append("--delete")
@@ -225,6 +247,7 @@ def sync(
 
     cmd.extend([src, dst])
 
+    logger.debug(f"SYNC | rsync from {src} to {dst}")
     try:
         result = subprocess.run(
             cmd,
@@ -232,12 +255,17 @@ def sync(
             text=True,
             timeout=timeout,
         )
+        if result.returncode == 0:
+            logger.info("SYNC | rsync completed successfully")
+        else:
+            logger.error(f"SYNC | rsync failed: {result.stderr}")
         return RunResult(
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
         )
     except subprocess.TimeoutExpired:
+        logger.warning(f"SYNC | rsync timed out after {timeout}s")
         return RunResult(
             returncode=-1,
             stdout="",

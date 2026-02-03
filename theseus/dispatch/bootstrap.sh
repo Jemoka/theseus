@@ -1,27 +1,27 @@
 #!/bin/bash
 #
-# Theseus bootstrap script for SLURM jobs.
-# Users can edit this file to customize job setup.
+# Theseus bootstrap script - runs on each node (via srun for SLURM, directly for SSH)
 #
 # Placeholders (filled by slurm.py):
-#   __SBATCH_DIRECTIVES__  - #SBATCH lines
+#   __WORKDIR__            - working directory to cd into
 #   __MODULES__            - module load commands
 #   __ENV_VARS__           - export statements
+#   __JUICEFS_MOUNT__      - JuiceFS mount commands
+#   __PAYLOAD_EXTRACT__    - base64 payload extraction (SLURM only)
+#   __UV_SYNC__            - uv sync command with groups
 #   __SETUP_COMMANDS__     - pre-run setup commands
-#   __PAYLOAD__            - base64-encoded code tarball (optional)
-#   __PAYLOAD_DIR__        - extraction directory
 #   __COMMAND__            - the actual command to run
 
-__SBATCH_DIRECTIVES__
-
 set -euo pipefail
+
+echo "[bootstrap] starting on $(hostname)"
 
 # Track JuiceFS mount point for cleanup
 JUICEFS_MOUNT_POINT=""
 
 cleanup() {
     local exit_code=$?
-    echo "[bootstrap] cleaning up (exit code: $exit_code)..."
+    echo "[bootstrap] cleaning up on $(hostname) (exit code: $exit_code)..."
 
     # Unmount JuiceFS gracefully if mounted
     if [[ -n "$JUICEFS_MOUNT_POINT" ]] && mountpoint -q "$JUICEFS_MOUNT_POINT" 2>/dev/null; then
@@ -124,10 +124,13 @@ __MODULES__
 __ENV_VARS__
 
 # ============================================================================
-# Payload Extraction
+# Working Directory & Payload Extraction
 # ============================================================================
 
 __PAYLOAD_EXTRACT__
+
+cd __WORKDIR__
+echo "[bootstrap] working directory: $(pwd)"
 
 # ============================================================================
 # Python Environment

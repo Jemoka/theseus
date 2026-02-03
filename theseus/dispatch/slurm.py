@@ -9,13 +9,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from theseus.dispatch.ssh import run, RunResult
 
 if TYPE_CHECKING:
     from theseus.dispatch.config import JuiceFSMount
 
-# Path to bootstrap template
+# Path to templates
 BOOTSTRAP_TEMPLATE = Path(__file__).parent / "bootstrap.sh"
+SBATCH_TEMPLATE = Path(__file__).parent / "sbatch.sh"
 
 
 @dataclass
@@ -146,19 +149,10 @@ class SlurmJob:
 
         return "\n".join(lines)
 
-    def to_script(self) -> str:
-        """Generate the sbatch script from bootstrap.sh template."""
+    def to_bootstrap_script(self) -> str:
+        """Generate the bootstrap.sh script that runs on each node."""
         template = BOOTSTRAP_TEMPLATE.read_text()
-
-        # SBATCH directives (only for SLURM mode)
-        if self.is_slurm:
-            script = template.replace(
-                "__SBATCH_DIRECTIVES__", self._sbatch_directives()
-            )
-        else:
-            # For SSH mode, replace with cd to workdir if specified
-            cd_cmd = f"cd {self.workdir}" if self.workdir else ""
-            script = template.replace("__SBATCH_DIRECTIVES__", cd_cmd)
+        script = template
 
         # JuiceFS mount
         if self.juicefs_mount:
@@ -195,7 +189,7 @@ JUICEFS_MOUNT_POINT="{self.juicefs_mount.mount_point}"
             env_str = ""
         script = script.replace("__ENV_VARS__", env_str)
 
-        # Payload extraction
+        # Payload extraction (for SLURM with embedded payload)
         if self.payload:
             payload_extract = f"""
 echo "[bootstrap] extracting code payload..."
@@ -203,11 +197,17 @@ mkdir -p {self.payload_extract_to}
 base64 -d <<'__PAYLOAD_EOF__' | tar -xzf - -C {self.payload_extract_to}
 {self.payload}
 __PAYLOAD_EOF__
-cd {self.payload_extract_to}
 """
         else:
             payload_extract = ""
         script = script.replace("__PAYLOAD_EXTRACT__", payload_extract)
+
+        # Working directory - use payload_extract_to for SLURM, workdir for SSH
+        if self.payload:
+            workdir = self.payload_extract_to
+        else:
+            workdir = self.workdir or "."
+        script = script.replace("__WORKDIR__", workdir)
 
         # UV sync command with optional groups
         if self.uv_groups:
@@ -230,6 +230,29 @@ cd {self.payload_extract_to}
         script = script.replace("__COMMAND__", f"uv run {self.command}")
 
         return script
+
+    def to_sbatch_script(self, bootstrap_script_path: str) -> str:
+        """Generate the sbatch wrapper script that calls srun on bootstrap.sh."""
+        template = SBATCH_TEMPLATE.read_text()
+
+        script = template.replace("__SBATCH_DIRECTIVES__", self._sbatch_directives())
+
+        # Working directory for sbatch --chdir
+        workdir = self.payload_extract_to if self.payload else (self.workdir or ".")
+        script = script.replace("__WORKDIR__", workdir)
+
+        # Path to bootstrap script
+        script = script.replace("__BOOTSTRAP_SCRIPT__", bootstrap_script_path)
+
+        return script
+
+    def to_script(self) -> str:
+        """Generate script for backward compatibility.
+
+        For SLURM: returns bootstrap script (sbatch wrapper generated separately)
+        For SSH: returns bootstrap script
+        """
+        return self.to_bootstrap_script()
 
 
 @dataclass
@@ -340,10 +363,14 @@ def submit(
 ) -> SlurmResult:
     """Submit a SLURM job to a remote host via SSH.
 
+    Creates two scripts on remote:
+    - bootstrap.sh: runs on each node via srun (setup + command)
+    - sbatch wrapper: contains SBATCH directives, calls srun bootstrap.sh
+
     Args:
         job: SlurmJob configuration
         host: SSH host with SLURM access
-        script_path: Optional remote path for the script (uses mktemp if not provided)
+        script_path: Optional remote path prefix for scripts (uses mktemp if not provided)
         timeout: SSH timeout in seconds
 
     Returns:
@@ -351,28 +378,61 @@ def submit(
     """
     import re
 
-    script_content = job.to_script()
+    logger.info(f"SLURM | submitting job '{job.name}' to {host}")
+    logger.debug(
+        f"SLURM | job config: nodes={job.nodes}, partition={job.partition}, gpus_per_node={job.gpus_per_node}"
+    )
+
+    # Generate both scripts
+    bootstrap_content = job.to_bootstrap_script()
 
     if script_path:
-        remote_script = script_path
+        remote_sbatch = script_path
+        remote_bootstrap = script_path.replace(".sbatch", "_bootstrap.sh")
     else:
-        # Use mktemp on remote to get a proper temp file path
+        # Use mktemp on remote for both scripts
+        logger.debug(f"SLURM | creating temp script paths on {host}")
         mktemp_result = run("mktemp --suffix=.sbatch", host, timeout=timeout)
         if not mktemp_result.ok:
+            logger.error(f"SLURM | failed to create temp file: {mktemp_result.stderr}")
             return SlurmResult(job_id=None, ssh_result=mktemp_result)
-        remote_script = mktemp_result.stdout.strip()
+        remote_sbatch = mktemp_result.stdout.strip()
+        remote_bootstrap = remote_sbatch.replace(".sbatch", "_bootstrap.sh")
 
-    # Write script to remote via heredoc
-    write_cmd = (
-        f"cat > {remote_script} << 'SLURM_SCRIPT_EOF'\n{script_content}SLURM_SCRIPT_EOF"
+    logger.debug(
+        f"SLURM | script paths: sbatch={remote_sbatch}, bootstrap={remote_bootstrap}"
     )
-    write_result = run(write_cmd, host, timeout=timeout)
 
+    # Generate sbatch wrapper that calls srun on bootstrap
+    sbatch_content = job.to_sbatch_script(remote_bootstrap)
+
+    # Write bootstrap script to remote
+    logger.debug(f"SLURM | writing bootstrap script to {remote_bootstrap}")
+    write_bootstrap = (
+        f"cat > {remote_bootstrap} << 'BOOTSTRAP_EOF'\n{bootstrap_content}BOOTSTRAP_EOF"
+    )
+    write_result = run(write_bootstrap, host, timeout=timeout)
     if not write_result.ok:
+        logger.error(f"SLURM | failed to write bootstrap script: {write_result.stderr}")
+        return SlurmResult(job_id=None, ssh_result=write_result)
+
+    # Make bootstrap executable
+    chmod_result = run(f"chmod +x {remote_bootstrap}", host, timeout=timeout)
+    if not chmod_result.ok:
+        logger.error(f"SLURM | failed to chmod bootstrap script: {chmod_result.stderr}")
+        return SlurmResult(job_id=None, ssh_result=chmod_result)
+
+    # Write sbatch wrapper to remote
+    logger.debug(f"SLURM | writing sbatch script to {remote_sbatch}")
+    write_sbatch = f"cat > {remote_sbatch} << 'SBATCH_EOF'\n{sbatch_content}SBATCH_EOF"
+    write_result = run(write_sbatch, host, timeout=timeout)
+    if not write_result.ok:
+        logger.error(f"SLURM | failed to write sbatch script: {write_result.stderr}")
         return SlurmResult(job_id=None, ssh_result=write_result)
 
     # Submit with sbatch
-    submit_result = run(f"sbatch {remote_script}", host, timeout=timeout)
+    logger.debug(f"SLURM | submitting sbatch {remote_sbatch}")
+    submit_result = run(f"sbatch {remote_sbatch}", host, timeout=timeout)
 
     # Parse job ID from output like "Submitted batch job 12345"
     job_id = None
@@ -380,6 +440,9 @@ def submit(
         match = re.search(r"Submitted batch job (\d+)", submit_result.stdout)
         if match:
             job_id = int(match.group(1))
+            logger.info(f"SLURM | job submitted successfully, job_id={job_id}")
+    else:
+        logger.error(f"SLURM | sbatch failed: {submit_result.stderr}")
 
     return SlurmResult(job_id=job_id, ssh_result=submit_result)
 
@@ -412,9 +475,11 @@ def submit_packed(
     import subprocess
 
     repo_path_resolved = repo_path or "."
+    logger.info(f"SLURM | packing code from {repo_path_resolved} (dirty={dirty})")
 
     if dirty:
         # Capture working tree state without stashing
+        logger.debug("SLURM | capturing dirty working tree via git stash create")
         stash_result = subprocess.run(
             ["git", "stash", "create"],
             cwd=repo_path_resolved,
@@ -425,7 +490,9 @@ def submit_packed(
     else:
         ref = "HEAD"
 
+    logger.debug(f"SLURM | creating snapshot at ref={ref}")
     tarball = snapshot(repo_path_resolved, ref)
+    logger.debug(f"SLURM | tarball size: {len(tarball)} bytes")
     packed_job = job.pack(tarball)
 
     return submit(packed_job, host, script_path, timeout)
@@ -462,6 +529,7 @@ def status(job_id: int, host: str, timeout: float | None = None) -> StatusResult
     Returns:
         StatusResult with parsed JobStatus
     """
+    logger.debug(f"SLURM | checking status of job {job_id} on {host}")
     # Use parseable format with pipe delimiter
     result = run(
         f"squeue -j {job_id} -o '%i|%P|%j|%u|%t|%M|%D|%R' --noheader",
@@ -472,6 +540,8 @@ def status(job_id: int, host: str, timeout: float | None = None) -> StatusResult
     job = None
     if result.ok and result.stdout.strip():
         job = _parse_squeue_line(result.stdout.strip())
+        if job:
+            logger.debug(f"SLURM | job {job_id} state={job.state}, nodes={job.nodes}")
 
     return StatusResult(job=job, ssh_result=result)
 
@@ -487,7 +557,13 @@ def cancel(job_id: int, host: str, timeout: float | None = None) -> RunResult:
     Returns:
         RunResult from scancel
     """
-    return run(f"scancel {job_id}", host, timeout=timeout)
+    logger.info(f"SLURM | cancelling job {job_id} on {host}")
+    result = run(f"scancel {job_id}", host, timeout=timeout)
+    if result.ok:
+        logger.debug(f"SLURM | job {job_id} cancelled successfully")
+    else:
+        logger.warning(f"SLURM | failed to cancel job {job_id}: {result.stderr}")
+    return result
 
 
 def job_info(job_id: int, host: str, timeout: float | None = None) -> JobInfoResult:
@@ -501,6 +577,7 @@ def job_info(job_id: int, host: str, timeout: float | None = None) -> JobInfoRes
     Returns:
         JobInfoResult with parsed job steps
     """
+    logger.debug(f"SLURM | fetching job info for {job_id} from {host}")
     result = run(
         f"sacct -j {job_id} --format=JobID,JobName,Partition,State,ExitCode,Elapsed,MaxRSS,NodeList -P --noheader",
         host,
@@ -524,6 +601,7 @@ def job_info(job_id: int, host: str, timeout: float | None = None) -> JobInfoRes
                         nodelist=parts[7],
                     )
                 )
+        logger.debug(f"SLURM | job {job_id} has {len(steps)} steps")
 
     return JobInfoResult(steps=steps, ssh_result=result)
 
@@ -541,6 +619,7 @@ def queue(
     Returns:
         QueueResult with list of parsed JobStatus
     """
+    logger.debug(f"SLURM | querying queue on {host} (user={user})")
     cmd = "squeue -o '%i|%P|%j|%u|%t|%M|%D|%R' --noheader"
     if user:
         cmd += f" -u {user}"
@@ -553,6 +632,7 @@ def queue(
             job = _parse_squeue_line(line)
             if job:
                 jobs.append(job)
+        logger.debug(f"SLURM | found {len(jobs)} jobs in queue")
 
     return QueueResult(jobs=jobs, ssh_result=result)
 
@@ -622,6 +702,7 @@ def partitions(host: str, timeout: float | None = None) -> list[PartitionInfo]:
     Returns:
         List of PartitionInfo
     """
+    logger.debug(f"SLURM | listing partitions on {host}")
     result = run(
         "sinfo -o '%P|%a|%D|%C|%N' --noheader",
         host,
@@ -648,6 +729,7 @@ def partitions(host: str, timeout: float | None = None) -> list[PartitionInfo]:
                         nodes=nodes,
                     )
                 )
+        logger.debug(f"SLURM | found {len(parts)} partitions")
 
     return parts
 
@@ -665,6 +747,7 @@ def partition_nodes(
     Returns:
         List of node names
     """
+    logger.debug(f"SLURM | listing nodes in partition '{partition}' on {host}")
     result = run(
         f"sinfo -p {partition} -N -h -o '%n'",
         host,
@@ -672,9 +755,12 @@ def partition_nodes(
     )
 
     if not result.ok:
+        logger.warning(f"SLURM | failed to list partition nodes: {result.stderr}")
         return []
 
-    return [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    nodes = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
+    logger.debug(f"SLURM | partition '{partition}' has {len(nodes)} nodes")
+    return nodes
 
 
 def _expand_nodelist(nodelist: str) -> list[str]:
@@ -760,9 +846,11 @@ def node_info(
     """
     import re
 
+    logger.debug(f"SLURM | fetching node info for '{nodename}' on {host}")
     result = run(f"scontrol show node {nodename}", host, timeout=timeout)
 
     if not result.ok or "not found" in result.stdout.lower():
+        logger.debug(f"SLURM | node '{nodename}' not found")
         return None
 
     output = result.stdout
@@ -811,6 +899,7 @@ def nodes_info(
     """
     import concurrent.futures
 
+    logger.debug(f"SLURM | fetching info for {len(nodenames)} nodes on {host}")
     results: dict[str, NodeInfo] = {}
 
     with concurrent.futures.ThreadPoolExecutor(
@@ -825,9 +914,10 @@ def nodes_info(
                 info = future.result()
                 if info:
                     results[name] = info
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"SLURM | failed to get info for node '{name}': {e}")
 
+    logger.debug(f"SLURM | retrieved info for {len(results)}/{len(nodenames)} nodes")
     return results
 
 
@@ -845,8 +935,12 @@ def available_gpus(
     Returns:
         List of (nodename, available_gpu_count) tuples, sorted by availability descending
     """
+    logger.debug(
+        f"SLURM | checking available GPUs in partition '{partition}' (type={gpu_type})"
+    )
     node_names = partition_nodes(partition, host, timeout=timeout)
     if not node_names:
+        logger.debug(f"SLURM | no nodes found in partition '{partition}'")
         return []
 
     infos = nodes_info(node_names, host, timeout=timeout)
@@ -858,6 +952,10 @@ def available_gpus(
             if gpu_type is None or gpu.type == gpu_type:
                 available.append((name, gpu.available))
 
+    total_available = sum(count for _, count in available)
+    logger.debug(
+        f"SLURM | found {total_available} available GPUs across {len(available)} nodes"
+    )
     return sorted(available, key=lambda x: x[1], reverse=True)
 
 
@@ -877,6 +975,9 @@ def wait(
     """
     import time
 
+    logger.info(
+        f"SLURM | waiting for job {job_id} to complete (poll_interval={poll_interval}s)"
+    )
     start = time.time()
 
     while True:
@@ -884,13 +985,24 @@ def wait(
         st = status(job_id, host)
         if st.job is None:
             # Job not in queue, check sacct for completion info
+            logger.info(
+                f"SLURM | job {job_id} no longer in queue, fetching final status"
+            )
             return job_info(job_id, host)
 
         if st.job.is_failed:
+            logger.warning(f"SLURM | job {job_id} failed with state={st.job.state}")
             return job_info(job_id, host)
 
         # Check timeout
         if timeout and (time.time() - start) > timeout:
+            elapsed = time.time() - start
+            logger.warning(
+                f"SLURM | wait timed out after {elapsed:.1f}s for job {job_id}"
+            )
             return job_info(job_id, host)
 
+        logger.debug(
+            f"SLURM | job {job_id} state={st.job.state}, waiting {poll_interval}s..."
+        )
         time.sleep(poll_interval)

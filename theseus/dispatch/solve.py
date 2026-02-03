@@ -6,6 +6,8 @@ Given a HardwareRequest and DispatchConfig, find the best allocation.
 
 from dataclasses import dataclass
 
+from loguru import logger
+
 from theseus.base.hardware import ClusterMachine, HardwareRequest, HardwareResult
 from theseus.dispatch.config import (
     DispatchConfig,
@@ -48,6 +50,7 @@ def solve(
     Returns:
         SolveResult with allocation details, or None if unsatisfiable
     """
+    logger.info(f"SOLVE | solving for {request.min_chips}x {request.chip.name}")
     inventory = RemoteInventory(config)
     chip_name = request.chip.name
 
@@ -57,19 +60,28 @@ def solve(
         if host not in ordered_hosts:
             ordered_hosts.append(host)
 
+    logger.debug(f"SOLVE | checking hosts in order: {ordered_hosts}")
+
     # Track SLURM candidates for fallback (with their availability)
     slurm_fallback: list[tuple[str, SlurmHostConfig, int, str | None]] = []
 
     # Check all hosts in priority order
     for host_name in ordered_hosts:
         if host_name not in config.hosts:
+            logger.debug(f"SOLVE | skipping unknown host '{host_name}'")
             continue
 
         host_cfg = config.hosts[host_name]
 
         if isinstance(host_cfg, PlainHostConfig):
             available = host_cfg.chips.get(chip_name, 0)
+            logger.debug(
+                f"SOLVE | plain host '{host_name}': {available} {chip_name} available"
+            )
             if available >= request.min_chips:
+                logger.info(
+                    f"SOLVE | selected plain host '{host_name}' with {available} chips"
+                )
                 cluster = inventory.get_cluster(host_cfg.cluster)
                 machine = ClusterMachine(
                     name=host_name,
@@ -99,6 +111,9 @@ def solve(
                 partition = host_cfg.partitions[0].name
 
             if check_availability:
+                logger.debug(
+                    f"SOLVE | checking SLURM availability on '{host_name}' partition='{partition}'"
+                )
                 available = _check_slurm_availability(
                     host_cfg.ssh, partition, chip_name, config.gres_mapping, timeout
                 )
@@ -106,10 +121,17 @@ def solve(
                 # Assume SLURM can satisfy (let scheduler handle it)
                 available = request.min_chips
 
+            logger.debug(
+                f"SOLVE | SLURM host '{host_name}': {available} chips available (partition={partition})"
+            )
+
             # Track for fallback regardless of availability
             slurm_fallback.append((host_name, host_cfg, available, partition))
 
             if available >= request.min_chips:
+                logger.info(
+                    f"SOLVE | selected SLURM host '{host_name}' partition='{partition}'"
+                )
                 cluster = inventory.get_cluster(host_cfg.cluster)
                 machine = ClusterMachine(
                     name=host_name,
@@ -133,6 +155,9 @@ def solve(
         slurm_fallback.sort(key=lambda x: x[2], reverse=True)
         host_name, host_cfg, available, partition = slurm_fallback[0]
 
+        logger.warning(
+            f"SOLVE | no host satisfies request, falling back to SLURM '{host_name}' with {available} chips"
+        )
         cluster = inventory.get_cluster(host_cfg.cluster)
         machine = ClusterMachine(
             name=host_name,
@@ -152,6 +177,7 @@ def solve(
         )
 
     # No solution found
+    logger.error(f"SOLVE | no hosts available for {request.min_chips}x {chip_name}")
     return SolveResult(
         result=None,
         host_name=None,
@@ -175,17 +201,24 @@ def _check_slurm_availability(
     from theseus.dispatch.slurm import available_gpus
 
     if partition is None:
+        logger.debug("SOLVE | no partition specified, returning 0 availability")
         return 0
 
     try:
         # Only use user-specified gres mapping
         gpu_type = gres_mapping.get(chip_name)
+        logger.debug(
+            f"SOLVE | querying SLURM availability: partition={partition}, gpu_type={gpu_type}"
+        )
         available = available_gpus(
             partition, ssh_alias, gpu_type=gpu_type, timeout=timeout
         )
-        return sum(count for _, count in available)
-    except Exception:
+        total = sum(count for _, count in available)
+        logger.debug(f"SOLVE | SLURM availability: {total} GPUs")
+        return total
+    except Exception as e:
         # On error, return 0 (unavailable)
+        logger.warning(f"SOLVE | failed to check SLURM availability: {e}")
         return 0
 
 
@@ -198,6 +231,9 @@ def solve_or_raise(
     """Like solve(), but raises if no solution found."""
     result = solve(request, config, check_availability, timeout)
     if result.result is None:
+        logger.error(
+            f"SOLVE | cannot satisfy request: {request.min_chips}x {request.chip.name}"
+        )
         raise RuntimeError(
             f"Cannot satisfy hardware request: {request.min_chips}x {request.chip.name}. "
             f"No hosts available in config."
