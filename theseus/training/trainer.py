@@ -716,12 +716,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     val_metrics.update(metrics)
                 if self.args.evaluate:
                     eval_metrics = self.inference.evaluate()
-                    eval_score = sum(eval_metrics.values()) / len(eval_metrics)
-                    if score is None:
-                        score = eval_score
-                    else:
-                        score = (score + eval_score) / 2
-                    val_metrics.update(eval_metrics)
+                    if len(eval_metrics) > 0:
+                        eval_score = sum(eval_metrics.values()) / len(eval_metrics)
+                        if score is None:
+                            score = eval_score
+                        else:
+                            score = (score + eval_score) / 2
+                        val_metrics.update(eval_metrics)
                 if score is None:
                     score = float("-inf")
 

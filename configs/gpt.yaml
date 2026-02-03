@@ -22,7 +22,7 @@ training:
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true
-  evaluate: true
+  evaluate: false
   dataset:
   - name: fineweb
     rate: 1.0
