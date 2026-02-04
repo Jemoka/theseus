@@ -1,0 +1,40 @@
+{#
+Stat card component - displays a single metric.
+
+Usage:
+    {% include "components/stat_card.html" with label="Running" value=stats.running color="blue" %}
+
+Props:
+    label: string - metric label
+    value: number/string - metric value
+    color: string - tailwind color name (blue, green, red, yellow, gray)
+    icon: string (optional) - SVG path for icon
+
+TODO:
+- Add trend indicator (up/down arrow with percentage)
+- Add click-to-filter functionality
+- Add sparkline chart
+#}
+<div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg">
+    <div class="px-4 py-5 sm:p-6">
+        <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">
+            {{ label }}
+        </dt>
+        <dd class="mt-1 text-3xl font-semibold
+            {% if color == 'blue' %}text-blue-600 dark:text-blue-400
+            {% elif color == 'green' %}text-green-600 dark:text-green-400
+            {% elif color == 'red' %}text-red-600 dark:text-red-400
+            {% elif color == 'yellow' %}text-yellow-600 dark:text-yellow-400
+            {% else %}text-gray-900 dark:text-white{% endif %}">
+            {{ value }}
+        </dd>
+
+        <!-- TODO: Add trend/change indicator -->
+        <!--
+        <div class="mt-2 flex items-center text-sm text-green-600">
+            <svg class="h-4 w-4">...</svg>
+            <span>+12% from yesterday</span>
+        </div>
+        -->
+    </div>
+</div>

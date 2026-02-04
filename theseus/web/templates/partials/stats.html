@@ -1,0 +1,10 @@
+{#
+Stats partial - for HTMX polling updates on dashboard.
+
+This is rendered inside the stats grid on the dashboard.
+#}
+{% include "components/stat_card.html" with label="Running" value=stats.running color="blue" %}
+{% include "components/stat_card.html" with label="Completed" value=stats.completed color="green" %}
+{% include "components/stat_card.html" with label="Failed" value=stats.failed color="red" %}
+{% include "components/stat_card.html" with label="Preempted" value=stats.preempted color="yellow" %}
+{% include "components/stat_card.html" with label="Checkpoints" value=stats.total_checkpoints color="gray" %}

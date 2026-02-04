@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+
+{% block title %}Checkpoints - Theseus{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="sm:flex sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Checkpoints</h1>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                Browse saved model checkpoints
+            </p>
+        </div>
+
+        <!-- Summary -->
+        <div class="mt-4 sm:mt-0 text-sm text-gray-500 dark:text-gray-400">
+            {{ checkpoints | length }} checkpoints
+            {% if total_size %}
+            &middot; {{ total_size | format_size }} total
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-white dark:bg-gray-800 shadow rounded-lg p-4">
+        <form class="flex flex-wrap gap-4" method="get">
+            <!-- Project filter -->
+            <div class="flex-1 min-w-[150px]">
+                <label for="project" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Project
+                </label>
+                <select name="project" id="project"
+                        class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        onchange="this.form.submit()">
+                    <option value="">All Projects</option>
+                    {% for p in projects %}
+                    <option value="{{ p.name }}" {% if current_project == p.name %}selected{% endif %}>
+                        {{ p.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <!-- Group filter -->
+            <div class="flex-1 min-w-[150px]">
+                <label for="group" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Group
+                </label>
+                <input type="text" name="group" id="group" value="{{ current_group or '' }}"
+                       placeholder="Filter by group..."
+                       class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+            </div>
+
+            <!-- Job name filter -->
+            <div class="flex-1 min-w-[150px]">
+                <label for="job_name" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Job Name
+                </label>
+                <input type="text" name="job_name" id="job_name" value="{{ current_job_name or '' }}"
+                       placeholder="Filter by job name..."
+                       class="block w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm">
+            </div>
+
+            <!-- Submit -->
+            <div class="flex items-end">
+                <button type="submit"
+                        class="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Filter
+                </button>
+            </div>
+
+            <!-- Clear -->
+            {% if current_project or current_group or current_job_name %}
+            <div class="flex items-end">
+                <a href="/checkpoints"
+                   class="px-4 py-2 text-gray-600 dark:text-gray-300 text-sm font-medium hover:text-gray-900 dark:hover:text-white">
+                    Clear
+                </a>
+            </div>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Checkpoints Table -->
+    {% if checkpoints %}
+    <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
+        <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+            <thead class="bg-gray-50 dark:bg-gray-900">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Checkpoint
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Job
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Project / Group
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Created
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Size
+                    </th>
+                    <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Contents
+                    </th>
+                    <th scope="col" class="relative px-6 py-3">
+                        <span class="sr-only">Actions</span>
+                    </th>
+                </tr>
+            </thead>
+            <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                {% for ckpt in checkpoints %}
+                {% include "components/checkpoint_row.html" with checkpoint=ckpt show_job=true %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% else %}
+    <div class="text-center py-12">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/>
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">No checkpoints found</h3>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            {% if current_project or current_group or current_job_name %}
+            Try adjusting your filters
+            {% else %}
+            No checkpoints have been saved yet
+            {% endif %}
+        </p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

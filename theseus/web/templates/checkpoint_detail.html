@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}{{ checkpoint.suffix }} - {{ checkpoint.job_name }} - Theseus{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Breadcrumb -->
+    <nav class="flex" aria-label="Breadcrumb">
+        <ol class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
+            <li><a href="/checkpoints" class="hover:text-gray-700 dark:hover:text-gray-200">Checkpoints</a></li>
+            <li>/</li>
+            <li><a href="/checkpoints?project={{ checkpoint.project }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.project }}</a></li>
+            <li>/</li>
+            <li><a href="/checkpoints?project={{ checkpoint.project }}&group={{ checkpoint.group }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.group }}</a></li>
+            <li>/</li>
+            <li><a href="/checkpoints?job_name={{ checkpoint.job_name }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.job_name }}</a></li>
+            <li>/</li>
+            <li class="text-gray-900 dark:text-white font-medium">{{ checkpoint.suffix }}</li>
+        </ol>
+    </nav>
+
+    <!-- Header -->
+    <div class="sm:flex sm:items-center sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ checkpoint.suffix }}</h1>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                Checkpoint for {{ checkpoint.job_name }}
+            </p>
+        </div>
+
+        <!-- Actions -->
+        <div class="mt-4 sm:mt-0 flex space-x-3">
+            <!-- TODO: Add action buttons -->
+            <!--
+            <button class="...">Load</button>
+            <button class="...">Delete</button>
+            -->
+        </div>
+    </div>
+
+    <!-- Info Cards -->
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <!-- Path -->
+        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5 sm:col-span-2">
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Path</dt>
+            <dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white break-all">{{ checkpoint.path }}</dd>
+        </div>
+
+        <!-- Created -->
+        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Created</dt>
+            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
+                {{ checkpoint.created[:19] if checkpoint.created else "-" }}
+            </dd>
+        </div>
+
+        <!-- Size -->
+        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
+            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Size</dt>
+            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
+                {% if checkpoint.size_bytes %}
+                {{ checkpoint.size_bytes | format_size }}
+                {% else %}
+                -
+                {% endif %}
+            </dd>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <!-- Config -->
+        {% if config %}
+        <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">Config</h3>
+            </div>
+            <div class="px-4 py-3 max-h-96 overflow-auto">
+                <pre class="text-xs font-mono text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{{ config | tojson(indent=2) }}</pre>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Job Spec -->
+        {% if job_spec %}
+        <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">Job Spec</h3>
+            </div>
+            <div class="px-4 py-3 max-h-96 overflow-auto">
+                <pre class="text-xs font-mono text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{{ job_spec | tojson(indent=2) }}</pre>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Other Checkpoints -->
+    {% if other_checkpoints %}
+    <div class="space-y-4">
+        <h2 class="text-lg font-medium text-gray-900 dark:text-white">Other Checkpoints for {{ checkpoint.job_name }}</h2>
+
+        <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead class="bg-gray-50 dark:bg-gray-900">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Checkpoint
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Project / Group
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Created
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Size
+                        </th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Contents
+                        </th>
+                        <th scope="col" class="relative px-6 py-3">
+                            <span class="sr-only">Actions</span>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                    {% for ckpt in other_checkpoints %}
+                    {% include "components/checkpoint_row.html" with checkpoint=ckpt %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

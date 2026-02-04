@@ -1,0 +1,16 @@
+{#
+Running jobs partial - for HTMX polling updates.
+
+Shows a grid of currently running job cards.
+#}
+{% if jobs %}
+<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    {% for job in jobs %}
+    {% include "components/job_card.html" with job=job %}
+    {% endfor %}
+</div>
+{% else %}
+<div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 text-center text-gray-500 dark:text-gray-400">
+    <p>No jobs currently running</p>
+</div>
+{% endif %}

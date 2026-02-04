@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Not Found - Theseus{% endblock %}
+
+{% block content %}
+<div class="text-center py-16">
+    <h1 class="text-4xl font-bold text-gray-900 dark:text-white">404</h1>
+    <p class="mt-2 text-lg text-gray-500 dark:text-gray-400">
+        {{ message or "Page not found" }}
+    </p>
+    <div class="mt-6">
+        <a href="/" class="text-blue-600 dark:text-blue-400 hover:underline">
+            Go back to dashboard
+        </a>
+    </div>
+</div>
+{% endblock %}

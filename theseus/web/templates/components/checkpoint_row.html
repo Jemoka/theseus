@@ -1,0 +1,77 @@
+{#
+Checkpoint row component - displays a checkpoint in a table or list.
+
+Usage:
+    {% include "components/checkpoint_row.html" with checkpoint=ckpt %}
+
+Props:
+    checkpoint: CheckpointInfo object
+    show_job: bool (optional) - show job name column
+
+TODO:
+- Add size formatting filter
+- Add delete/download actions
+- Add preview of config on hover
+#}
+<tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
+    <!-- Suffix (checkpoint name) -->
+    <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
+        <a href="/checkpoints/{{ checkpoint.project }}/{{ checkpoint.group }}/{{ checkpoint.job_name }}/{{ checkpoint.suffix }}"
+           class="font-medium text-blue-600 dark:text-blue-400 hover:underline">
+            {{ checkpoint.suffix }}
+        </a>
+    </td>
+
+    <!-- Job name (optional) -->
+    {% if show_job %}
+    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+        {{ checkpoint.job_name }}
+    </td>
+    {% endif %}
+
+    <!-- Project/Group -->
+    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+        {{ checkpoint.project }} / {{ checkpoint.group }}
+    </td>
+
+    <!-- Created -->
+    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+        {% if checkpoint.created %}
+        {{ checkpoint.created[:19] }}
+        {% else %}
+        -
+        {% endif %}
+    </td>
+
+    <!-- Size -->
+    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+        {% if checkpoint.size_bytes %}
+        {{ checkpoint.size_bytes | format_size }}
+        {% else %}
+        -
+        {% endif %}
+    </td>
+
+    <!-- Indicators -->
+    <td class="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+        {% if checkpoint.has_config %}
+        <span class="inline-flex items-center rounded bg-gray-100 dark:bg-gray-700 px-2 py-0.5 text-xs">
+            config
+        </span>
+        {% endif %}
+        {% if checkpoint.has_job_spec %}
+        <span class="inline-flex items-center rounded bg-gray-100 dark:bg-gray-700 px-2 py-0.5 text-xs">
+            spec
+        </span>
+        {% endif %}
+    </td>
+
+    <!-- Actions -->
+    <td class="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+        <!-- TODO: Add actions dropdown -->
+        <a href="/checkpoints/{{ checkpoint.project }}/{{ checkpoint.group }}/{{ checkpoint.job_name }}/{{ checkpoint.suffix }}"
+           class="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-200">
+            View
+        </a>
+    </td>
+</tr>
