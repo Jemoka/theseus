@@ -386,6 +386,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             {"params": params},
             x,
             y,
+            padding_mask=padding_mask,
             deterministic=deterministic,
             rngs={"dropout": dropout_key} if dropout_key is not None else {},
         )

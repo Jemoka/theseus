@@ -32,7 +32,7 @@ class MemmapDataset(Dataset):
         self.has_val = (path / "val.bin").exists()
 
         # Buffer state for cache-optimal loading (per split)
-        self._tokens_per_block = BYTES_PER_BLOCK // 2  # uint16 = 2 bytes
+        self._tokens_per_block = BYTES_PER_BLOCK // 4  # uint32 = 4 bytes
         self._train_buffer: Optional[np.ndarray] = None
         self._train_sample_indices: Optional[np.ndarray] = None
         self._train_sample_ptr = 0
@@ -47,13 +47,13 @@ class MemmapDataset(Dataset):
         if split == "train":
             if self.cache_train is None:
                 self.cache_train = np.memmap(
-                    os.path.join(self.path, "train.bin"), dtype=np.uint16, mode="r"
+                    os.path.join(self.path, "train.bin"), dtype=np.uint32, mode="r"
                 )
             result = self.cache_train
         else:
             if self.cache_val is None:
                 self.cache_val = np.memmap(
-                    os.path.join(self.path, "val.bin"), dtype=np.uint16, mode="r"
+                    os.path.join(self.path, "val.bin"), dtype=np.uint32, mode="r"
                 )
             result = self.cache_val
         assert result is not None
@@ -62,7 +62,7 @@ class MemmapDataset(Dataset):
     def _refill_buffer(self, data: np.memmap, split: str) -> None:
         """Read next BUFFER_BLOCKS sequentially into buffer, generate shuffled indices."""
         file_tokens = len(data)
-        total_blocks = max(1, (file_tokens * 2) // BYTES_PER_BLOCK)
+        total_blocks = max(1, (file_tokens * 4) // BYTES_PER_BLOCK)
 
         # Get current state for this split
         if split == "train":

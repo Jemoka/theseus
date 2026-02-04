@@ -1,4 +1,4 @@
-# uv run theseus submit 1B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e0 --mem 64G
+# uv run theseus submit 1B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e0 --mem 128G
 
 architecture:
   n_embd: 2048
