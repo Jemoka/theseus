@@ -1,6 +1,8 @@
+# uv run theseus submit test_gpt ./configs/gpt.yaml -p playground --mem 64G
+
 architecture:
-  n_embd: 2048
-  n_layers: 32
+  n_embd: 128
+  n_layers: 8
   bias: true
   dropout: 0.0
   n_head: 16
@@ -17,7 +19,7 @@ optimization:
   lr: 0.0003
 training:
   batch_size: 512
-  per_device_batch_size: 8
+  per_device_batch_size: 4
   tokens: 1000000000
   warmup_pct: 0.01
   decay_pct: 0.1
@@ -36,5 +38,5 @@ logging:
   wandb: false
 job: gpt/train/pretrain
 request:
-  chip: h200
-  min_chips: 2
+  chip: a6000
+  min_chips: 1
