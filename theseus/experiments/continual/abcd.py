@@ -1,6 +1,7 @@
 import optax
 import wandb
 import numpy as np
+from pathlib import Path
 
 from typing import List, Tuple
 from loguru import logger
@@ -161,6 +162,8 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
                 dl_idx,
                 current_ntok,
             )
+            self.save(Path(f"boundary_{self._current_dl_idx}_{dl_idx}"))
+
             if self.main_process():
                 wandb.log(
                     {
