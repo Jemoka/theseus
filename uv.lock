@@ -2923,20 +2923,14 @@ dependencies = [
 
 [package.dev-dependencies]
 all = [
-    { name = "aiofiles" },
     { name = "coverage" },
     { name = "coveralls" },
     { name = "datasets" },
-    { name = "fastapi" },
-    { name = "jinja2" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "pyyaml" },
     { name = "ruff" },
-    { name = "sse-starlette" },
-    { name = "uvicorn", extra = ["standard"] },
     { name = "wikipedia" },
 ]
 cpu = [
@@ -2998,20 +2992,14 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 all = [
-    { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "coverage", specifier = ">=7.9.1" },
     { name = "coveralls", specifier = ">=4.0.1" },
     { name = "datasets", specifier = ">=4.5.0" },
-    { name = "fastapi", specifier = ">=0.100.0" },
-    { name = "jinja2", specifier = ">=3.1.0" },
     { name = "mypy", specifier = ">=1.16.1" },
     { name = "pre-commit", specifier = ">=4.2.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
-    { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "ruff", specifier = ">=0.12.1" },
-    { name = "sse-starlette", specifier = ">=1.6.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
     { name = "wikipedia", specifier = ">=1.4.0" },
 ]
 cpu = [{ name = "jax", specifier = ">=0.4.23" }]

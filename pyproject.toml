@@ -65,7 +65,6 @@ web = [
 all = [
     {include-group = "dev"},
     {include-group = "data"},
-    {include-group = "web"},
 ]
 
 [tool.uv]
