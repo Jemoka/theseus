@@ -323,11 +323,9 @@ __BOOTSTRAP_PY_EOF__
         # UV sync command with optional groups
         if self.uv_groups:
             groups_flags = " ".join(f"--group {g}" for g in self.uv_groups)
-            uv_sync_cmd = (
-                f"uv sync --frozen {groups_flags} 2>/dev/null || uv sync {groups_flags}"
-            )
+            uv_sync_cmd = f"uv sync --frozen {groups_flags} || uv sync {groups_flags}"
         else:
-            uv_sync_cmd = "uv sync --frozen 2>/dev/null || uv sync"
+            uv_sync_cmd = "uv sync --frozen || uv sync"
         script = script.replace("__UV_SYNC__", uv_sync_cmd)
 
         # Setup commands
