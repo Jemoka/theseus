@@ -51,7 +51,7 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         memory=int(48 * 1024**3),
     ),
     "ada6000": Chip(
-        name="a6000",
+        name="ada6000",
         display_name="Nvidia RTX A6000",
         memory=int(48 * 1024**3),
     ),
