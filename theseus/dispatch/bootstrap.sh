@@ -162,6 +162,7 @@ echo "[bootstrap] working directory: $(pwd)"
 # Sync dependencies with uv (reads pyproject.toml)
 if [[ -f "pyproject.toml" ]]; then
     echo "[bootstrap] syncing dependencies with uv..."
+    uv python install 3.11 --force # because otherwise it freezes?
     __UV_SYNC__
 fi
 
