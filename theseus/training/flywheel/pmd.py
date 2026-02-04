@@ -92,11 +92,16 @@ class MemmapDataset(Dataset):
 
         # Debug: Check for empty or suspiciously small buffer
         if len(buffer) < self.block_size + 1:
-            import warnings
+            from loguru import logger
 
-            warnings.warn(
-                f"Buffer too small in {split} split: {len(buffer)} tokens. "
-                f"start_token={start_token}, end_token={end_token}, file_tokens={file_tokens}"
+            logger.debug(
+                "BUFFER | WARNING: Buffer too small in {} split: {} tokens. "
+                "start_token={}, end_token={}, file_tokens={}",
+                split,
+                len(buffer),
+                start_token,
+                end_token,
+                file_tokens,
             )
 
         # Generate shuffled sample indices within buffer
@@ -115,19 +120,35 @@ class MemmapDataset(Dataset):
             self._train_next_block = (start_block + blocks_to_read) % total_blocks
 
             # Log buffer refresh for debugging
-            import sys
+            from loguru import logger
 
-            print(
-                f"[BUFFER REFILL] train: block {start_block}->{start_block + blocks_to_read}, "
-                f"tokens {start_token}->{end_token} ({end_token - start_token} tokens), "
-                f"next_block will be {self._train_next_block}",
-                file=sys.stderr,
+            logger.debug(
+                "BUFFER | REFILL train: block {}->{}, tokens {}->{} ({} tokens), next_block {}",
+                start_block,
+                start_block + blocks_to_read,
+                start_token,
+                end_token,
+                end_token - start_token,
+                self._train_next_block,
             )
         else:
             self._val_buffer = buffer
             self._val_sample_indices = sample_indices
             self._val_sample_ptr = 0
             self._val_next_block = (start_block + blocks_to_read) % total_blocks
+
+            # Log buffer refresh for debugging
+            from loguru import logger
+
+            logger.debug(
+                "BUFFER | REFILL val: block {}->{}, tokens {}->{} ({} tokens), next_block {}",
+                start_block,
+                start_block + blocks_to_read,
+                start_token,
+                end_token,
+                end_token - start_token,
+                self._val_next_block,
+            )
 
     def get_batch(
         self,
@@ -173,13 +194,15 @@ class MemmapDataset(Dataset):
             or sample_indices is None
             or sample_ptr + batch_size > len(sample_indices)
         ):
-            import sys
-
             if buffer is not None and sample_indices is not None:
-                print(
-                    f"[BUFFER EXHAUSTED] {split}: sampled {sample_ptr}/{len(sample_indices)} positions, "
-                    f"need {batch_size} more",
-                    file=sys.stderr,
+                from loguru import logger
+
+                logger.debug(
+                    "BUFFER | EXHAUSTED {}: sampled {}/{} positions, need {} more",
+                    split,
+                    sample_ptr,
+                    len(sample_indices),
+                    batch_size,
                 )
             self._refill_buffer(data, split)
             if split == "train":
@@ -211,11 +234,17 @@ class MemmapDataset(Dataset):
 
             # Check if we got full sequences
             if len(x_seq) < block_size or len(y_seq) < block_size:
-                import warnings
+                from loguru import logger
 
-                warnings.warn(
-                    f"Incomplete sequence in {split}: x_len={len(x_seq)}, y_len={len(y_seq)}, "
-                    f"block_size={block_size}, buffer_len={len(buffer)}, index={i}"
+                logger.debug(
+                    "BUFFER | WARNING: Incomplete sequence in {}: x_len={}, y_len={}, "
+                    "block_size={}, buffer_len={}, index={}",
+                    split,
+                    len(x_seq),
+                    len(y_seq),
+                    block_size,
+                    len(buffer),
+                    i,
                 )
                 # Pad with zeros if necessary
                 x_seq = np.pad(x_seq, (0, block_size - len(x_seq)), constant_values=0)
