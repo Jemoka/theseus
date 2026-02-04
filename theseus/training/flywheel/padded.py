@@ -58,7 +58,7 @@ class PaddedDataset(Dataset):
             else:
                 data = np.memmap(
                     os.path.join(data_dir, "train.bin"),
-                    dtype=np.uint16,
+                    dtype=np.uint32,
                     mode="r",
                     shape=shape,
                 )
@@ -77,7 +77,7 @@ class PaddedDataset(Dataset):
             else:
                 data = np.memmap(
                     os.path.join(data_dir, "val.bin"),
-                    dtype=np.uint16,
+                    dtype=np.uint32,
                     mode="r",
                     shape=shape,
                 )
@@ -95,11 +95,20 @@ class PaddedDataset(Dataset):
         data = data[:, -(block_size + 1) :]  # type: ignore
         mask = mask[:, -(block_size + 1) :]  # type: ignore
 
-        if deterministic_key:
-            ix = np.arange(
-                min(deterministic_key, data.shape[0] - batch_size),
-                min(deterministic_key + batch_size, data.shape[0] - batch_size),
-            )
+        if deterministic_key is not None:
+            # Deterministic sampling: use modulo to wrap around dataset
+            start_idx = (deterministic_key * batch_size) % (data.shape[0] - batch_size)
+            end_idx = start_idx + batch_size
+            if end_idx <= data.shape[0]:
+                ix = np.arange(start_idx, end_idx)
+            else:
+                # Wrap around to beginning if we overflow
+                ix = np.concatenate(
+                    [
+                        np.arange(start_idx, data.shape[0]),
+                        np.arange(0, end_idx - data.shape[0]),
+                    ]
+                )
         else:
             ix = np.random.randint(0, len(data), size=(batch_size,))
 
