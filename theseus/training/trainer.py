@@ -301,6 +301,10 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             )
             if self.args.wandb:
                 self.spec.id = wandb.run.id
+                logger.info(
+                    f"WANDB | project={wandb.run.project} run_id={wandb.run.id} "
+                    f"run_name={wandb.run.name} url={wandb.run.get_url()}"
+                )
 
     def _init_data(self, spec: ExecutionSpec) -> None:
         """Initialize dataset strategy and data loaders."""
