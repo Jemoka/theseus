@@ -4,6 +4,7 @@ import numpy as np
 
 from typing import List, Tuple
 from loguru import logger
+from jax.experimental import multihost_utils
 
 from dataclasses import dataclass
 from theseus.config import field
@@ -142,12 +143,22 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
 
         # Log dataset switch if the index changed
         if dl_idx != self._current_dl_idx:
-            dataset_names = [s.name for s in self.args.datasets[dl_idx]]
+            multihost_utils.sync_global_devices("eval_barrier:start")
+            self.inference.state = self.state
+            eval_metrics = self.inference.evaluate()
+            multihost_utils.sync_global_devices("eval_barrier:end")
+
+            if self.main_process():
+                logger.info("EVAL | {}", eval_metrics)
+                wandb.log(
+                    eval_metrics,
+                    step=(self.global_step_counter_ // self.accumulate_steps),
+                )
+
             logger.info(
-                "DATASET | switching from dataset {} to {} (datasets: {}) at {} tokens",
+                "DATASET | switching from dataset {} to {} at {} tokens",
                 self._current_dl_idx,
                 dl_idx,
-                dataset_names,
                 current_ntok,
             )
             if self.main_process():

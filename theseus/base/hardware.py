@@ -55,6 +55,12 @@ class Cluster(BaseModel):
             data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
 
+    @property
+    def status_file(self) -> Path:
+        # make directory if not exist
+        status_file = Path(self.root_dir) / "status.theseus"
+        return status_file
+
 
 class ClusterMachine(BaseModel):
     name: str
