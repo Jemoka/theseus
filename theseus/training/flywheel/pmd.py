@@ -14,7 +14,7 @@ from theseus.base.job import ExecutionSpec
 from theseus.training.flywheel.strategy import Dataset
 
 BYTES_PER_BLOCK = 4 * 1024 * 1024  # 4MB block size
-BUFFER_BLOCKS = 4  # Number of blocks to buffer (16MB total)
+BUFFER_BLOCKS = 64  # Number of blocks to buffer (256MB total, ~64M tokens)
 
 
 class MemmapDataset(Dataset):
@@ -62,7 +62,7 @@ class MemmapDataset(Dataset):
     def _refill_buffer(self, data: np.memmap, split: str) -> None:
         """Read next BUFFER_BLOCKS sequentially into buffer, generate shuffled indices."""
         file_tokens = len(data)
-        total_blocks = max(1, (file_tokens * 4) // BYTES_PER_BLOCK)
+        total_blocks = max(1, file_tokens // self._tokens_per_block)
 
         # Get current state for this split
         if split == "train":
@@ -80,8 +80,9 @@ class MemmapDataset(Dataset):
             start_token + blocks_to_read * self._tokens_per_block, file_tokens
         )
 
-        # Handle wrap-around at end of file
-        if end_token <= start_token + self.block_size:
+        # Handle wrap-around at end of file - check if we don't have enough tokens for a full buffer
+        if end_token - start_token < self.block_size + 1:
+            # Wrap to beginning when we can't get even one valid sample
             start_token = 0
             end_token = min(blocks_to_read * self._tokens_per_block, file_tokens)
             start_block = 0
@@ -89,9 +90,22 @@ class MemmapDataset(Dataset):
         # Single sequential read into buffer
         buffer = np.array(data[start_token:end_token])
 
+        # Debug: Check for empty or suspiciously small buffer
+        if len(buffer) < self.block_size + 1:
+            import warnings
+
+            warnings.warn(
+                f"Buffer too small in {split} split: {len(buffer)} tokens. "
+                f"start_token={start_token}, end_token={end_token}, file_tokens={file_tokens}"
+            )
+
         # Generate shuffled sample indices within buffer
-        num_samples = max(1, len(buffer) - self.block_size - 1)
-        sample_indices = np.random.permutation(num_samples)
+        # To avoid overlap, space samples by at least block_size
+        num_samples = max(1, (len(buffer) - self.block_size - 1) // self.block_size)
+        # Generate non-overlapping positions: 0, block_size, 2*block_size, ...
+        sample_indices = np.arange(0, num_samples * self.block_size, self.block_size)
+        # Shuffle them to randomize order
+        np.random.shuffle(sample_indices)
 
         # Update state for this split
         if split == "train":
@@ -99,6 +113,16 @@ class MemmapDataset(Dataset):
             self._train_sample_indices = sample_indices
             self._train_sample_ptr = 0
             self._train_next_block = (start_block + blocks_to_read) % total_blocks
+
+            # Log buffer refresh for debugging
+            import sys
+
+            print(
+                f"[BUFFER REFILL] train: block {start_block}->{start_block + blocks_to_read}, "
+                f"tokens {start_token}->{end_token} ({end_token - start_token} tokens), "
+                f"next_block will be {self._train_next_block}",
+                file=sys.stderr,
+            )
         else:
             self._val_buffer = buffer
             self._val_sample_indices = sample_indices
@@ -149,6 +173,14 @@ class MemmapDataset(Dataset):
             or sample_indices is None
             or sample_ptr + batch_size > len(sample_indices)
         ):
+            import sys
+
+            if buffer is not None and sample_indices is not None:
+                print(
+                    f"[BUFFER EXHAUSTED] {split}: sampled {sample_ptr}/{len(sample_indices)} positions, "
+                    f"need {batch_size} more",
+                    file=sys.stderr,
+                )
             self._refill_buffer(data, split)
             if split == "train":
                 buffer = self._train_buffer
@@ -171,8 +203,29 @@ class MemmapDataset(Dataset):
             self._val_sample_ptr = sample_ptr + batch_size
 
         # Extract sequences from buffer (all in-memory, no file access)
-        x = np.stack([buffer[i : i + block_size].astype(np.int64) for i in ix])
-        y = np.stack([buffer[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix])
+        x_list = []
+        y_list = []
+        for i in ix:
+            x_seq = buffer[i : i + block_size]
+            y_seq = buffer[i + 1 : i + 1 + block_size]
+
+            # Check if we got full sequences
+            if len(x_seq) < block_size or len(y_seq) < block_size:
+                import warnings
+
+                warnings.warn(
+                    f"Incomplete sequence in {split}: x_len={len(x_seq)}, y_len={len(y_seq)}, "
+                    f"block_size={block_size}, buffer_len={len(buffer)}, index={i}"
+                )
+                # Pad with zeros if necessary
+                x_seq = np.pad(x_seq, (0, block_size - len(x_seq)), constant_values=0)
+                y_seq = np.pad(y_seq, (0, block_size - len(y_seq)), constant_values=0)
+
+            x_list.append(x_seq.astype(np.int64))
+            y_list.append(y_seq.astype(np.int64))
+
+        x = np.stack(x_list)
+        y = np.stack(y_list)
         padding_mask = np.ones_like(x, dtype=np.bool_)
 
         return x, y, padding_mask
