@@ -38,5 +38,5 @@ logging:
   wandb: true
 job: gpt/train/pretrain
 request:
-  chip: a6000
+  chip: ada6000
   min_chips: 1
