@@ -35,7 +35,7 @@ logging:
   report_interval: 32
   checkpoint_interval: 16384
   validation_interval: 2048
-  wandb: false
+  wandb: true
 job: gpt/train/pretrain
 request:
   chip: a6000
