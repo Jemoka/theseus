@@ -12,6 +12,7 @@ The status directory structure (created by bootstrap.py):
 """
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,41 @@ class StatusService:
 
     def __init__(self, status_dir: Path):
         self.status_dir = Path(status_dir)
+
+    def _extract_wandb_url(self, log_path: Path) -> Optional[str]:
+        """Extract W&B URL from output.log file."""
+        if not log_path.exists():
+            return None
+
+        try:
+            # Read the log file and search for W&B URL pattern
+            # W&B typically logs: "wandb: 🚀 View run at https://wandb.ai/{entity}/{project}/runs/{run_id}"
+            with open(log_path, "r", errors="ignore") as f:
+                content = f.read()
+
+            # Look for W&B URL pattern
+            # Match various formats that W&B might use
+            patterns = [
+                r"https://wandb\.ai/[^\s\)]+",  # General W&B URL
+                r"View run at (https://wandb\.ai/[^\s]+)",  # Common W&B log format
+                r"Run page: (https://wandb\.ai/[^\s]+)",  # Alternative format
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, content)
+                if match:
+                    # Extract the URL from the match
+                    url = match.group(1) if match.groups() else match.group(0)
+                    # Clean up any trailing punctuation or ANSI codes
+                    url = re.sub(r"[\x1b\[\d+m]+", "", url)  # Remove ANSI codes
+                    url = url.rstrip(".,;:)")  # Remove trailing punctuation
+                    return url
+
+        except Exception:
+            # Silently handle any file reading errors
+            pass
+
+        return None
 
     def _parse_metadata(self, metadata_path: Path) -> Optional[JobMetadata]:
         """Parse a metadata.json file into JobMetadata."""
@@ -50,6 +86,7 @@ class StatusService:
             except ValueError:
                 status = JobStatus.UNKNOWN
 
+            log_path = metadata_path.parent / "output.log"
             job = JobMetadata(
                 name=data.get("name", "unknown"),
                 project=data.get("project"),
@@ -63,11 +100,11 @@ class StatusService:
                 hardware=hardware,
                 config=data.get("config", {}),
                 metadata_path=str(metadata_path),
-                log_path=str(metadata_path.parent / "output.log"),
+                log_path=str(log_path),
             )
 
-            # TODO: Extract wandb URL from config if available
-            # job.wandb_url = self._extract_wandb_url(job.config)
+            # Extract W&B URL from output.log if available
+            job.wandb_url = self._extract_wandb_url(log_path)
 
             return job
         except Exception:
@@ -216,6 +253,8 @@ class StatusService:
             except Exception:
                 continue
 
+        # Sort by start time (earliest first)
+        recent.sort(key=lambda j: j.start_time)
         return recent[:limit]
 
     def get_dashboard_stats(self) -> DashboardStats:

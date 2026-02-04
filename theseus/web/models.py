@@ -114,20 +114,6 @@ class ClusterInfo(BaseModel):
     results_dir: str
 
 
-class Alert(BaseModel):
-    """Alert for job events."""
-
-    id: str
-    type: str  # "failed", "started", "completed", "preempted"
-    job_name: str
-    project: Optional[str] = None
-    group: Optional[str] = None
-    run_id: str
-    timestamp: str
-    message: str
-    acknowledged: bool = False
-
-
 class DashboardStats(BaseModel):
     """Dashboard summary statistics."""
 
@@ -139,4 +125,3 @@ class DashboardStats(BaseModel):
     total_checkpoints: int = 0
     active_chips: int = 0
     projects: list[ProjectSummary] = Field(default_factory=list)
-    recent_alerts: list[Alert] = Field(default_factory=list)

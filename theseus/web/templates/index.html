@@ -21,48 +21,28 @@
         {% include "partials/stats.html" %}
     </div>
 
-    <!-- Main Grid -->
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <!-- Running Jobs (2/3 width) -->
-        <div class="lg:col-span-2 space-y-4">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-medium text-gray-900 dark:text-white">Running Jobs</h2>
-                <a href="/jobs?status=running" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                    View all
-                </a>
-            </div>
-
-            <div id="running-jobs"
-                 hx-get="/partials/running-jobs"
-                 hx-trigger="every 10s"
-                 hx-swap="innerHTML">
-                {% include "partials/running_jobs.html" with jobs=running_jobs %}
-            </div>
+    <!-- Running Jobs -->
+    <div class="space-y-4">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Running Jobs</h2>
+            <a href="/jobs?status=running" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+                View all
+            </a>
         </div>
 
-        <!-- Recent Alerts (1/3 width) -->
-        <div class="space-y-4">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-medium text-gray-900 dark:text-white">Recent Alerts</h2>
-                <a href="/alerts" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                    View all
-                </a>
-            </div>
-
-            <div id="recent-alerts"
-                 class="bg-white dark:bg-gray-800 rounded-lg shadow overflow-hidden"
-                 hx-get="/partials/recent-alerts"
-                 hx-trigger="every 15s"
-                 hx-swap="innerHTML">
-                {% include "partials/recent_alerts.html" with alerts=stats.recent_alerts %}
-            </div>
+        <div id="running-jobs"
+             hx-get="/partials/running-jobs"
+             hx-trigger="every 10s"
+             hx-swap="innerHTML">
+            {% set jobs = running_jobs %}
+            {% include "partials/running_jobs.html" %}
         </div>
     </div>
 
     <!-- Recent Jobs -->
     <div class="space-y-4">
         <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Recent Jobs (24h)</h2>
+            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Recent Jobs</h2>
             <a href="/jobs" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
                 View all jobs
             </a>
@@ -71,7 +51,7 @@
         {% if recent_jobs %}
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {% for job in recent_jobs %}
-            {% include "components/job_card.html" with job=job %}
+            {% include "components/job_card.html" %}
             {% endfor %}
         </div>
         {% else %}

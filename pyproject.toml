@@ -54,9 +54,18 @@ data = [
     "datasets>=4.5.0",
     {include-group = "fever"},
 ]
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "jinja2>=3.1.0",
+    "aiofiles>=23.0.0",
+    "sse-starlette>=1.6.0",
+    "pyyaml>=6.0.0",
+]
 all = [
     {include-group = "dev"},
     {include-group = "data"},
+    {include-group = "web"},
 ]
 
 [tool.uv]

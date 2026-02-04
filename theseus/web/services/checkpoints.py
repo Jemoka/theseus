@@ -7,10 +7,9 @@ Checkpoint directory structure (from CheckpointedJob):
             {group}/
                 {job_name}/
                     latest          # text file with latest suffix
-                    {suffix}/       # e.g., step_1000, best
+                    {nested_dirs}/  # can be nested up to 3 levels
+                        config.yaml # This marks a checkpoint directory
                         checkpoint/ # Orbax checkpoint data
-                        config.json
-                        config.yaml
                         job.json
                         rng.npy
 """
@@ -30,6 +29,42 @@ class CheckpointService:
     def __init__(self, checkpoints_dir: Path):
         self.checkpoints_dir = Path(checkpoints_dir)
 
+    def _find_checkpoint_dirs(
+        self,
+        base_path: Path,
+        max_depth: int = 3,
+        current_depth: int = 0,
+    ) -> list[Path]:
+        """
+        Recursively find directories containing config.yaml up to max_depth.
+        """
+        checkpoint_dirs = []
+
+        if current_depth >= max_depth:
+            return checkpoint_dirs
+
+        try:
+            for item in base_path.iterdir():
+                # Skip 'latest' file
+                if item.name == "latest":
+                    continue
+
+                if item.is_dir():
+                    # Check if this directory contains config.yaml
+                    if (item / "config.yaml").exists():
+                        checkpoint_dirs.append(item)
+                    else:
+                        # Recursively search subdirectories
+                        checkpoint_dirs.extend(
+                            self._find_checkpoint_dirs(
+                                item, max_depth, current_depth + 1
+                            )
+                        )
+        except (OSError, PermissionError):
+            pass
+
+        return checkpoint_dirs
+
     def _get_checkpoint_info(
         self,
         checkpoint_path: Path,
@@ -39,7 +74,9 @@ class CheckpointService:
     ) -> Optional[CheckpointInfo]:
         """Parse a checkpoint directory into CheckpointInfo."""
         try:
-            suffix = checkpoint_path.name
+            # Get the suffix - the relative path from job_name directory
+            job_dir = self.checkpoints_dir / project / group / job_name
+            suffix = str(checkpoint_path.relative_to(job_dir))
 
             # Get creation time from directory mtime
             stat = checkpoint_path.stat()
@@ -62,7 +99,7 @@ class CheckpointService:
                 group=group,
                 created=created,
                 size_bytes=total_size,
-                has_config=(checkpoint_path / "config.json").exists(),
+                has_config=(checkpoint_path / "config.yaml").exists(),
                 has_job_spec=(checkpoint_path / "job.json").exists(),
             )
         except Exception:
@@ -103,15 +140,12 @@ class CheckpointService:
                     if job_name and job_dir.name != job_name:
                         continue
 
-                    for item in job_dir.iterdir():
-                        # Skip 'latest' file
-                        if item.name == "latest":
-                            continue
-                        if not item.is_dir():
-                            continue
+                    # Find all checkpoint directories (those containing config.yaml)
+                    checkpoint_dirs = self._find_checkpoint_dirs(job_dir, max_depth=3)
 
+                    for checkpoint_dir in checkpoint_dirs:
                         info = self._get_checkpoint_info(
-                            item,
+                            checkpoint_dir,
                             project=project_dir.name,
                             group=group_dir.name,
                             job_name=job_dir.name,
@@ -128,8 +162,11 @@ class CheckpointService:
         self, project: str, group: str, job_name: str, suffix: str
     ) -> Optional[CheckpointInfo]:
         """Get a specific checkpoint."""
+        # Handle nested paths in suffix
         path = self.checkpoints_dir / project / group / job_name / suffix
-        if path.exists():
+
+        # Check if this path contains config.yaml (is a checkpoint)
+        if path.exists() and (path / "config.yaml").exists():
             return self._get_checkpoint_info(path, project, group, job_name)
         return None
 
@@ -147,6 +184,11 @@ class CheckpointService:
             except Exception:
                 pass
 
+        # If no latest file, get the most recent checkpoint
+        checkpoints = self.list_job_checkpoints(project, group, job_name)
+        if checkpoints:
+            return checkpoints[0]
+
         return None
 
     def list_job_checkpoints(
@@ -160,17 +202,29 @@ class CheckpointService:
     def get_checkpoint_config(
         self, project: str, group: str, job_name: str, suffix: str
     ) -> Optional[dict[str, Any]]:
-        """Read the config.json from a checkpoint."""
-        path = (
-            self.checkpoints_dir / project / group / job_name / suffix / "config.json"
-        )
-        if path.exists():
+        """Read the config from a checkpoint (tries config.yaml then config.json)."""
+        base_path = self.checkpoints_dir / project / group / job_name / suffix
+
+        # Try config.yaml first
+        yaml_path = base_path / "config.yaml"
+        if yaml_path.exists():
             try:
-                with open(path) as f:
-                    result: dict[str, Any] = json.load(f)
-                    return result
+                import yaml
+
+                with open(yaml_path) as f:
+                    return yaml.safe_load(f)
             except Exception:
                 pass
+
+        # Fall back to config.json
+        json_path = base_path / "config.json"
+        if json_path.exists():
+            try:
+                with open(json_path) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+
         return None
 
     def get_checkpoint_job_spec(

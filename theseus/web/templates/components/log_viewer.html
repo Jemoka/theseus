@@ -2,7 +2,8 @@
 Log viewer component - displays and streams job logs.
 
 Usage:
-    {% include "components/log_viewer.html" with job=job content=log_content %}
+    {% set job = job %}{% set content = log_content %}
+            {% include "components/log_viewer.html" %}
 
 Props:
     job: JobMetadata object (for streaming endpoint)
@@ -11,11 +12,11 @@ Props:
 Features:
 - Auto-scroll to bottom
 - HTMX polling for updates (when job is running)
+- ANSI color parsing
 - SSE streaming (optional, more efficient)
 
 TODO:
 - Add search/filter functionality
-- Add ANSI color parsing
 - Add download button
 - Add line number gutter
 - Add copy button
@@ -60,18 +61,103 @@ TODO:
 
     <!-- Log content -->
     <div id="log-container"
-         class="h-96 overflow-auto p-4"
+         class="h-[600px] overflow-auto p-4"
          {% if job.status.value == "running" %}
          hx-get="/partials/log/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}?tail=100"
          hx-trigger="every 3s"
          hx-target="#log-content"
          hx-swap="innerHTML"
          {% endif %}>
-        <pre id="log-content" class="log-content text-gray-200">{{ content }}</pre>
+        <div id="log-content" class="log-content">{{ content | e }}</div>
     </div>
 </div>
 
+<!-- Load AnsiUp for ANSI escape sequence parsing -->
+<script src="https://cdn.jsdelivr.net/npm/ansi_up@5.2.1/ansi_up.js"></script>
+
 <script>
+// Initialize ANSI parser
+const ansi_up = new AnsiUp();
+ansi_up.use_classes = false;  // Use inline styles for better compatibility
+
+// Log level colors
+const logLevelColors = {
+    'DEBUG': '#6272a4',
+    'INFO': '#50fa7b',
+    'WARNING': '#f1fa8c',
+    'WARN': '#f1fa8c',
+    'ERROR': '#ff5555',
+    'CRITICAL': '#ff79c6',
+    'FATAL': '#ff79c6'
+};
+
+// Simple log formatting function
+function formatLogs(element) {
+    const rawText = element.textContent || element.innerText;
+
+    // Strip ANSI codes for pattern matching
+    const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
+
+    // Pattern: YYYY-MM-DD HH:MM:SS | LEVEL | (module:line) COMPONENT | message
+    const logPattern = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*(\S+)\s*\|\s*(\([^)]+\))\s*([^|]+)\s*\|\s*(.*)$/;
+
+    // Process line by line
+    const lines = rawText.split('\n');
+    const formattedLines = lines.map(line => {
+        const cleanLine = stripAnsi(line);
+        const match = cleanLine.match(logPattern);
+
+        if (match) {
+            const [, datetime, level, source, component, message] = match;
+            const time = datetime.substring(11); // Just HH:MM:SS
+            const levelColor = logLevelColors[level.trim().toUpperCase()] || '#e5e7eb';
+
+            // Simplify source - just get filename:line
+            const sourceMatch = source.match(/([^/.]+\.\w+):(\d+)/);
+            const cleanSource = sourceMatch ? `${sourceMatch[1]}:${sourceMatch[2]}` : source;
+
+            // For the message, preserve any ANSI codes that were in the original
+            const originalMessageStart = line.indexOf(message);
+            const originalMessage = originalMessageStart >= 0 ? line.substring(originalMessageStart) : message;
+            const msgWithAnsi = ansi_up.ansi_to_html(originalMessage);
+
+            return `<div style="display: flex; margin-bottom: 2px;">
+                <span style="color: #6272a4; opacity: 0.5; font-size: 0.85em; min-width: 65px; flex-shrink: 0;">${time}</span>
+                <span style="color: ${levelColor}; font-weight: bold; min-width: 60px; flex-shrink: 0;">${level.trim()}</span>
+                <span style="color: #bd93f9; opacity: 0.7; min-width: 100px; flex-shrink: 0; cursor: help;" title="${source}">${component.trim()}</span>
+                <span style="color: #e5e7eb; flex: 1; word-break: break-word; padding-left: 8px;">${msgWithAnsi}</span>
+            </div>`;
+        } else if (line.trim()) {
+            // Unstructured line - just apply ANSI processing
+            return `<div style="margin-left: 225px; color: #e5e7eb; padding-left: 8px;">${ansi_up.ansi_to_html(line)}</div>`;
+        } else {
+            // Empty line
+            return '<div style="height: 1em;"></div>';
+        }
+    });
+
+    element.innerHTML = formattedLines.join('');
+}
+
+// Parse the initial log content
+document.addEventListener('DOMContentLoaded', function() {
+    const logContent = document.getElementById('log-content');
+    if (logContent) {
+        formatLogs(logContent);
+    }
+});
+
+// Handle HTMX updates
+document.body.addEventListener('htmx:beforeSwap', function(evt) {
+    if (evt.detail.target.id === 'log-content') {
+        // Process the new content
+        const tempDiv = document.createElement('div');
+        tempDiv.textContent = evt.detail.xhr.responseText;
+        formatLogs(tempDiv);
+        evt.detail.serverResponse = tempDiv.innerHTML;
+    }
+});
+
 // Auto-scroll to bottom on content update
 document.body.addEventListener('htmx:afterSwap', function(evt) {
     if (evt.detail.target.id === 'log-content') {

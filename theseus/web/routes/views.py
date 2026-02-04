@@ -36,15 +36,14 @@ def render(request: Request, template: str, **context):
 async def dashboard(request: Request):
     """Main dashboard page."""
     status_service = request.app.state.status_service
-    checkpoint_service = request.app.state.checkpoint_service
-    alert_service = request.app.state.alert_service
 
     stats = status_service.get_dashboard_stats()
-    stats.total_checkpoints = checkpoint_service.count_checkpoints()
-    stats.recent_alerts = alert_service.get_recent_alerts(hours=24, limit=10)
 
     running_jobs = status_service.get_running_jobs()
-    recent_jobs = status_service.get_recent_jobs(hours=24, limit=10)
+    # Get all jobs sorted by start time and take the last 8
+    all_jobs = status_service.list_all_jobs(limit=100)
+    all_jobs.sort(key=lambda j: j.start_time if j.start_time else "")
+    recent_jobs = all_jobs[-8:] if len(all_jobs) > 8 else all_jobs
 
     return render(
         request,
@@ -125,38 +124,9 @@ async def job_detail(
     )
 
 
-@router.get("/checkpoints", response_class=HTMLResponse)
-async def checkpoints_list(
-    request: Request,
-    project: Optional[str] = None,
-    group: Optional[str] = None,
-    job_name: Optional[str] = None,
-):
-    """Checkpoints listing page."""
-    checkpoint_service = request.app.state.checkpoint_service
-    status_service = request.app.state.status_service
-
-    checkpoints = checkpoint_service.list_all_checkpoints(
-        project=project, group=group, job_name=job_name
-    )
-    projects = status_service.list_projects()
-
-    total_size = sum(c.size_bytes or 0 for c in checkpoints)
-
-    return render(
-        request,
-        "checkpoints.html",
-        checkpoints=checkpoints,
-        projects=projects,
-        current_project=project,
-        current_group=group,
-        current_job_name=job_name,
-        total_size=total_size,
-    )
-
-
 @router.get(
-    "/checkpoints/{project}/{group}/{job_name}/{suffix}", response_class=HTMLResponse
+    "/checkpoints/{project}/{group}/{job_name}/{suffix:path}",
+    response_class=HTMLResponse,
 )
 async def checkpoint_detail(
     request: Request,
@@ -193,30 +163,12 @@ async def checkpoint_detail(
     )
 
 
-@router.get("/alerts", response_class=HTMLResponse)
-async def alerts_page(request: Request):
-    """Alerts page."""
-    alert_service = request.app.state.alert_service
-
-    alerts = alert_service.get_alerts(limit=100)
-    unacknowledged = alert_service.get_unacknowledged_count()
-
-    return render(
-        request,
-        "alerts.html",
-        alerts=alerts,
-        unacknowledged_count=unacknowledged,
-    )
-
-
 @router.get("/projects/{project}", response_class=HTMLResponse)
 async def project_detail(request: Request, project: str):
     """Project detail page."""
     status_service = request.app.state.status_service
-    checkpoint_service = request.app.state.checkpoint_service
 
     jobs = status_service.list_all_jobs(project=project)
-    checkpoints = checkpoint_service.list_all_checkpoints(project=project)
 
     # Group jobs by group name
     groups: dict[str, list[Any]] = {}
@@ -232,7 +184,6 @@ async def project_detail(request: Request, project: str):
         project=project,
         jobs=jobs,
         groups=groups,
-        checkpoints=checkpoints,
     )
 
 
@@ -249,23 +200,12 @@ async def partial_running_jobs(request: Request):
     return render(request, "partials/running_jobs.html", jobs=jobs)
 
 
-@router.get("/partials/recent-alerts", response_class=HTMLResponse)
-async def partial_recent_alerts(request: Request):
-    """Partial: recent alerts (for HTMX polling)."""
-    alert_service = request.app.state.alert_service
-    alerts = alert_service.get_recent_alerts(hours=24, limit=5)
-
-    return render(request, "partials/recent_alerts.html", alerts=alerts)
-
-
 @router.get("/partials/stats", response_class=HTMLResponse)
 async def partial_stats(request: Request):
     """Partial: dashboard stats (for HTMX polling)."""
     status_service = request.app.state.status_service
-    checkpoint_service = request.app.state.checkpoint_service
 
     stats = status_service.get_dashboard_stats()
-    stats.total_checkpoints = checkpoint_service.count_checkpoints()
 
     return render(request, "partials/stats.html", stats=stats)
 

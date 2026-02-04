@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
+from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +25,6 @@ from theseus.web.services import (
     StatusService,
     CheckpointService,
     LogService,
-    AlertService,
 )
 from theseus.web.routes import api, views
 
@@ -48,11 +48,11 @@ def create_app(
     # Initialize services
     status_dir = cluster_root / "status"
     checkpoints_dir = cluster_root / "checkpoints"
+    print("eee", status_dir, checkpoints_dir)
 
     status_service = StatusService(status_dir)
     checkpoint_service = CheckpointService(checkpoints_dir)
     log_service = LogService(status_dir)
-    alert_service = AlertService(status_dir)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -61,11 +61,6 @@ def create_app(
         app.state.status_service = status_service
         app.state.checkpoint_service = checkpoint_service
         app.state.log_service = log_service
-        app.state.alert_service = alert_service
-
-        # Initial alert scan
-        jobs = status_service.list_all_jobs(limit=1000)
-        alert_service.check_for_alerts(jobs)
 
         yield
 
@@ -83,9 +78,69 @@ def create_app(
     app.state.templates = templates
 
     # Register template filters
-    @app.on_event("startup")
-    def setup_template_filters():
-        templates.env.filters["format_size"] = checkpoint_service.format_size
+    templates.env.filters["format_size"] = checkpoint_service.format_size
+
+    def format_timestamp(timestamp_str: Optional[str]) -> str:
+        """Format ISO timestamp to a more readable format."""
+        if not timestamp_str:
+            return "-"
+
+        try:
+            # Handle different timestamp formats
+            if "T" in timestamp_str:
+                # ISO format like 2026-02-04T09:44:35
+                dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            else:
+                # Space-separated format like 2026-02-04 09:44:35
+                dt = datetime.strptime(timestamp_str[:19], "%Y-%m-%d %H:%M:%S")
+
+            # Format as: February 4, 2026, 9:44 AM
+            # Use platform-safe format (%-d doesn't work on Windows)
+            formatted = dt.strftime("%B %d, %Y, %I:%M %p")
+            # Remove leading zeros from day and time
+            formatted = formatted.replace(
+                " 0", " ", 1
+            )  # Only replace first occurrence for day
+            return formatted
+        except (ValueError, TypeError, AttributeError):
+            # Fallback: just return the first 19 chars
+            return timestamp_str[:19] if len(timestamp_str) >= 19 else timestamp_str
+
+    templates.env.filters["format_timestamp"] = format_timestamp
+
+    def format_duration(duration_str: Optional[str]) -> str:
+        """Format duration to a more readable format."""
+        if not duration_str:
+            return "-"
+
+        # Clean up the duration string
+        duration_str = duration_str.strip()
+
+        # Already in a nice format like "4h 34m"? Return as-is
+        if "h" in duration_str or "m" in duration_str or "s" in duration_str:
+            return duration_str
+
+        # Try to parse as seconds or other format
+        try:
+            # If it's a number, treat as seconds
+            if duration_str.replace(".", "").isdigit():
+                seconds = float(duration_str)
+                hours = int(seconds // 3600)
+                minutes = int((seconds % 3600) // 60)
+                secs = int(seconds % 60)
+
+                if hours > 0:
+                    return f"{hours}h {minutes}m"
+                elif minutes > 0:
+                    return f"{minutes}m {secs}s"
+                else:
+                    return f"{secs}s"
+        except (ValueError, TypeError):
+            pass
+
+        return duration_str
+
+    templates.env.filters["format_duration"] = format_duration
 
     # Mount static files if directory exists
     static_dir = Path(__file__).parent / "static"
@@ -108,21 +163,12 @@ if __name__ == "__main__":
     import uvicorn
 
     parser = argparse.ArgumentParser(description="Run Theseus Web UI")
-    parser.add_argument(
-        "--cluster-root",
-        type=Path,
-        default=None,
-        help="Cluster root directory (default: THESEUS_CLUSTER_ROOT env var or current dir)",
-    )
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
 
     args = parser.parse_args()
-
-    if args.cluster_root:
-        os.environ["THESEUS_CLUSTER_ROOT"] = str(args.cluster_root)
 
     uvicorn.run(
         "theseus.web.app:app",

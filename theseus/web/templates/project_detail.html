@@ -18,7 +18,7 @@
         <div>
             <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ project }}</h1>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ jobs | length }} jobs &middot; {{ checkpoints | length }} checkpoints
+                {{ jobs | length }} jobs
             </p>
         </div>
     </div>
@@ -38,7 +38,8 @@
 
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {% for job in group_jobs[:6] %}
-                {% include "components/job_card.html" with job=job %}
+                {% set job = job %}
+            {% include "components/job_card.html" %}
                 {% endfor %}
             </div>
 
@@ -61,52 +62,5 @@
     </div>
     {% endif %}
 
-    <!-- Checkpoints for this project -->
-    {% if checkpoints %}
-    <div class="space-y-4">
-        <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Checkpoints</h2>
-            <a href="/checkpoints?project={{ project }}"
-               class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                View all {{ checkpoints | length }} checkpoints
-            </a>
-        </div>
-
-        <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-900">
-                    <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Checkpoint
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Job
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Project / Group
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Created
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Size
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Contents
-                        </th>
-                        <th scope="col" class="relative px-6 py-3">
-                            <span class="sr-only">Actions</span>
-                        </th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                    {% for ckpt in checkpoints[:10] %}
-                    {% include "components/checkpoint_row.html" with checkpoint=ckpt show_job=true %}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    {% endif %}
 </div>
 {% endblock %}

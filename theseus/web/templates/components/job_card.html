@@ -2,7 +2,8 @@
 Job card component - displays a job summary.
 
 Usage:
-    {% include "components/job_card.html" with job=job %}
+    {% set job = job %}
+            {% include "components/job_card.html" %}
 
 Props:
     job: JobMetadata object
@@ -22,7 +23,8 @@ TODO:
                    class="text-sm font-medium text-gray-900 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 truncate">
                     {{ job.name }}
                 </a>
-                {% include "components/status_badge.html" with status=job.status %}
+                {% set status = job.status %}
+            {% include "components/status_badge.html" %}
             </div>
 
             <!-- Duration -->
@@ -70,16 +72,5 @@ TODO:
             ⚠ Heartbeat stale (>5 min)
         </div>
         {% endif %}
-
-        <!-- TODO: Add actions row -->
-        <!--
-        <div class="mt-3 flex space-x-2">
-            <button class="...">View Logs</button>
-            <button class="...">Checkpoints</button>
-            {% if job.wandb_url %}
-            <a href="{{ job.wandb_url }}" target="_blank">W&B</a>
-            {% endif %}
-        </div>
-        -->
     </div>
 </div>

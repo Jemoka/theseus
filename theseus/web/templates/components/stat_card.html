@@ -2,7 +2,8 @@
 Stat card component - displays a single metric.
 
 Usage:
-    {% include "components/stat_card.html" with label="Running" value=stats.running color="blue" %}
+    {% set label = "Running" %}{% set value = stats.running %}{% set color = "blue" %}
+            {% include "components/stat_card.html" %}
 
 Props:
     label: string - metric label

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Theseus{% endblock %}</title>
+    <title>{% block title %}theseus{% endblock %}</title>
 
     <!-- Tailwind CSS via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -36,10 +36,8 @@
             line-height: 1.4;
             white-space: pre-wrap;
             word-break: break-all;
+            color: #e5e7eb; /* Default gray-200, but inline styles will override */
         }
-
-        /* ANSI color support for logs */
-        /* TODO: Add ANSI color parsing if needed */
 
         /* Loading indicator */
         .htmx-request .htmx-indicator {
@@ -55,40 +53,40 @@
 <body class="h-full bg-gray-50 dark:bg-gray-900">
     <div class="min-h-full">
         <!-- Navigation -->
-        <nav class="bg-white dark:bg-gray-800 shadow-sm">
-            <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <nav class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-sm">
+            <div class="mx-auto max-w-screen-2xl px-4 sm:px-6 lg:px-8">
                 <div class="flex h-16 justify-between">
                     <div class="flex">
                         <!-- Logo / Brand -->
                         <div class="flex flex-shrink-0 items-center">
                             <a href="/" class="text-xl font-bold text-gray-900 dark:text-white">
-                                Theseus
+                                theseus
                             </a>
                         </div>
 
                         <!-- Navigation Links -->
                         <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
-                            {% include "components/nav_link.html" with href="/" label="Dashboard" %}
-                            {% include "components/nav_link.html" with href="/jobs" label="Jobs" %}
-                            {% include "components/nav_link.html" with href="/checkpoints" label="Checkpoints" %}
-                            {% include "components/nav_link.html" with href="/alerts" label="Alerts" %}
+                            {% set href = "/" %}{% set label = "Dashboard" %}
+                            {% include "components/nav_link.html" %}
+                            {% set href = "/jobs" %}{% set label = "Jobs" %}
+                            {% include "components/nav_link.html" %}
                         </div>
                     </div>
 
                     <!-- Right side -->
-                    <div class="flex items-center">
+                    <!-- <div class="flex items-center"> -->
                         <!-- TODO: Add dark mode toggle, settings, etc. -->
-                        <span class="text-sm text-gray-500 dark:text-gray-400">
-                            {{ cluster_root }}
-                        </span>
-                    </div>
+                        <!-- <span class="text-sm text-gray-500 dark:text-gray-400"> -->
+                            <!-- {{ cluster_root }} -->
+                        <!-- </span> -->
+                    <!-- </div> -->
                 </div>
             </div>
         </nav>
 
         <!-- Main Content -->
         <main>
-            <div class="mx-auto max-w-7xl py-6 sm:px-6 lg:px-8">
+            <div class="mx-auto max-w-screen-2xl py-6 px-8">
                 {% block content %}{% endblock %}
             </div>
         </main>

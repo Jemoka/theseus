@@ -18,7 +18,6 @@ from theseus.web.models import (
     CheckpointInfo,
     ProjectSummary,
     DashboardStats,
-    Alert,
 )
 
 router = APIRouter(tags=["api"])
@@ -106,31 +105,14 @@ async def get_dashboard_stats(request: Request):
     """Get aggregated dashboard statistics."""
     service = request.app.state.status_service
     checkpoint_service = request.app.state.checkpoint_service
-    alert_service = request.app.state.alert_service
 
     stats = service.get_dashboard_stats()
     stats.total_checkpoints = checkpoint_service.count_checkpoints()
-    stats.recent_alerts = alert_service.get_recent_alerts(hours=24, limit=10)
 
     return stats
 
 
 # === Checkpoints ===
-
-
-@router.get("/checkpoints", response_model=list[CheckpointInfo])
-async def list_checkpoints(
-    request: Request,
-    project: Optional[str] = None,
-    group: Optional[str] = None,
-    job_name: Optional[str] = None,
-    limit: int = Query(default=100, le=1000),
-):
-    """List all checkpoints with optional filtering."""
-    service = request.app.state.checkpoint_service
-    return service.list_all_checkpoints(
-        project=project, group=group, job_name=job_name, limit=limit
-    )
 
 
 @router.get(
@@ -145,57 +127,6 @@ async def list_job_checkpoints(
     """List all checkpoints for a specific job."""
     service = request.app.state.checkpoint_service
     return service.list_job_checkpoints(project, group, job_name)
-
-
-@router.get(
-    "/checkpoints/{project}/{group}/{job_name}/latest", response_model=CheckpointInfo
-)
-async def get_latest_checkpoint(
-    request: Request,
-    project: str,
-    group: str,
-    job_name: str,
-):
-    """Get the latest checkpoint for a job."""
-    service = request.app.state.checkpoint_service
-    ckpt = service.get_latest_checkpoint(project, group, job_name)
-    if not ckpt:
-        raise HTTPException(status_code=404, detail="No checkpoints found")
-    return ckpt
-
-
-@router.get(
-    "/checkpoints/{project}/{group}/{job_name}/{suffix}", response_model=CheckpointInfo
-)
-async def get_checkpoint(
-    request: Request,
-    project: str,
-    group: str,
-    job_name: str,
-    suffix: str,
-):
-    """Get a specific checkpoint."""
-    service = request.app.state.checkpoint_service
-    ckpt = service.get_checkpoint(project, group, job_name, suffix)
-    if not ckpt:
-        raise HTTPException(status_code=404, detail="Checkpoint not found")
-    return ckpt
-
-
-@router.get("/checkpoints/{project}/{group}/{job_name}/{suffix}/config")
-async def get_checkpoint_config(
-    request: Request,
-    project: str,
-    group: str,
-    job_name: str,
-    suffix: str,
-):
-    """Get the config from a checkpoint."""
-    service = request.app.state.checkpoint_service
-    config = service.get_checkpoint_config(project, group, job_name, suffix)
-    if config is None:
-        raise HTTPException(status_code=404, detail="Config not found")
-    return config
 
 
 # === Logs ===
@@ -253,51 +184,6 @@ async def stream_log(
             yield {"event": "log", "data": content}
 
     return EventSourceResponse(event_generator())
-
-
-# === Alerts ===
-
-
-@router.get("/alerts", response_model=list[Alert])
-async def list_alerts(
-    request: Request,
-    alert_type: Optional[str] = None,
-    acknowledged: Optional[bool] = None,
-    limit: int = Query(default=50, le=200),
-):
-    """List alerts with optional filtering."""
-    service = request.app.state.alert_service
-    return service.get_alerts(
-        alert_type=alert_type, acknowledged=acknowledged, limit=limit
-    )
-
-
-@router.get("/alerts/recent", response_model=list[Alert])
-async def list_recent_alerts(
-    request: Request,
-    hours: int = Query(default=24, le=168),
-    limit: int = Query(default=20, le=100),
-):
-    """Get alerts from the last N hours."""
-    service = request.app.state.alert_service
-    return service.get_recent_alerts(hours=hours, limit=limit)
-
-
-@router.post("/alerts/{alert_id}/acknowledge")
-async def acknowledge_alert(request: Request, alert_id: str):
-    """Acknowledge an alert."""
-    service = request.app.state.alert_service
-    if service.acknowledge_alert(alert_id):
-        return {"status": "acknowledged"}
-    raise HTTPException(status_code=404, detail="Alert not found")
-
-
-@router.post("/alerts/acknowledge-all")
-async def acknowledge_all_alerts(request: Request):
-    """Acknowledge all alerts."""
-    service = request.app.state.alert_service
-    count = service.acknowledge_all()
-    return {"status": "acknowledged", "count": count}
 
 
 # === Health ===

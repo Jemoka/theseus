@@ -7,6 +7,8 @@ import json
 import os
 import signal
 import sys
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from loguru import logger
@@ -133,12 +135,15 @@ def _setup_preemption_handler(
     cfg: OmegaConf,
     run_id: str,
     start_time: str,
+    heartbeat_updater=None,
 ) -> None:
     """Register signal handlers to catch SLURM preemption."""
 
     def handler(signum, frame):
         sig_name = signal.Signals(signum).name
         logger.warning(f"BOOTSTRAP | received {sig_name}, marking as preempted")
+        if heartbeat_updater:
+            heartbeat_updater.stop()
         _write_metadata(
             metadata_file, spec, cfg, run_id, status="preempted", start_time=start_time
         )
@@ -146,6 +151,64 @@ def _setup_preemption_handler(
 
     signal.signal(signal.SIGTERM, handler)
     signal.signal(signal.SIGINT, handler)
+
+
+class HeartbeatUpdater:
+    """Background thread that periodically updates job heartbeat."""
+
+    def __init__(
+        self,
+        metadata_file: Path,
+        spec: ExecutionSpec,
+        cfg: OmegaConf,
+        run_id: str,
+        start_time: str,
+        interval: int = 30,
+    ):
+        self.metadata_file = metadata_file
+        self.spec = spec
+        self.cfg = cfg
+        self.run_id = run_id
+        self.start_time = start_time
+        self.interval = interval
+        self.stop_event = threading.Event()
+        self.thread = None
+
+    def start(self):
+        """Start the heartbeat thread."""
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        logger.debug(f"HEARTBEAT | started with interval={self.interval}s")
+
+    def stop(self):
+        """Stop the heartbeat thread."""
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=2)
+        logger.debug("HEARTBEAT | stopped")
+
+    def _run(self):
+        """Run the heartbeat update loop."""
+        while not self.stop_event.is_set():
+            # Wait for the interval, but check stop_event more frequently
+            for _ in range(self.interval):
+                if self.stop_event.is_set():
+                    return
+                time.sleep(1)
+
+            # Update heartbeat
+            try:
+                _write_metadata(
+                    self.metadata_file,
+                    self.spec,
+                    self.cfg,
+                    self.run_id,
+                    status="running",
+                    start_time=self.start_time,
+                )
+                logger.debug(f"HEARTBEAT | updated at {datetime.now().isoformat()}")
+            except Exception as e:
+                logger.warning(f"HEARTBEAT | failed to update: {e}")
 
 
 def main():
@@ -189,11 +252,22 @@ def main():
     )
     logger.info(f"METADATA | written to {metadata_file}")
 
-    # Register preemption handler for SLURM signals
-    _setup_preemption_handler(metadata_file, spec, cfg, run_id, start_time)
+    # Create heartbeat updater BEFORE importing JAX (which happens when job class is instantiated)
+    heartbeat_updater = HeartbeatUpdater(
+        metadata_file, spec, cfg, run_id, start_time, interval=30
+    )
+
+    # Register preemption handler for SLURM signals (with reference to heartbeat updater)
+    _setup_preemption_handler(
+        metadata_file, spec, cfg, run_id, start_time, heartbeat_updater
+    )
+
+    # Start heartbeat updater
+    heartbeat_updater.start()
 
     job_key = cfg.job
     if job_key not in JOBS:
+        heartbeat_updater.stop()
         _write_metadata(
             metadata_file, spec, cfg, run_id, status="failed", start_time=start_time
         )
@@ -212,6 +286,7 @@ def main():
                 job, cfg = RestoreableJob.from_checkpoint(latest, spec)
                 with configuration(cfg):
                     job()
+                heartbeat_updater.stop()
                 _write_metadata(
                     metadata_file,
                     spec,
@@ -228,6 +303,7 @@ def main():
             job = job_cls(spec)
             job()
 
+        heartbeat_updater.stop()
         _write_metadata(
             metadata_file, spec, cfg, run_id, status="completed", start_time=start_time
         )
@@ -235,6 +311,7 @@ def main():
 
     except Exception as e:
         logger.exception(f"BOOTSTRAP | job failed with exception: {e}")
+        heartbeat_updater.stop()
         _write_metadata(
             metadata_file, spec, cfg, run_id, status="failed", start_time=start_time
         )

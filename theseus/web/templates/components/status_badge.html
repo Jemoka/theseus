@@ -2,7 +2,8 @@
 Status badge component.
 
 Usage:
-    {% include "components/status_badge.html" with status=job.status %}
+    {% set status = job.status %}
+            {% include "components/status_badge.html" %}
 
 Displays a colored badge based on job status:
 - running: blue with pulse animation

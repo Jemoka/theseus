@@ -25,8 +25,7 @@ theseus/web/
 ├── services/            # Business logic layer
 │   ├── status.py        # Job status from status_dir
 │   ├── checkpoints.py   # Checkpoint browsing
-│   ├── logs.py          # Log reading/streaming
-│   └── alerts.py        # Alert management
+│   └── logs.py          # Log reading/streaming
 ├── routes/
 │   ├── api.py           # REST API endpoints (/api/*)
 │   └── views.py         # HTML page routes (/)
@@ -44,7 +43,6 @@ theseus/web/
 - **Jobs listing**: Filterable list of all job runs
 - **Job detail**: Individual job view with log streaming
 - **Checkpoints**: Browse saved checkpoints
-- **Alerts**: Track job events (start/complete/fail/preempt)
 - **HTMX polling**: Auto-refresh for running jobs and stats
 
 ### Data Sources
@@ -95,17 +93,10 @@ The logs contain ANSI color codes from loguru. Options:
 2. Parse server-side and emit HTML spans
 3. Use a library like [xterm.js](https://xtermjs.org/) for terminal emulation
 
-#### 4. Persist Alerts
-**File**: `theseus/web/services/alerts.py`
-
-Currently alerts are in-memory only. Options:
-1. Write to `{status_dir}/alerts.json`
-2. Use SQLite for persistence
-3. Integrate with external alerting (Slack, PagerDuty)
 
 ### Medium Priority
 
-#### 5. Job Actions
+#### 4. Job Actions
 **Files**: `routes/api.py`, `components/job_card.html`
 
 Add ability to:
@@ -113,7 +104,7 @@ Add ability to:
 - Restart failed jobs
 - Delete old job metadata
 
-#### 6. Checkpoint Actions
+#### 5. Checkpoint Actions
 **Files**: `routes/api.py`, `components/checkpoint_row.html`
 
 Add ability to:
@@ -121,7 +112,7 @@ Add ability to:
 - Download checkpoint config
 - "Load" checkpoint (start new job from checkpoint)
 
-#### 7. Search & Filtering
+#### 6. Search & Filtering
 **File**: `templates/jobs.html`, `templates/checkpoints.html`
 
 Add:
@@ -129,7 +120,7 @@ Add:
 - Date range filters
 - Sort options (name, date, status)
 
-#### 8. Pagination
+#### 7. Pagination
 **Files**: `routes/api.py`, `routes/views.py`
 
 Currently limited to 100 items. Add proper pagination:
@@ -139,7 +130,7 @@ Currently limited to 100 items. Add proper pagination:
 
 ### Low Priority
 
-#### 9. Dark Mode Toggle
+#### 8. Dark Mode Toggle
 **File**: `templates/base.html`
 
 Add a toggle button to switch between light/dark themes:
@@ -148,7 +139,7 @@ Add a toggle button to switch between light/dark themes:
 // Toggle 'dark' class on <html>
 ```
 
-#### 10. Real-time Log Streaming with SSE
+#### 9. Real-time Log Streaming with SSE
 **File**: `routes/api.py` (endpoint exists), `components/log_viewer.html`
 
 The SSE endpoint `/api/logs/{...}/stream` is implemented but not used.
@@ -157,20 +148,7 @@ Switch from HTMX polling to SSE for more efficient streaming:
 <div hx-ext="sse" sse-connect="/api/logs/.../stream" sse-swap="log">
 ```
 
-#### 11. Notification Badge
-**File**: `templates/base.html`
-
-Show unacknowledged alert count in nav:
-```html
-<a href="/alerts" class="...">
-    Alerts
-    {% if alert_count > 0 %}
-    <span class="badge">{{ alert_count }}</span>
-    {% endif %}
-</a>
-```
-
-#### 12. CLI Integration
+#### 10. CLI Integration
 **File**: `theseus/cli.py`
 
 Add a `web` command:
@@ -230,11 +208,6 @@ Terminal-style log display with:
 
 **TODO**: ANSI colors, search, download.
 
-### Alert Item
-`templates/components/alert_item.html`
-
-Single alert with icon, message, and acknowledge button.
-
 ---
 
 ## API Reference
@@ -267,15 +240,6 @@ All API endpoints return JSON and are prefixed with `/api`.
 |--------|----------|-------------|
 | GET | `/api/logs/{project}/{group}/{name}/{run_id}?tail=100` | Get log content |
 | GET | `/api/logs/{project}/{group}/{name}/{run_id}/stream` | SSE log stream |
-
-### Alerts
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/alerts` | List alerts (query: alert_type, acknowledged, limit) |
-| GET | `/api/alerts/recent?hours=24` | Recent alerts |
-| POST | `/api/alerts/{alert_id}/acknowledge` | Acknowledge alert |
-| POST | `/api/alerts/acknowledge-all` | Acknowledge all alerts |
 
 ### Dashboard
 
@@ -344,7 +308,7 @@ web = [
 ## Testing
 
 TODO: Add tests for:
-- [ ] Service layer (status, checkpoints, logs, alerts)
+- [ ] Service layer (status, checkpoints, logs)
 - [ ] API endpoints
 - [ ] Template rendering
 

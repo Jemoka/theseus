@@ -129,7 +129,8 @@
                         </div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
-                        {% include "components/status_badge.html" with status=job.status %}
+                        {% set status = job.status %}
+            {% include "components/status_badge.html" %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                         <a href="/jobs?project={{ job.project or 'general' }}" class="hover:text-blue-600 dark:hover:text-blue-400">
@@ -151,16 +152,22 @@
                         {% endif %}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                        {{ job.start_time[:19] }}
+                        {{ job.start_time | format_timestamp }}
                         {% if job.duration %}
-                        <div class="text-xs">({{ job.duration }})</div>
+                        <div class="text-xs">({{ job.duration | format_duration }})</div>
                         {% endif %}
                     </td>
-                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
                         <a href="/jobs/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}"
                            class="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-200">
                             View
                         </a>
+                        {% if job.wandb_url %}
+                        <a href="{{ job.wandb_url }}" target="_blank"
+                           class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-900 dark:hover:text-indigo-200">
+                            W&B
+                        </a>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}

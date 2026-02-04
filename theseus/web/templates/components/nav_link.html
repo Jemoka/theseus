@@ -2,7 +2,8 @@
 Navigation link component.
 
 Usage:
-    {% include "components/nav_link.html" with href="/jobs" label="Jobs" %}
+    {% set href = "/jobs" %}{% set label = "Jobs" %}
+    {% include "components/nav_link.html" %}
 
 TODO: Add active state detection based on current URL
 #}
