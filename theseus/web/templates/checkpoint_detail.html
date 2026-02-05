@@ -1,124 +1,134 @@
 {% extends "base.html" %}
 
-{% block title %}Checkpoint {{ checkpoint.suffix }} - Theseus{% endblock %}
+{% block title %}Checkpoint {{ checkpoint.suffix }} - THESEUS{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-4">
     <!-- Breadcrumb -->
-    <nav class="flex" aria-label="Breadcrumb">
-        <ol class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
-            <li><a href="/jobs" class="hover:text-gray-700 dark:hover:text-gray-200">Jobs</a></li>
-            <li>/</li>
-            <li><a href="/jobs?project={{ checkpoint.project }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.project }}</a></li>
-            <li>/</li>
-            <li><a href="/jobs?project={{ checkpoint.project }}&group={{ checkpoint.group }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.group }}</a></li>
-            <li>/</li>
-            <li><a href="/jobs/{{ checkpoint.project }}/{{ checkpoint.group }}/{{ checkpoint.job_name }}/latest" class="hover:text-gray-700 dark:hover:text-gray-200">{{ checkpoint.job_name }}</a></li>
-            <li>/</li>
-            <li class="text-gray-900 dark:text-white font-medium">{{ checkpoint.suffix }}</li>
-        </ol>
+    <nav class="breadcrumbs">
+        <a href="/" class="breadcrumb-item no-style">theseus</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs" class="breadcrumb-item no-style">jobs</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs?project={{ checkpoint.project }}" class="breadcrumb-item no-style">{{ checkpoint.project }}</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs?project={{ checkpoint.project }}&group={{ checkpoint.group }}" class="breadcrumb-item no-style">{{ checkpoint.group }}</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs/{{ checkpoint.project }}/{{ checkpoint.group }}/{{ checkpoint.job_name }}/latest" class="breadcrumb-item no-style">{{ checkpoint.job_name }}</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-item active">checkpoint: {{ checkpoint.suffix }}</span>
     </nav>
 
     <!-- Header -->
-    <div class="sm:flex sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Checkpoint: {{ checkpoint.suffix }}</h1>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Job: {{ checkpoint.job_name }}
-            </p>
-        </div>
+    <div class="mb-4">
+        <h1 class="text-xl font-semibold uppercase tracking-wide">Checkpoint: {{ checkpoint.suffix }}</h1>
+        <p class="text-xs text-gray-400 mt-1">
+            Job: {{ checkpoint.job_name }}
+        </p>
     </div>
 
-    <!-- Info Cards -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <!-- Info Grid -->
+    <div class="grid grid-4 gap-3 mb-4">
         <!-- Created -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Created</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">{{ checkpoint.created | format_timestamp }}</dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Created</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">{{ checkpoint.created | format_timestamp }}</div>
+            </div>
         </div>
 
         <!-- Size -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Size</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {{ checkpoint.size_bytes | format_size }}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Size</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs font-mono">{{ checkpoint.size_bytes | format_size }}</div>
+            </div>
         </div>
 
         <!-- Has Config -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Config</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {% if checkpoint.has_config %}
-                <span class="text-green-600 dark:text-green-400">✓ Available</span>
-                {% else %}
-                <span class="text-gray-400">Not found</span>
-                {% endif %}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Config</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">
+                    {% if checkpoint.has_config %}
+                    <span style="color: var(--green);">✓ Available</span>
+                    {% else %}
+                    <span class="text-gray-400">Not found</span>
+                    {% endif %}
+                </div>
+            </div>
         </div>
 
         <!-- Has Job Spec -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Job Spec</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {% if checkpoint.has_job_spec %}
-                <span class="text-green-600 dark:text-green-400">✓ Available</span>
-                {% else %}
-                <span class="text-gray-400">Not found</span>
-                {% endif %}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Job Spec</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">
+                    {% if checkpoint.has_job_spec %}
+                    <span style="color: var(--green);">✓ Available</span>
+                    {% else %}
+                    <span class="text-gray-400">Not found</span>
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 
     <!-- Main content area -->
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+    <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--spacing-lg);">
         <!-- Config (2/3 width) -->
-        <div class="lg:col-span-2">
+        <div>
             {% if config %}
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
-                <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">Configuration</h3>
+            <div class="card" style="padding: 0;">
+                <div class="card-header" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                    <h3 class="text-xs font-semibold tracking-wide">Configuration</h3>
                 </div>
-                <div class="p-4">
-                    <pre class="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap overflow-x-auto">{{ config | tojson(indent=2) }}</pre>
+                <div style="padding: var(--spacing-md); max-height: 600px; overflow: auto;">
+                    <pre class="text-2xs font-mono text-gray-600" style="white-space: pre-wrap; word-break: break-all;">{{ config | tojson(indent=2) }}</pre>
                 </div>
             </div>
             {% endif %}
         </div>
 
         <!-- Sidebar (1/3 width) -->
-        <div class="space-y-6">
+        <div class="space-y-3">
             <!-- Other checkpoints for this job -->
             {% if other_checkpoints %}
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
-                <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">Other Checkpoints</h3>
+            <div class="card" style="padding: 0;">
+                <div class="card-header" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                    <h3 class="text-xs font-semibold tracking-wide">Other Checkpoints</h3>
                 </div>
-                <ul class="divide-y divide-gray-200 dark:divide-gray-700">
+                <div style="max-height: 300px; overflow-y: auto;">
                     {% for ckpt in other_checkpoints %}
-                    <li class="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <a href="/checkpoints/{{ ckpt.project }}/{{ ckpt.group }}/{{ ckpt.job_name }}/{{ ckpt.suffix }}"
-                           class="block">
-                            <div class="text-sm font-medium text-blue-600 dark:text-blue-400">{{ ckpt.suffix }}</div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {{ ckpt.created | format_timestamp }}
-                                &middot; {{ ckpt.size_bytes | format_size }}
-                            </div>
-                        </a>
-                    </li>
+                    <a href="/checkpoints/{{ ckpt.project }}/{{ ckpt.group }}/{{ ckpt.job_name }}/{{ ckpt.suffix }}"
+                       class="block border-b border-gray-200 p-3 hover:bg-gray-50 transition-colors no-style">
+                        <div class="text-xs font-mono" style="color: var(--blue);">{{ ckpt.suffix }}</div>
+                        <div class="text-2xs text-gray-400 mt-1">
+                            {{ ckpt.created | format_timestamp }}
+                            • {{ ckpt.size_bytes | format_size }}
+                        </div>
+                    </a>
                     {% endfor %}
-                </ul>
+                </div>
             </div>
             {% endif %}
 
             <!-- Job Spec -->
             {% if job_spec %}
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
-                <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">Job Specification</h3>
+            <div class="card" style="padding: 0;">
+                <div class="card-header" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                    <h3 class="text-xs font-semibold tracking-wide">Job Specification</h3>
                 </div>
-                <div class="p-4">
-                    <pre class="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap overflow-x-auto">{{ job_spec | tojson(indent=2) }}</pre>
+                <div style="padding: var(--spacing-md); max-height: 400px; overflow: auto;">
+                    <pre class="text-2xs font-mono text-gray-600" style="white-space: pre-wrap; word-break: break-all;">{{ job_spec | tojson(indent=2) }}</pre>
                 </div>
             </div>
             {% endif %}

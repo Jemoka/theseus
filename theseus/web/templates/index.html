@@ -1,32 +1,32 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Theseus{% endblock %}
+{% block title %}Dashboard - THESEUS{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-5">
     <!-- Page Header -->
-    <div>
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Overview of all running jobs and recent activity
+    <div class="mb-5">
+        <h1 class="text-xl font-semibold uppercase tracking-wide">Dashboard</h1>
+        <p class="text-xs text-gray-400 mt-1">
+            System overview and active operations
         </p>
     </div>
 
     <!-- Stats Grid -->
     <div id="stats-grid"
-         class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5"
+         class="grid grid-5 gap-3 mb-5"
          hx-get="/partials/stats"
          hx-trigger="every 30s"
          hx-swap="innerHTML">
         {% include "partials/stats.html" %}
     </div>
 
-    <!-- Running Jobs -->
-    <div class="space-y-4">
-        <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Running Jobs</h2>
-            <a href="/jobs?status=running" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                View all
+    <!-- Running Jobs Section -->
+    <div class="mb-6">
+        <div class="section-header">
+            <h2 class="section-title">Running Jobs</h2>
+            <a href="/jobs?status=running" class="text-2xs font-semibold tracking-wide no-style" style="color: var(--blue);">
+                View all →
             </a>
         </div>
 
@@ -39,84 +39,88 @@
         </div>
     </div>
 
-    <!-- Recent Jobs -->
-    <div class="space-y-4">
-        <div class="flex items-center justify-between">
-            <h2 class="text-lg font-medium text-gray-900 dark:text-white">Recent Jobs</h2>
-            <a href="/jobs" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                View all jobs
+    <!-- Recent Jobs Section -->
+    <div class="mb-6">
+        <div class="section-header">
+            <h2 class="section-title">Recent Jobs</h2>
+            <a href="/jobs" class="text-2xs font-semibold tracking-wide no-style" style="color: var(--blue);">
+                View history →
             </a>
         </div>
 
         {% if recent_jobs %}
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: var(--spacing-md);">
             {% for job in recent_jobs %}
             {% include "components/job_card.html" %}
             {% endfor %}
         </div>
         {% else %}
-        <div class="text-center py-12 text-gray-500 dark:text-gray-400">
-            <p>No jobs in the last 24 hours</p>
+        <div class="empty-state">
+            <p class="empty-state-text">No jobs in the last 24 hours</p>
         </div>
         {% endif %}
     </div>
 
-    <!-- Projects Overview -->
+    <!-- Projects Overview Table -->
     {% if stats.projects %}
-    <div class="space-y-4">
-        <h2 class="text-lg font-medium text-gray-900 dark:text-white">Projects</h2>
+    <div class="mb-6">
+        <h2 class="section-title mb-3">Projects Overview</h2>
 
-        <div class="bg-white dark:bg-gray-800 shadow overflow-hidden sm:rounded-lg">
-            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-                <thead class="bg-gray-50 dark:bg-gray-900">
-                    <tr>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Project
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Total Jobs
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Running
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Completed
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Failed
-                        </th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                            Groups
-                        </th>
-                    </tr>
-                </thead>
-                <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                    {% for project in stats.projects %}
-                    <tr class="hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <a href="/projects/{{ project.name }}" class="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline">
-                                {{ project.name }}
-                            </a>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                            {{ project.total_jobs }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-blue-600 dark:text-blue-400">
-                            {{ project.running }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-green-600 dark:text-green-400">
-                            {{ project.completed }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-red-600 dark:text-red-400">
-                            {{ project.failed }}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                            {{ project.groups | length }}
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+        <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>Project</th>
+                    <th>Total</th>
+                    <th>Running</th>
+                    <th>Completed</th>
+                    <th>Failed</th>
+                    <th>Groups</th>
+                    <th>Last Activity</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for project in stats.projects %}
+                <tr>
+                    <td>
+                        <a href="/projects/{{ project.name }}" class="font-semibold no-style" style="color: var(--blue);">
+                            {{ project.name }}
+                        </a>
+                    </td>
+                    <td class="font-mono text-xs">{{ project.total_jobs }}</td>
+                    <td>
+                        {% if project.running > 0 %}
+                        <span class="status status-running">{{ project.running }}</span>
+                        {% else %}
+                        <span class="text-gray-400 text-xs">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if project.completed > 0 %}
+                        <span class="status status-completed">{{ project.completed }}</span>
+                        {% else %}
+                        <span class="text-gray-400 text-xs">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if project.failed > 0 %}
+                        <span class="status status-failed">{{ project.failed }}</span>
+                        {% else %}
+                        <span class="text-gray-400 text-xs">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="font-mono text-xs">{{ project.groups | length }}</td>
+                    <td class="text-2xs text-gray-400">
+                        {% if project.last_activity %}
+                        {{ project.last_activity }}
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
         </div>
     </div>
     {% endif %}

@@ -1,17 +1,16 @@
 {#
-Running jobs partial - for HTMX polling updates.
-
-Shows a grid of currently running job cards.
+Running jobs partial - for HTMX polling updates
+Shows running job cards with professional dense layout
 #}
 {% if jobs %}
-<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: var(--spacing-md);">
     {% for job in jobs %}
     {% set job = job %}
-            {% include "components/job_card.html" %}
+    {% include "components/job_card.html" %}
     {% endfor %}
 </div>
 {% else %}
-<div class="bg-white dark:bg-gray-800 rounded-lg shadow p-6 text-center text-gray-500 dark:text-gray-400">
-    <p>No jobs currently running</p>
+<div class="empty-state card">
+    <p class="empty-state-text">No jobs currently running</p>
 </div>
 {% endif %}

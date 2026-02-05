@@ -1,20 +1,69 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}theseus{% endblock %}</title>
 
-    <!-- Tailwind CSS via CDN -->
+    <!-- IBM Plex Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Professional Custom Styles (Primary Design System) -->
+    <link rel="stylesheet" href="/static/styles.css">
+
+    <!-- Tailwind CSS for utility classes (Secondary) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
-            darkMode: 'class',
+            darkMode: false, // Disable dark mode - we're using light professional theme
             theme: {
                 extend: {
-                    // TODO: Add custom colors, fonts, etc. to match your design system
                     colors: {
-                        // Example: 'brand': { 500: '#...' }
+                        // Match our professional palette
+                        'gray': {
+                            50: '#FAFAFA',
+                            100: '#F7F7F7',
+                            200: '#EBEBEB',
+                            300: '#D5D5D5',
+                            400: '#929292',
+                            500: '#434D5F',
+                            600: '#2F3338'
+                        },
+                        'primary': '#434D5F',
+                        'secondary': '#37A5BE',
+                        'success': '#26A671',
+                        'danger': '#FF3900',
+                        'warning': '#F27200',
+                        'info': '#37A5BE',
+                        'accent-yellow': '#DCE279'
+                    },
+                    fontFamily: {
+                        sans: ['IBM Plex Sans', 'sans-serif'],
+                        mono: ['IBM Plex Mono', 'monospace']
+                    },
+                    fontSize: {
+                        '2xs': '11px',
+                        'xs': '12px',
+                        'sm': '13px',
+                        'base': '14px',
+                        'lg': '16px',
+                        'xl': '20px',
+                        '2xl': '24px'
+                    },
+                    borderRadius: {
+                        'none': '0',
+                        'sm': '2px',
+                        DEFAULT: '2px',
+                        'md': '2px',
+                        'lg': '2px'
+                    },
+                    spacing: {
+                        '1': '3px',
+                        '2': '6px',
+                        '3': '10px',
+                        '4': '14px',
+                        '5': '20px',
+                        '6': '30px'
                     }
                 }
             }
@@ -25,84 +74,18 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
 
-    <!-- Custom styles -->
-    <style>
-        /* TODO: Add any custom CSS that Tailwind can't handle */
-
-        /* Log viewer styles */
-        .log-content {
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 0.75rem;
-            line-height: 1.4;
-            white-space: pre-wrap;
-            word-break: break-all;
-            color: #e5e7eb; /* Default gray-200, but inline styles will override */
-        }
-
-        /* Loading indicator */
-        .htmx-request .htmx-indicator {
-            display: inline-block;
-        }
-        .htmx-indicator {
-            display: none;
-        }
-    </style>
-
     {% block head %}{% endblock %}
 </head>
-<body class="h-full bg-gray-50 dark:bg-gray-900">
-    <div class="min-h-full">
-        <!-- Navigation -->
-        <nav class="sticky top-0 z-50 bg-white dark:bg-gray-800 shadow-sm">
-            <div class="mx-auto max-w-screen-2xl px-4 sm:px-6 lg:px-8">
-                <div class="flex h-16 justify-between">
-                    <div class="flex">
-                        <!-- Logo / Brand -->
-                        <div class="flex flex-shrink-0 items-center">
-                            <a href="/" class="text-xl font-bold text-gray-900 dark:text-white">
-                                theseus
-                            </a>
-                        </div>
-
-                        <!-- Navigation Links -->
-                        <div class="hidden sm:ml-6 sm:flex sm:space-x-8">
-                            {% set href = "/" %}{% set label = "Dashboard" %}
-                            {% include "components/nav_link.html" %}
-                            {% set href = "/jobs" %}{% set label = "Jobs" %}
-                            {% include "components/nav_link.html" %}
-                        </div>
-                    </div>
-
-                    <!-- Right side -->
-                    <!-- <div class="flex items-center"> -->
-                        <!-- TODO: Add dark mode toggle, settings, etc. -->
-                        <!-- <span class="text-sm text-gray-500 dark:text-gray-400"> -->
-                            <!-- {{ cluster_root }} -->
-                        <!-- </span> -->
-                    <!-- </div> -->
-                </div>
-            </div>
-        </nav>
-
-        <!-- Main Content -->
-        <main>
-            <div class="mx-auto max-w-screen-2xl py-6 px-8">
-                {% block content %}{% endblock %}
-            </div>
-        </main>
-    </div>
+<body>
+    <!-- Main Content -->
+    <main class="main-container">
+        {% block content %}{% endblock %}
+    </main>
 
     <!-- Scripts -->
     <script>
-        // TODO: Add any global JavaScript functionality
-
-        // Auto-refresh configuration
-        // HTMX will handle polling via hx-trigger="every Xs"
-
-        // Dark mode detection (optional)
-        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            document.documentElement.classList.add('dark');
-        }
+        // Professional status updates via HTMX
+        // Auto-refresh handled via hx-trigger attributes
     </script>
 
     {% block scripts %}{% endblock %}

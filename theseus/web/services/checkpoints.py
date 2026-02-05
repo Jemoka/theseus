@@ -16,6 +16,7 @@ Checkpoint directory structure (from CheckpointedJob):
 
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -261,3 +262,23 @@ class CheckpointService:
                 return f"{size:.1f} {unit}"
             size /= 1024
         return f"{size:.1f} PB"
+
+    def delete_job_checkpoints(self, project: str, group: str, job_name: str) -> bool:
+        """Delete all checkpoints for a job. Returns True if successful."""
+        job_dir = self.checkpoints_dir / project / group / job_name
+        if job_dir.exists() and job_dir.is_dir():
+            try:
+                shutil.rmtree(job_dir)
+
+                # Clean up empty parent directories
+                group_dir = job_dir.parent
+                if group_dir.exists() and not any(group_dir.iterdir()):
+                    group_dir.rmdir()
+                    project_dir = group_dir.parent
+                    if project_dir.exists() and not any(project_dir.iterdir()):
+                        project_dir.rmdir()
+
+                return True
+            except Exception:
+                return False
+        return True  # If no checkpoint dir exists, consider it successful

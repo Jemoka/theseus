@@ -1,50 +1,46 @@
 {% extends "base.html" %}
 
-{% block title %}{{ project }} - Theseus{% endblock %}
+{% block title %}{{ project }} - THESEUS{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-4">
     <!-- Breadcrumb -->
-    <nav class="flex" aria-label="Breadcrumb">
-        <ol class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
-            <li><a href="/" class="hover:text-gray-700 dark:hover:text-gray-200">Dashboard</a></li>
-            <li>/</li>
-            <li class="text-gray-900 dark:text-white font-medium">{{ project }}</li>
-        </ol>
+    <nav class="breadcrumbs">
+        <a href="/" class="breadcrumb-item no-style">Dashboard</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-item active">{{ project }}</span>
     </nav>
 
     <!-- Header -->
-    <div class="sm:flex sm:items-center sm:justify-between">
-        <div>
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ project }}</h1>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ jobs | length }} jobs
-            </p>
-        </div>
+    <div class="mb-4">
+        <h1 class="text-xl font-semibold uppercase tracking-wide">{{ project }}</h1>
+        <p class="text-xs text-gray-400 mt-1">
+            {{ jobs | length }} jobs total
+        </p>
     </div>
 
     <!-- Groups -->
     {% if groups %}
-    <div class="space-y-6">
+    <div class="space-y-5">
         {% for group_name, group_jobs in groups.items() %}
-        <div class="space-y-4">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-medium text-gray-900 dark:text-white">{{ group_name }}</h2>
+        <div class="mb-6">
+            <div class="section-header">
+                <h2 class="section-title">{{ group_name }}</h2>
                 <a href="/jobs?project={{ project }}&group={{ group_name }}"
-                   class="text-sm text-blue-600 dark:text-blue-400 hover:underline">
-                    View all {{ group_jobs | length }} jobs
+                   class="text-2xs font-semibold tracking-wide no-style" style="color: var(--blue);">
+                    View all {{ group_jobs | length }} jobs →
                 </a>
             </div>
 
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: var(--spacing-md);">
                 {% for job in group_jobs[:6] %}
                 {% set job = job %}
-            {% include "components/job_card.html" %}
+                {% include "components/job_card.html" %}
                 {% endfor %}
             </div>
 
             {% if group_jobs | length > 6 %}
-            <p class="text-sm text-gray-500 dark:text-gray-400">
+            <p class="text-2xs text-gray-400 mt-3">
                 And {{ group_jobs | length - 6 }} more jobs...
             </p>
             {% endif %}
@@ -53,12 +49,8 @@
     </div>
 
     {% else %}
-    <div class="text-center py-12">
-        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-        </svg>
-        <h3 class="mt-2 text-sm font-medium text-gray-900 dark:text-white">No jobs in this project</h3>
+    <div class="empty-state card">
+        <p class="empty-state-text">No jobs in this project</p>
     </div>
     {% endif %}
 

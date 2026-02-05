@@ -119,3 +119,9 @@ clusters:
 <p align="center">
   <img src="https://www.jemoka.com/images/Logo_Transparent.png" width="32">
 </p>
+
+## Bonus: Web UI
+
+```bash
+THESEUS_CLUSTER_ROOT=/path/to/root/mount python -m theseus.web.app --port 8000
+```

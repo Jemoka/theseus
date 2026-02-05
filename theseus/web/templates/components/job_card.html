@@ -1,76 +1,71 @@
 {#
-Job card component - displays a job summary.
+Job card component - Compact table-like design with excellent legibility
 
 Usage:
     {% set job = job %}
-            {% include "components/job_card.html" %}
+    {% include "components/job_card.html" %}
 
 Props:
     job: JobMetadata object
-    compact: bool (optional) - use compact layout
-
-TODO:
-- Add wandb link when available
-- Add quick actions (restart, cancel, etc.)
-- Add hover states with more info
 #}
-<div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg hover:shadow-md transition-shadow">
-    <div class="px-4 py-4 sm:px-6">
-        <!-- Header -->
-        <div class="flex items-center justify-between">
-            <div class="flex items-center space-x-3">
-                <a href="/jobs/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}"
-                   class="text-sm font-medium text-gray-900 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 truncate">
-                    {{ job.name }}
-                </a>
-                {% set status = job.status %}
+<div class="job-card">
+    <!-- Full card clickable link -->
+    <a href="/jobs/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}"
+       class="job-card-link no-style" aria-label="View job {{ job.name }}"></a>
+
+    <!-- Primary Info Row -->
+    <div class="job-card-row">
+        <div class="job-card-cell" style="flex: 1; overflow: hidden; border-right: none;">
+            <span class="job-card-id">{{ job.job_key }}</span>
+            <span class="job-card-name">{{ job.name }}</span>
+        </div>
+        <div class="job-card-cell" style="padding-right: var(--spacing-sm); width: auto; border-left: 1px solid var(--gray-2); border-right: none;">
+            {% if job.status.value == "running" and job.is_stale %}
+            <span class="status status-running">⚠ Stale</span>
+            {% else %}
+            {% set status = job.status %}
             {% include "components/status_badge.html" %}
-            </div>
-
-            <!-- Duration -->
-            {% if job.duration %}
-            <span class="text-xs text-gray-500 dark:text-gray-400">
-                {{ job.duration }}
-            </span>
             {% endif %}
         </div>
+    </div>
 
-        <!-- Details -->
-        <div class="mt-2 flex items-center space-x-4 text-xs text-gray-500 dark:text-gray-400">
-            <!-- Project/Group -->
-            <span class="truncate">
-                {{ job.project or "general" }} / {{ job.group or "default" }}
-            </span>
-
-            <!-- Job key -->
-            <span class="truncate font-mono">
-                {{ job.job_key }}
-            </span>
+    <!-- Project/Group Row -->
+    <div class="job-card-row">
+        <div class="job-card-cell">
+            <span class="job-card-label">Project</span>
         </div>
+        <div class="job-card-cell flex-1">
+            <span class="job-card-value">{{ job.project or "general" }}</span>
+        </div>
+        <div class="job-card-cell">
+            <span class="job-card-label">Group</span>
+        </div>
+        <div class="job-card-cell flex-1">
+            <span class="job-card-value">{{ job.group or "default" }}</span>
+        </div>
+    </div>
 
-        <!-- Hardware info -->
+    <!-- Hardware & Duration Row (only if data exists) -->
+    {% if job.hardware.total_chips > 0 or job.duration %}
+    <div class="job-card-row">
         {% if job.hardware.total_chips > 0 %}
-        <div class="mt-2 flex items-center space-x-2 text-xs text-gray-500 dark:text-gray-400">
-            <!-- Chip icon placeholder -->
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
-            </svg>
-            <span>
-                {{ job.hardware.total_chips }}x {{ job.hardware.chip or "unknown" }}
+        <div class="job-card-cell">
+            <span class="job-card-label">Hardware</span>
+        </div>
+        <div class="job-card-cell flex-1">
+            <span class="job-card-value font-mono">
+                <span style="white-space: nowrap;">{{ job.hardware.total_chips }}× {{ job.hardware.chip or "chip" }}</span>
             </span>
-            {% if job.hardware.hosts %}
-            <span class="text-gray-400">on</span>
-            <span>{{ job.hardware.hosts | join(", ") }}</span>
-            {% endif %}
         </div>
         {% endif %}
-
-        <!-- Stale indicator -->
-        {% if job.status.value == "running" and job.is_stale %}
-        <div class="mt-2 text-xs text-yellow-600 dark:text-yellow-400">
-            ⚠ Heartbeat stale (>5 min)
+        {% if job.duration %}
+        <div class="job-card-cell">
+            <span class="job-card-label">Duration</span>
+        </div>
+        <div class="job-card-cell flex-1">
+            <span class="job-card-value">{{ job.duration }}</span>
         </div>
         {% endif %}
     </div>
+    {% endif %}
 </div>

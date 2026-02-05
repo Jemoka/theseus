@@ -10,8 +10,8 @@ Uses HTMX for dynamic updates without full page reloads.
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request, Query, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from theseus.web.models import JobStatus
 
@@ -40,10 +40,17 @@ async def dashboard(request: Request):
     stats = status_service.get_dashboard_stats()
 
     running_jobs = status_service.get_running_jobs()
-    # Get all jobs sorted by start time and take the last 8
+    # Sort running jobs by most recent heartbeat first
+    running_jobs.sort(
+        key=lambda j: j.last_heartbeat if j.last_heartbeat else "", reverse=True
+    )
+
+    # Get recent jobs (sorted by most recent heartbeat)
     all_jobs = status_service.list_all_jobs(limit=100)
-    all_jobs.sort(key=lambda j: j.start_time if j.start_time else "")
-    recent_jobs = all_jobs[-8:] if len(all_jobs) > 8 else all_jobs
+    all_jobs.sort(
+        key=lambda j: j.last_heartbeat if j.last_heartbeat else "", reverse=True
+    )
+    recent_jobs = all_jobs[:8]
 
     return render(
         request,
@@ -102,9 +109,9 @@ async def job_detail(
     if not job:
         return render(request, "404.html", message="Job not found")
 
-    # Get other runs of this job
-    other_runs = status_service.get_job_runs(project, group, name)
-    other_runs = [r for r in other_runs if r.run_id != run_id][:5]
+    # Get all runs of this job, sorted by start time (most recent first)
+    all_runs = status_service.get_job_runs(project, group, name)
+    all_runs.sort(key=lambda r: r.start_time if r.start_time else "", reverse=True)
 
     # Get checkpoints for this job
     checkpoints = checkpoint_service.list_job_checkpoints(project, group, name)
@@ -118,10 +125,42 @@ async def job_detail(
         request,
         "job_detail.html",
         job=job,
-        other_runs=other_runs,
+        all_runs=all_runs,
+        current_run_id=run_id,
         checkpoints=checkpoints,
         log_content=log_content,
     )
+
+
+@router.post("/jobs/{project}/{group}/{name}/{run_id}/delete")
+async def delete_job(
+    request: Request,
+    project: str,
+    group: str,
+    name: str,
+    run_id: str,
+    confirmation: str = Form(...),
+):
+    """Delete a job run."""
+    status_service = request.app.state.status_service
+
+    # Check confirmation matches job name
+    if confirmation != name:
+        return HTMLResponse(
+            content="<div style='color: red; padding: 10px;'>Confirmation failed. Job name did not match.</div>",
+            status_code=400,
+        )
+
+    success = status_service.delete_job(project, group, name, run_id)
+
+    if success:
+        # Redirect to dashboard
+        return RedirectResponse(url="/", status_code=303)
+    else:
+        return HTMLResponse(
+            content="<div style='color: red; padding: 10px;'>Failed to delete job.</div>",
+            status_code=500,
+        )
 
 
 @router.get(
@@ -196,6 +235,8 @@ async def partial_running_jobs(request: Request):
     """Partial: running jobs list (for HTMX polling)."""
     status_service = request.app.state.status_service
     jobs = status_service.get_running_jobs()
+    # Sort by most recent heartbeat first
+    jobs.sort(key=lambda j: j.last_heartbeat if j.last_heartbeat else "", reverse=True)
 
     return render(request, "partials/running_jobs.html", jobs=jobs)
 

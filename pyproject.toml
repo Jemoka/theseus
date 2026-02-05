@@ -61,6 +61,7 @@ web = [
     "aiofiles>=23.0.0",
     "sse-starlette>=1.6.0",
     "pyyaml>=6.0.0",
+    "python-multipart>=0.0.22",
 ]
 all = [
     {include-group = "dev"},

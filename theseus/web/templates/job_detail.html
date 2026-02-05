@@ -1,178 +1,220 @@
 {% extends "base.html" %}
 
-{% block title %}{{ job.name }} - Theseus{% endblock %}
+{% block title %}{{ job.name }} - THESEUS{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
+<div class="space-y-4">
     <!-- Breadcrumb -->
-    <nav class="flex" aria-label="Breadcrumb">
-        <ol class="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
-            <li><a href="/jobs" class="hover:text-gray-700 dark:hover:text-gray-200">Jobs</a></li>
-            <li>/</li>
-            <li><a href="/jobs?project={{ job.project or 'general' }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ job.project or "general" }}</a></li>
-            <li>/</li>
-            <li><a href="/jobs?project={{ job.project or 'general' }}&group={{ job.group or 'default' }}" class="hover:text-gray-700 dark:hover:text-gray-200">{{ job.group or "default" }}</a></li>
-            <li>/</li>
-            <li class="text-gray-900 dark:text-white font-medium">{{ job.name }}</li>
-        </ol>
+    <nav class="breadcrumbs">
+        <a href="/" class="breadcrumb-item no-style">theseus</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs" class="breadcrumb-item no-style">jobs</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs?project={{ job.project or 'general' }}" class="breadcrumb-item no-style">{{ job.project or "general" }}</a>
+        <span class="breadcrumb-separator">/</span>
+        <a href="/jobs?project={{ job.project or 'general' }}&group={{ job.group or 'default' }}" class="breadcrumb-item no-style">{{ job.group or "default" }}</a>
+        <span class="breadcrumb-separator">/</span>
+        <span class="breadcrumb-item active">{{ job.name }}</span>
     </nav>
 
     <!-- Header -->
-    <div class="sm:flex sm:items-center sm:justify-between">
+    <div class="job-detail-header mb-4">
         <div>
-            <div class="flex items-center space-x-3">
-                <h1 class="text-2xl font-bold text-gray-900 dark:text-white">{{ job.name }}</h1>
+            <div class="flex items-center gap-3 flex-wrap">
+                <h1 class="text-xl font-semibold uppercase tracking-wide">{{ job.name }}</h1>
+                {% if job.status.value == "running" and job.is_stale %}
+                <span class="status status-running">⚠ Stale</span>
+                {% else %}
                 {% set status = job.status %}
-            {% include "components/status_badge.html" %}
+                {% include "components/status_badge.html" %}
+                {% endif %}
             </div>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400 font-mono">
+            <p class="text-xs text-gray-400 font-mono mt-1">
                 Run ID: {{ job.run_id }}
             </p>
         </div>
 
         <!-- Actions -->
-        <div class="mt-4 sm:mt-0 flex space-x-3">
-            <!-- TODO: Add action buttons -->
-            <!--
-            <button class="...">Restart</button>
-            <button class="...">Cancel</button>
-            -->
-
+        <div class="job-detail-actions">
             {% if job.wandb_url %}
-            <a href="{{ job.wandb_url }}" target="_blank"
-               class="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
-                <svg class="mr-2 -ml-0.5 h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 7.885a.75.75 0 01-.728.572H8.804a.75.75 0 01-.728-.572l-1.97-7.885A.75.75 0 016.834 7.5h10.332a.75.75 0 01.728.721z"/>
-                </svg>
+            <a href="{{ job.wandb_url }}" target="_blank" class="btn btn-primary btn-small">
                 View in W&B
             </a>
             {% endif %}
 
             {% if job.slurm_job_id %}
-            <span class="inline-flex items-center rounded-md bg-gray-100 dark:bg-gray-700 px-2.5 py-0.5 text-sm font-medium text-gray-800 dark:text-gray-200">
-                SLURM: {{ job.slurm_job_id }}
+            <span class="tag tag-yellow">
+                Slurm: {{ job.slurm_job_id }}
             </span>
             {% endif %}
+
+            <button onclick="confirmDelete()" class="btn btn-danger btn-small">
+                Delete
+            </button>
         </div>
     </div>
 
-    <!-- Info Cards -->
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <!-- Info Grid -->
+    <div class="info-grid-responsive mb-4">
         <!-- Job Key -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Job Key</dt>
-            <dd class="mt-1 text-sm font-mono text-gray-900 dark:text-white">{{ job.job_key }}</dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Job Key</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs font-mono">{{ job.job_key }}</div>
+            </div>
         </div>
 
         <!-- Started -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Started</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {{ job.start_time | format_timestamp }}
-                {% if job.duration %}
-                <span class="text-gray-500 dark:text-gray-400">({{ job.duration | format_duration }})</span>
-                {% endif %}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Started</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">
+                    {{ job.start_time | format_timestamp }}
+                    {% if job.duration %}
+                    <span class="text-2xs text-gray-400">({{ job.duration | format_duration }})</span>
+                    {% endif %}
+                </div>
+            </div>
         </div>
 
         <!-- Hardware -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Hardware</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {% if job.hardware.total_chips > 0 %}
-                {{ job.hardware.total_chips }}x {{ job.hardware.chip or "unknown" }}
-                {% else %}
-                -
-                {% endif %}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Hardware</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">
+                    {% if job.hardware.total_chips > 0 %}
+                    {{ job.hardware.total_chips }}× {{ job.hardware.chip or "unknown" }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </div>
+            </div>
         </div>
 
         <!-- Hosts -->
-        <div class="bg-white dark:bg-gray-800 overflow-hidden shadow rounded-lg px-4 py-5">
-            <dt class="text-sm font-medium text-gray-500 dark:text-gray-400 truncate">Hosts</dt>
-            <dd class="mt-1 text-sm text-gray-900 dark:text-white">
-                {% if job.hardware.hosts %}
-                {{ job.hardware.hosts | join(", ") }}
-                {% else %}
-                -
-                {% endif %}
-            </dd>
+        <div class="stat-card">
+            <div class="stat-card-header">
+                <div class="stat-label">Hosts</div>
+            </div>
+            <div class="stat-card-body">
+                <div class="text-xs">
+                    {% if job.hardware.hosts %}
+                    {{ job.hardware.hosts | join(", ") }}
+                    {% else %}
+                    —
+                    {% endif %}
+                </div>
+            </div>
         </div>
     </div>
 
     <!-- Main Content Grid -->
-    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <!-- Log Viewer (2/3 width) -->
-        <div class="lg:col-span-2">
+    <div class="job-detail-content">
+        <!-- Log Viewer -->
+        <div class="log-viewer-section">
             {% set job = job %}{% set content = log_content %}
             {% include "components/log_viewer.html" %}
         </div>
 
-        <!-- Sidebar (1/3 width) -->
-        <div class="space-y-6">
-            <!-- Other Runs -->
-            {% if other_runs %}
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
-                <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">Other Runs</h3>
+        <!-- Sidebar -->
+        <div class="job-detail-sidebar">
+            <!-- Runs -->
+            {% if all_runs and all_runs|length > 0 %}
+            <div class="card" style="padding: 0;">
+                <div class="card-header" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                    <h3 class="text-xs font-semibold tracking-wide">Runs ({{ all_runs|length }})</h3>
                 </div>
-                <ul class="divide-y divide-gray-200 dark:divide-gray-700">
-                    {% for run in other_runs %}
-                    <li class="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <a href="/jobs/{{ run.project or 'general' }}/{{ run.group or 'default' }}/{{ run.name }}/{{ run.run_id }}"
-                           class="block">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm font-mono text-gray-600 dark:text-gray-300">{{ run.run_id }}</span>
-                                {% set status = run.status %}
-            {% include "components/status_badge.html" %}
-                            </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {{ run.start_time | format_timestamp }}
-                            </div>
-                        </a>
-                    </li>
+                <div style="max-height: 300px; overflow-y: auto;">
+                    {% for run in all_runs %}
+                    <a href="/jobs/{{ run.project or 'general' }}/{{ run.group or 'default' }}/{{ run.name }}/{{ run.run_id }}"
+                       class="block border-b border-gray-200 p-3 hover:bg-gray-50 transition-colors no-style"
+                       style="{% if run.run_id == current_run_id %}background: rgba(0, 0, 0, 0.02);{% endif %}">
+                        <div class="flex justify-between items-center">
+                            <span class="text-xs font-mono text-gray-600">{{ run.run_id }}</span>
+                            {% if run.status.value == "running" and run.is_stale %}
+                            <span class="status status-running">⚠ Stale</span>
+                            {% else %}
+                            {% set status = run.status %}
+                            {% include "components/status_badge.html" %}
+                            {% endif %}
+                        </div>
+                        <div class="text-2xs text-gray-400 mt-1">
+                            {{ run.start_time | format_timestamp }}
+                        </div>
+                    </a>
                     {% endfor %}
-                </ul>
+                </div>
             </div>
             {% endif %}
 
             <!-- Checkpoints -->
             {% if checkpoints %}
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
-                <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-medium text-gray-900 dark:text-white">Checkpoints ({{ checkpoints | length }})</h3>
+            <div class="card" style="padding: 0;">
+                <div class="card-header" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                    <h3 class="text-xs font-semibold tracking-wide">Checkpoints ({{ checkpoints | length }})</h3>
                 </div>
-                <ul class="divide-y divide-gray-200 dark:divide-gray-700 max-h-96 overflow-y-auto">
+                <div style="max-height: 300px; overflow-y: auto;">
                     {% for ckpt in checkpoints %}
-                    <li class="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700">
-                        <a href="/checkpoints/{{ ckpt.project }}/{{ ckpt.group }}/{{ ckpt.job_name }}/{{ ckpt.suffix }}"
-                           class="block">
-                            <div class="text-sm font-medium text-blue-600 dark:text-blue-400 font-mono">{{ ckpt.suffix }}</div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {{ ckpt.created | format_timestamp }}
-                                {% if ckpt.size_bytes %}
-                                &middot; {{ ckpt.size_bytes | format_size }}
-                                {% endif %}
-                            </div>
-                        </a>
-                    </li>
+                    <a href="/checkpoints/{{ ckpt.project }}/{{ ckpt.group }}/{{ ckpt.job_name }}/{{ ckpt.suffix }}"
+                       class="block border-b border-gray-200 p-3 hover:bg-gray-50 transition-colors no-style">
+                        <div class="text-xs font-mono" style="color: var(--blue);">{{ ckpt.suffix }}</div>
+                        <div class="text-2xs text-gray-400 mt-1">
+                            {{ ckpt.created | format_timestamp }}
+                            {% if ckpt.size_bytes %}
+                            • {{ ckpt.size_bytes | format_size }}
+                            {% endif %}
+                        </div>
+                    </a>
                     {% endfor %}
-                </ul>
+                </div>
             </div>
             {% endif %}
 
-            <!-- Config (expanded by default) -->
-            <div class="bg-white dark:bg-gray-800 shadow rounded-lg">
+            <!-- Config -->
+            <div class="card" style="padding: 0;">
                 <details open>
-                    <summary class="px-4 py-3 cursor-pointer border-b border-gray-200 dark:border-gray-700">
-                        <span class="text-sm font-medium text-gray-900 dark:text-white">Config</span>
+                    <summary class="card-header cursor-pointer" style="background: var(--gray-1); padding: var(--spacing-sm) var(--spacing-md); margin: 0;">
+                        <span class="text-xs font-semibold tracking-wide">Config</span>
                     </summary>
-                    <div class="px-4 py-3 max-h-96 overflow-auto">
-                        <pre class="text-xs font-mono text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{{ job.config | tojson(indent=2) }}</pre>
+                    <div style="padding: var(--spacing-md); max-height: 400px; overflow: auto;">
+                        <pre class="text-2xs font-mono text-gray-600" style="white-space: pre-wrap; word-break: break-all;">{{ job.config | tojson(indent=2) }}</pre>
                     </div>
                 </details>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+function confirmDelete() {
+    const jobName = "{{ job.name }}";
+    const confirmation = prompt(
+        `⚠️ WARNING: This will permanently delete this job run and all its data.\n\n` +
+        `Type the job name "${jobName}" to confirm deletion:`
+    );
+
+    if (confirmation === jobName) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '/jobs/{{ job.project or "general" }}/{{ job.group or "default" }}/{{ job.name }}/{{ job.run_id }}/delete';
+
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'confirmation';
+        input.value = confirmation;
+
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+    } else if (confirmation !== null) {
+        alert('Job name did not match. Deletion cancelled.');
+    }
+}
+</script>
 {% endblock %}

@@ -13,6 +13,7 @@ The status directory structure (created by bootstrap.py):
 
 import json
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -282,3 +283,26 @@ class StatusService:
         stats.active_chips = active_chips
 
         return stats
+
+    def delete_job(self, project: str, group: str, name: str, run_id: str) -> bool:
+        """Delete a specific job run. Returns True if successful."""
+        run_dir = self.status_dir / project / group / name / run_id
+        if run_dir.exists() and run_dir.is_dir():
+            try:
+                shutil.rmtree(run_dir)
+
+                # Clean up empty parent directories
+                job_dir = run_dir.parent
+                if job_dir.exists() and not any(job_dir.iterdir()):
+                    job_dir.rmdir()
+                    group_dir = job_dir.parent
+                    if group_dir.exists() and not any(group_dir.iterdir()):
+                        group_dir.rmdir()
+                        project_dir = group_dir.parent
+                        if project_dir.exists() and not any(project_dir.iterdir()):
+                            project_dir.rmdir()
+
+                return True
+            except Exception:
+                return False
+        return False
