@@ -6,6 +6,7 @@
 # 
 
 set -euo pipefail
+source ~/.bashrc
 
 echo "[bootstrap] starting on $(hostname)"
 
