@@ -71,13 +71,13 @@ class LogService:
         group: str,
         name: str,
         run_id: str,
-        lines: int = 100,
+        lines: int | None = None,
     ) -> str:
         """
-        Read the last N lines of a log file.
+        Read the last N lines of a log file, or entire file if lines=None.
 
-        This is a simple implementation that reads the whole file.
-        TODO: Optimize for large files by reading from end.
+        Args:
+            lines: Number of lines to return from end. None = entire file.
         """
         log_path = self._get_log_path(project, group, name, run_id)
 
@@ -86,8 +86,13 @@ class LogService:
 
         try:
             with open(log_path, "r", errors="replace") as f:
-                all_lines = f.readlines()
-                return "".join(all_lines[-lines:])
+                if lines is None:
+                    # Return entire file
+                    return f.read()
+                else:
+                    # Return last N lines
+                    all_lines = f.readlines()
+                    return "".join(all_lines[-lines:])
         except Exception as e:
             return f"Error reading log: {e}"
 

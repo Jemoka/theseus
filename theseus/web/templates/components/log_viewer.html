@@ -30,7 +30,7 @@ Props:
             </button>
 
             <!-- Refresh button -->
-            <button hx-get="/partials/log/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}?tail=100"
+            <button hx-get="/partials/log/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}"
                     hx-target="#log-content"
                     hx-swap="innerHTML"
                     class="text-2xs font-semibold log-header-refresh" style="color: var(--gray-3); cursor: pointer; white-space: nowrap;">
@@ -43,7 +43,7 @@ Props:
     <div id="log-container"
          class="log-viewer-body"
          {% if job.status.value == "running" %}
-         hx-get="/partials/log/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}?tail=100"
+         hx-get="/partials/log/{{ job.project or 'general' }}/{{ job.group or 'default' }}/{{ job.name }}/{{ job.run_id }}"
          hx-trigger="every 3s"
          hx-target="#log-content"
          hx-swap="innerHTML"
@@ -118,76 +118,117 @@ Props:
     color: var(--fg);
 }
 
-.log-line {
-    display: block;
+/* Structured log line - responsive layout via CSS */
+.log-structured {
+    display: flex;
+    font-family: 'IBM Plex Mono', monospace;
     padding: 1px 0 1px 4px;
     border-left: 2px solid transparent;
     margin-left: -4px;
     cursor: pointer;
 }
 
-.log-line:hover {
+.log-structured:hover {
     background: rgba(0, 0, 0, 0.02);
     border-left-color: var(--gray-2);
 }
 
+/* Desktop layout (default) */
+.log-time {
+    color: #929292;
+    min-width: 60px;
+    font-size: 10px;
+}
+
+.log-level {
+    font-weight: 600;
+    min-width: 55px;
+    font-size: 10px;
+}
+
+.log-component {
+    color: #9B59B6;
+    font-weight: 600;
+    min-width: 90px;
+    font-size: 10px;
+}
+
+.log-message {
+    color: #2F3338;
+    flex: 1;
+    padding-left: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+/* Continuation lines */
+.log-continuation {
+    padding-left: 123px; /* time (60) + level (55) + spacing (8) */
+    color: #2F3338;
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+}
+
+.log-empty {
+    height: 0.5em;
+}
+
+/* Mobile layout */
+@media (max-width: 768px) {
+    .log-time {
+        display: none; /* Hide timestamp on mobile */
+    }
+
+    .log-level {
+        min-width: 12px;
+        margin-right: 4px;
+        font-size: 9px;
+    }
+
+    .log-component {
+        position: absolute;
+        right: 4px;
+        min-width: 70px;
+        font-size: 9px;
+        text-align: right;
+        background: linear-gradient(to right, rgba(250,250,250,0) 0%, rgba(250,250,250,0.95) 15%, rgba(250,250,250,1) 25%);
+        padding-left: 20px;
+    }
+
+    .log-message {
+        flex: 1;
+        padding-right: 75px; /* Space for component */
+        padding-left: 0;
+        font-size: 9px;
+    }
+
+    .log-structured {
+        position: relative;
+        font-size: 9px;
+        line-height: 1.3;
+    }
+
+    .log-continuation {
+        padding-left: 16px;
+        padding-right: 75px;
+        font-size: 9px;
+        line-height: 1.3;
+    }
+}
+
+
+/* Mobile adjustments for header */
 @media (max-width: 768px) {
     .log-viewer-header {
         gap: var(--spacing-xs);
     }
 
-    .log-viewer-header > div {
-        gap: var(--spacing-xs);
-        flex-shrink: 1;
-        white-space: nowrap;
-    }
-
-    .log-header-title {
-        flex-shrink: 1;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .log-header-live {
-        flex-shrink: 0;
-    }
-
-    .log-header-refresh {
-        flex-shrink: 0;
-    }
-
     .log-viewer-body {
         padding: var(--spacing-sm);
-        font-size: 9px;
-        overflow-x: hidden;
-    }
-
-    .log-content {
-        font-size: 9px;
-        line-height: 1.3;
-    }
-
-    .log-line {
-        padding: 1px 0;
-        margin-left: 0;
-    }
-
-    .log-line-mobile {
-        min-height: 16px;
-    }
-
-    .log-component-sticky {
-        flex-shrink: 0;
     }
 }
-
-/* Log level specific styling for light mode */
-.log-level-debug { color: #5B6B8A; }
-.log-level-info { color: #26A671; }
-.log-level-warning { color: #F27200; }
-.log-level-error { color: #FF3900; }
-.log-level-critical { color: #C62828; }
 </style>
 
 <script>
@@ -206,10 +247,12 @@ const logLevelColors = {
     'FATAL': '#C62828'
 };
 
-// Simplified log formatting
+// Simplified log formatting - formats once, CSS handles responsive layout
 function formatLogs(element) {
     const rawText = element.textContent || element.innerText;
-    const isMobile = window.innerWidth <= 768;
+    if (!rawText || !rawText.trim()) {
+        return; // Nothing to format
+    }
 
     // Strip ANSI codes for pattern matching
     const stripAnsi = (str) => str.replace(/\x1b\[[0-9;]*m/g, '');
@@ -235,70 +278,34 @@ function formatLogs(element) {
             const time = datetime.substring(11);
             const levelColor = logLevelColors[level.trim().toUpperCase()] || '#2F3338';
 
-            // Simplified source for display
-            const sourceMatch = source.match(/([^/.]+\.\w+):(\d+)/);
-            const cleanSource = sourceMatch ? `${sourceMatch[1]}:${sourceMatch[2]}` : source;
-
             // Apply ANSI processing to message
-            // Count pipes in clean line to know which pipe marks the message start
             const pipeCount = cleanLine.split('|').length - 1;
-
-            // Find the correct pipe in the original line
-            // 2 pipes = timestamp | level | source message (no component)
-            // 3 pipes = timestamp | level | source component | message
             let originalMessage;
             if (pipeCount === 2) {
-                // No component - message starts after 2nd pipe
                 const pipes = line.split('|');
                 originalMessage = pipes.slice(2).join('|').trim();
             } else {
-                // Has component - message starts after last pipe
                 const lastPipeIndex = line.lastIndexOf('|');
                 originalMessage = line.substring(lastPipeIndex + 1).trim();
             }
             const msgWithAnsi = originalMessage ? ansi_up.ansi_to_html(originalMessage) : '';
 
-            // Store structured data for copy-to-clipboard
+            // Store structured data
             const dataAttrs = `data-timestamp="${datetime}" data-level="${level.trim()}" data-source="${source}" data-component="${component}" data-message="${message.replace(/"/g, '&quot;')}"`;
 
-            if (isMobile) {
-                // Mobile: compact layout with sticky component column
-                const levelShort = level.trim().substring(0, 1).toUpperCase(); // First letter only
-                const componentSpan = component ? `<span class="log-component-sticky" style="color: #9B59B6; font-weight: 600; font-size: 9px; position: sticky; right: 0; background: linear-gradient(to right, rgba(250,250,250,0) 0%, rgba(250,250,250,0.95) 15%, rgba(250,250,250,1) 25%); padding-left: 20px; padding-right: 4px; min-width: 70px; text-align: right;" title="${source}">${component}</span>` : '';
-                return `<div class="log-line log-line-mobile" ${dataAttrs} style="display: flex; font-family: 'IBM Plex Mono', monospace; font-size: 9px; line-height: 1.3; position: relative;">
-                    <span style="color: ${levelColor}; font-weight: 600; min-width: 12px; margin-right: 4px;">${levelShort}</span>
-                    <span style="color: #2F3338; flex: 1; word-break: break-word; padding-right: ${component ? '70px' : '4px'}; font-weight: 600;">${msgWithAnsi}</span>
-                    ${componentSpan}
-                </div>`;
-            } else {
-                // Desktop: full layout with component column
-                // Always render component span to maintain alignment, even if empty
-                return `<div class="log-line" ${dataAttrs} style="display: flex; font-family: 'IBM Plex Mono', monospace;">
-                    <span style="color: #929292; min-width: 60px; font-size: 10px;">${time}</span>
-                    <span style="color: ${levelColor}; font-weight: 600; min-width: 55px; font-size: 10px;">${level.trim()}</span>
-                    <span style="color: #9B59B6; font-weight: 600; min-width: ${component ? '90px' : '0px'}; font-size: 10px;" title="${source}">${component}</span>
-                    <span style="color: #2F3338; flex: 1; padding-left: 8px; font-size: 11px; font-weight: 600;">${msgWithAnsi}</span>
-                </div>`;
-            }
+            // Single responsive layout - CSS handles mobile/desktop
+            return `<div class="log-line log-structured" ${dataAttrs}>
+                <span class="log-time">${time}</span>
+                <span class="log-level" style="color: ${levelColor};">${level.trim()}</span>
+                <span class="log-component" title="${source}">${component}</span>
+                <span class="log-message">${msgWithAnsi}</span>
+            </div>`;
         } else if (line.trim()) {
-            // Check if this is a continuation line (doesn't start with timestamp)
+            // Continuation or unstructured line
             const isContinuation = !timestampPattern.test(cleanLine);
-
-            if (isContinuation) {
-                // Continuation line - indent under the message (without component space)
-                const paddingLeft = isMobile ? '16px' : '123px';  // time (60) + level (55) + spacing (8)
-                const paddingRight = isMobile ? '75px' : '0';
-                const fontSize = isMobile ? '9px' : '11px';
-                return `<div class="log-line" style="padding-left: ${paddingLeft}; padding-right: ${paddingRight}; color: #2F3338; font-size: ${fontSize}; font-family: 'IBM Plex Mono', monospace; font-weight: 600;">${ansi_up.ansi_to_html(line)}</div>`;
-            } else {
-                // Unstructured line with timestamp
-                const paddingLeft = isMobile ? '16px' : '123px';
-                const paddingRight = isMobile ? '75px' : '0';
-                const fontSize = isMobile ? '9px' : '11px';
-                return `<div class="log-line" style="padding-left: ${paddingLeft}; padding-right: ${paddingRight}; color: #2F3338; font-size: ${fontSize}; font-family: 'IBM Plex Mono', monospace;">${ansi_up.ansi_to_html(line)}</div>`;
-            }
+            return `<div class="log-line log-continuation">${ansi_up.ansi_to_html(line)}</div>`;
         } else {
-            return '<div style="height: 0.5em;"></div>';
+            return '<div class="log-line log-empty"></div>';
         }
     });
 
@@ -306,18 +313,38 @@ function formatLogs(element) {
 }
 
 // Parse initial content and scroll to bottom
-document.addEventListener('DOMContentLoaded', function() {
+function initializeLogs() {
     const logContent = document.getElementById('log-content');
-    if (logContent) {
-        formatLogs(logContent);
+    const container = document.getElementById('log-container');
 
-        // Scroll to bottom on load
-        const container = document.getElementById('log-container');
-        if (container) {
-            container.scrollTop = container.scrollHeight;
+    if (logContent && logContent.textContent && logContent.textContent.trim()) {
+        try {
+            formatLogs(logContent);
+
+            // Scroll to bottom after formatting
+            if (container) {
+                // Use setTimeout to ensure DOM has updated
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 50);
+            }
+        } catch (err) {
+            console.error('Error formatting logs:', err);
+            // Leave raw text as fallback
         }
     }
-});
+}
+
+// Initialize on DOMContentLoaded
+document.addEventListener('DOMContentLoaded', initializeLogs);
+
+// Also try to initialize immediately if DOM is already loaded
+if (document.readyState === 'loading') {
+    // DOMContentLoaded has not fired yet
+} else {
+    // DOMContentLoaded has already fired
+    initializeLogs();
+}
 
 // Click to copy log line in original format
 document.body.addEventListener('click', function(evt) {
@@ -360,10 +387,19 @@ document.body.addEventListener('click', function(evt) {
 // Handle HTMX updates
 document.body.addEventListener('htmx:beforeSwap', function(evt) {
     if (evt.detail.target.id === 'log-content') {
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = evt.detail.xhr.responseText;
-        formatLogs(tempDiv);
-        evt.detail.serverResponse = tempDiv.innerHTML;
+        try {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = evt.detail.xhr.responseText;
+
+            // Only format if there's actual content
+            if (tempDiv.textContent && tempDiv.textContent.trim()) {
+                formatLogs(tempDiv);
+                evt.detail.serverResponse = tempDiv.innerHTML;
+            }
+        } catch (err) {
+            console.error('Error formatting HTMX update:', err);
+            // Let HTMX use the raw response as fallback
+        }
     }
 });
 
@@ -427,22 +463,5 @@ document.body.addEventListener('htmx:afterSwap', function(evt) {
     }
 });
 
-// Reformat logs on window resize (maintain scroll position)
-let resizeTimeout;
-window.addEventListener('resize', function() {
-    clearTimeout(resizeTimeout);
-    resizeTimeout = setTimeout(function() {
-        const logContent = document.getElementById('log-content');
-        const container = document.getElementById('log-container');
-        if (logContent && logContent.textContent) {
-            // Check if already scrolled to bottom before reformatting
-            const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 50;
-            formatLogs(logContent);
-            // Keep at bottom if was at bottom
-            if (isAtBottom) {
-                container.scrollTop = container.scrollHeight;
-            }
-        }
-    }, 250);
-});
+// No resize handler needed - CSS handles responsive layout!
 </script>

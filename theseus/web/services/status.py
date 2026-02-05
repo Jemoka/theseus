@@ -39,31 +39,20 @@ class StatusService:
             return None
 
         try:
-            # Read the log file and search for W&B URL pattern
-            # W&B typically logs: "wandb: 🚀 View run at https://wandb.ai/{entity}/{project}/runs/{run_id}"
+            # Read log and search for W&B line
+            # Format: WANDB | project=... run_id=... url=https://wandb.ai/...
             with open(log_path, "r", errors="ignore") as f:
                 content = f.read()
 
-            # Look for W&B URL pattern
-            # Match various formats that W&B might use
-            patterns = [
-                r"https://wandb\.ai/[^\s\)]+",  # General W&B URL
-                r"View run at (https://wandb\.ai/[^\s]+)",  # Common W&B log format
-                r"Run page: (https://wandb\.ai/[^\s]+)",  # Alternative format
-            ]
+            # Remove ANSI codes first
+            content = re.sub(r"\x1b\[[0-9;]*m", "", content)
 
-            for pattern in patterns:
-                match = re.search(pattern, content)
-                if match:
-                    # Extract the URL from the match
-                    url = match.group(1) if match.groups() else match.group(0)
-                    # Clean up any trailing punctuation or ANSI codes
-                    url = re.sub(r"[\x1b\[\d+m]+", "", url)  # Remove ANSI codes
-                    url = url.rstrip(".,;:)")  # Remove trailing punctuation
-                    return url
+            # Extract W&B URL from structured log line
+            match = re.search(r"WANDB \|.*?url=(https://wandb\.ai/[^\s]+)", content)
+            if match:
+                return match.group(1)
 
         except Exception:
-            # Silently handle any file reading errors
             pass
 
         return None

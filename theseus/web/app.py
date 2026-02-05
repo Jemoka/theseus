@@ -17,16 +17,19 @@ from contextlib import asynccontextmanager
 from typing import Optional
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request as FastAPIRequest
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from theseus.web.services import (
     StatusService,
     CheckpointService,
     LogService,
 )
-from theseus.web.routes import api, views
+from theseus.web.routes import api, views, auth as auth_routes
+from theseus.web.auth import require_auth
 
 
 def create_app(
@@ -48,7 +51,6 @@ def create_app(
     # Initialize services
     status_dir = cluster_root / "status"
     checkpoints_dir = cluster_root / "checkpoints"
-    print("eee", status_dir, checkpoints_dir)
 
     status_service = StatusService(status_dir)
     checkpoint_service = CheckpointService(checkpoints_dir)
@@ -71,6 +73,35 @@ def create_app(
         debug=debug,
         lifespan=lifespan,
     )
+
+    # Add session middleware
+    secret_key = os.environ.get("THESEUS_SECRET_KEY")
+    if not secret_key:
+        import secrets as secrets_module
+        import warnings
+
+        secret_key = secrets_module.token_urlsafe(32)
+        warnings.warn(
+            f"No THESEUS_SECRET_KEY set, using random key: {secret_key}\n"
+            "Sessions will be invalidated on restart. Set THESEUS_SECRET_KEY for production."
+        )
+
+    app.add_middleware(SessionMiddleware, secret_key=secret_key)
+
+    # Add auth redirect middleware
+    @app.middleware("http")
+    async def auth_redirect_middleware(request: FastAPIRequest, call_next):
+        """Catch 401 errors and redirect to login page."""
+        response = await call_next(request)
+
+        # If 401 and not already on login/logout page, redirect to login
+        if response.status_code == 401 and request.url.path not in [
+            "/login",
+            "/logout",
+        ]:
+            return RedirectResponse(url="/login", status_code=303)
+
+        return response
 
     # Setup templates
     templates_dir = Path(__file__).parent / "templates"
@@ -147,9 +178,11 @@ def create_app(
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # Include routers
-    app.include_router(api.router, prefix="/api")
-    app.include_router(views.router)
+    # Include routers (auth routes first, no protection)
+    app.include_router(auth_routes.router)
+    # Protected routes
+    app.include_router(api.router, prefix="/api", dependencies=[Depends(require_auth)])
+    app.include_router(views.router, dependencies=[Depends(require_auth)])
 
     return app
 

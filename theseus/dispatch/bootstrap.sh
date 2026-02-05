@@ -7,6 +7,11 @@
 
 set -euo pipefail
 
+# Source .bashrc if it exists
+if [ -f ~/.bashrc ]; then
+    source ~/.bashrc
+fi
+
 echo "[bootstrap] starting on $(hostname)"
 
 # Track JuiceFS mount point for cleanup

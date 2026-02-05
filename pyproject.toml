@@ -62,6 +62,8 @@ web = [
     "sse-starlette>=1.6.0",
     "pyyaml>=6.0.0",
     "python-multipart>=0.0.22",
+    "bcrypt>=5.0.0",
+    "itsdangerous>=2.2.0",
 ]
 all = [
     {include-group = "dev"},

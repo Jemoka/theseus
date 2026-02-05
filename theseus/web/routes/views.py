@@ -116,10 +116,10 @@ async def job_detail(
     # Get checkpoints for this job
     checkpoints = checkpoint_service.list_job_checkpoints(project, group, name)
 
-    # Get initial log tail
+    # Get full log content
     log_content = ""
     if log_service.log_exists(project, group, name, run_id):
-        log_content = log_service.tail_log(project, group, name, run_id, lines=100)
+        log_content = log_service.tail_log(project, group, name, run_id, lines=None)
 
     return render(
         request,
@@ -260,9 +260,9 @@ async def partial_log(
     group: str,
     name: str,
     run_id: str,
-    tail: int = Query(default=50),
+    tail: int | None = Query(default=None),
 ):
-    """Partial: log content (for HTMX polling)."""
+    """Partial: log content (for HTMX polling). Returns full log by default."""
     log_service = request.app.state.log_service
     content = log_service.tail_log(project, group, name, run_id, lines=tail)
 
