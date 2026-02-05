@@ -756,7 +756,7 @@ class PerplexityEvaluation(Evaluation):
 class EvaluatorConfig:
     """Configuration for Evaluator."""
 
-    evaluations: List[str] = field("eval/evaluations")
+    evaluations: List[str] = field("eval/evaluations", default_factory=lambda: [])
 
 
 class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):

@@ -125,8 +125,8 @@ class QuickJob:
 @contextmanager
 def quick(
     job: Any | str,
-    out_path: str,
     name: str,
+    out_path: str,
     project: str | None = None,
     group: str | None = None,
 ) -> Generator[QuickJob, None, None]:
@@ -134,8 +134,8 @@ def quick(
 
     Args:
         job: Job class or job name string (e.g., "continual/train/abcd")
-        out_path: Output path for job results
         name: Name of the job run
+        out_path: Output path for job results
         project: Optional project name
         group: Optional group name
 
