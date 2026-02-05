@@ -9,4 +9,4 @@ echo "[sbatch] tasks: $SLURM_NTASKS"
 
 # Run bootstrap.sh on all nodes via srun
 # bootstrap.sh handles: extract payload, cd to workdir, setup env, run command
-srun --export=ALL bash __BOOTSTRAP_SCRIPT__
+srun --export=ALL bash -l __BOOTSTRAP_SCRIPT__
