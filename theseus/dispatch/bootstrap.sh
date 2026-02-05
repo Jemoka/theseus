@@ -6,7 +6,11 @@
 # 
 
 set -euo pipefail
-source ~/.bashrc
+
+# Source .bashrc if it exists
+if [ -f ~/.bashrc ]; then
+    source ~/.bashrc
+fi
 
 echo "[bootstrap] starting on $(hostname)"
 
