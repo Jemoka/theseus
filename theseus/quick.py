@@ -24,12 +24,15 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator, TYPE_CHECKING
+from typing import Any, Generator, Type, Dict, Tuple, TYPE_CHECKING
 
 from omegaconf import OmegaConf
 
-from theseus.config import build, configuration
+from theseus.config import build, configuration, configure
+from theseus.model.module import Module
 from theseus.registry import JOBS
+
+import jax
 
 if TYPE_CHECKING:
     from omegaconf import DictConfig
@@ -167,3 +170,11 @@ def quick(
 
     with configuration(quick_job.config):
         yield quick_job
+
+
+def init(
+    mod: Type[Module], cfg: DictConfig, **kwargs: Dict[Any, Any]
+) -> Tuple[Module, Any]:
+    with configuration(cfg):
+        blk = configure(mod)
+        return blk, blk.init(jax.random.PRNGKey(23), **kwargs)
