@@ -69,10 +69,64 @@ all = [
     {include-group = "dev"},
     {include-group = "data"},
 ]
+huggingface = [
+    "tokenizers>=0.22.2",
+    "torchax>=0.0.11",
+    "transformers>=5.1.0"
+]
+huggingface-cpu = [
+    "torch>=2.9.1",
+    {include-group = "huggingface"}
+]
+huggingface-cuda13 = [
+    "torch>=2.9.1",
+    {include-group = "huggingface"}
+]
+huggingface-cuda12 = [
+    "torch>=2.9.1",
+    {include-group = "huggingface"}
+]
 
 [tool.uv]
 default-groups = ["dev"]
 package = true
+
+
+conflicts = [
+  # Exactly one of these torch “flavors” may be used at a time.
+  [
+    { group = "huggingface-cpu" },
+    { group = "huggingface-cuda12" },
+    { group = "huggingface-cuda13" },
+  ],
+  [
+    { group = "cpu" },
+    { group = "cuda12" },
+    { group = "cuda13" },
+  ]
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", group = "huggingface-cpu" },
+  { index = "pytorch-cu128", group = "huggingface-cuda12" },
+  { index = "pytorch-cu130", group = "huggingface-cuda13" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
 
 [tool.ruff]
 line-length = 88

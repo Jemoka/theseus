@@ -12,31 +12,32 @@ logger.add(
     enqueue=True,
     filter=lambda x: x["extra"].get("task", "") != "plot",
 )
+# 
+# !ls $HF_HOME/hub
 
+# import jax
+# import jax.numpy as jnp
+# from theseus.config import *
+# from theseus.quick import quick, init
+# from theseus.data.tokenize import TokenizeVariableDatasetJob
 
-import jax
-import jax.numpy as jnp
-from theseus.config import *
-from theseus.quick import quick, init
-from theseus.data.tokenize import TokenizeVariableDatasetJob
+# with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
+#     cfg = j.config
+#     # j.config.data.dataset = "mnli"
+#     # j.save("./configs/data/chicken.yaml")
 
-with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
-    cfg = j.config
-    # j.config.data.dataset = "mnli"
-    # j.save("./configs/data/chicken.yaml")
+# block, params = init(
+#     ForkingAttention,
+#     cfg,
+#     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
+#     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
+#     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+# )
+# params
 
-block, params = init(
-    ForkingAttention,
-    cfg,
-    x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
-    cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
-    token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
-)
-params
+# # with configuration(cfg):
+# #     fb =  configure(ForkingAttention)
 
-# with configuration(cfg):
-#     fb =  configure(ForkingAttention)
-
-# fb.init(jax.random.PRNGKey(7), 
+# # fb.init(jax.random.PRNGKey(7), 
 
 
