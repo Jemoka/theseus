@@ -262,6 +262,10 @@ class ForkingBlock(ThoughtBlock):
             x, cumulative_scores, token_index, padding_mask, input_seq_len=input_seq_len
         )
 
+        # Update kwargs with new forking state
+        kwargs["cumulative_scores"] = cumulative_scores
+        kwargs["token_index"] = token_index
+
         # Then apply ThoughtBlock operations (score-weighted attention/MLP)
         return super().__call__(
             x,
