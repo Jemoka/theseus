@@ -14,12 +14,29 @@ logger.add(
 )
 
 
-from theseus.quick import quick
+import jax
+import jax.numpy as jnp
+from theseus.config import *
+from theseus.quick import quick, init
 from theseus.data.tokenize import TokenizeVariableDatasetJob
 
-with quick(TokenizeVariableDatasetJob, "/Users/houjun/theseus", "test") as j:
-    j.config.data.dataset = "mnli"
-    j.save("./configs/data/chicken.yaml")
+with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
+    cfg = j.config
+    # j.config.data.dataset = "mnli"
+    # j.save("./configs/data/chicken.yaml")
 
+block, params = init(
+    ForkingAttention,
+    cfg,
+    x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
+    cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
+    token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+)
+params
+
+# with configuration(cfg):
+#     fb =  configure(ForkingAttention)
+
+# fb.init(jax.random.PRNGKey(7), 
 
 

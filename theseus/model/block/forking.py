@@ -265,7 +265,5 @@ class ForkingBlock(ThoughtBlock):
         # Then apply ThoughtBlock operations (score-weighted attention/MLP)
         return super().__call__(
             x,
-            cumulative_scores=cumulative_scores,
-            token_index=token_index,
             **kwargs,
         )
