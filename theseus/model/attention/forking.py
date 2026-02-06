@@ -90,9 +90,7 @@ class ForkingAttention(RopeAttention):
                 padding_bias, token_index[:, None, None, :], axis=-1
             )
             mask = (
-                causal_bias(self.config.max_block_size)[
-                    :, :, : q.shape[-2], : k.shape[-2]
-                ]
+                causal_bias(self.max_block_size)[:, :, : q.shape[-2], : k.shape[-2]]
                 + padding_bias
             )
 
