@@ -70,9 +70,9 @@ class ThoughtBlock(Block):
         attn_out = self.attn(
             self.ln_1(x),
             padding_mask=padding_mask,
-            deterministic=deterministic,
             cumulative_scores=cumulative_scores,
             token_index=token_index,
+            deterministic=deterministic,
         )
         x = x + jnp.einsum("bl,blh->blh", exponentiated_scores, attn_out)
 

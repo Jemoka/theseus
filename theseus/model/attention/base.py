@@ -3,7 +3,7 @@ Your grandpa's vanilla self-attention module.
 """
 
 import math
-from typing import Tuple, Dict, Any, Optional, List, Type
+from typing import Tuple, Any, Optional, List, Type
 
 import jax
 import jax.numpy as jnp
@@ -55,7 +55,7 @@ class SelfAttention(Module):
         )
 
     def preprocess_qkv(
-        self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Dict[Any, Any]
+        self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
         return q, k, v
 
@@ -65,7 +65,7 @@ class SelfAttention(Module):
         k: jax.Array,
         v: jax.Array,
         mask: Optional[jax.Array] = None,
-        **kwargs: Dict[Any, Any],
+        **kwargs: Any,
     ) -> jax.Array:
         q = q.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
         k = k.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
@@ -84,7 +84,7 @@ class SelfAttention(Module):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
-        **kwargs: Dict[Any, Any],
+        **kwargs: Any,
     ) -> jax.Array:
         """
         Args:

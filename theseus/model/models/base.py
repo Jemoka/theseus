@@ -2,7 +2,7 @@ import jax
 import flax.linen as nn
 import jax.numpy as jnp
 
-from typing import Optional, Tuple, List, Any, Type, Dict
+from typing import Optional, Tuple, List, Any, Type
 
 from theseus.model.block import Block
 from theseus.model.layers import LayerNorm
@@ -67,9 +67,7 @@ class GPT(Module):
         self.blocks = [configure(Block) for _ in range(self.n_layers)]
         self.ln_f = configure(LayerNorm)
 
-    def embed(
-        self, idx: jax.Array, deterministic: bool = False, **kwargs: Dict[Any, Any]
-    ) -> Any:
+    def embed(self, idx: jax.Array, deterministic: bool = False, **kwargs: Any) -> Any:
         """Compute token and positional embeddings given inputs."""
 
         _, t = idx.shape
@@ -91,7 +89,7 @@ class GPT(Module):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
-        **kwargs: Dict[Any, Any],
+        **kwargs: Any,
     ) -> Any:
         """Compute decoded residual channels given embeddings."""
 
@@ -132,7 +130,7 @@ class GPT(Module):
         targets: Optional[jax.Array] = None,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
-        **kwargs: Dict[Any, Any],
+        **kwargs: Any,
     ) -> Tuple[jax.Array, Optional[jax.Array]]:
         """
         Args:
