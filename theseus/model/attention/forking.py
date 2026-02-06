@@ -14,7 +14,7 @@ from theseus.model.attention.rope import RopeAttention
 ATTN_DTYPE = jnp.bfloat16
 
 
-@jax.jit
+@jax.jit(static_argnums=0)
 def causal_bias(max_block_size: int) -> jax.Array:
     neg = jnp.array(-jnp.inf, ATTN_DTYPE)
     m = jnp.tril(jnp.ones((max_block_size, max_block_size), dtype=jnp.bool_))
