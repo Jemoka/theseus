@@ -18,31 +18,74 @@ logger.add(
 # import jax
 # import jax.numpy as jnp
 from theseus.config import *
-from theseus.quick import quick, init
-from theseus.experiments.
+from theseus.quick import quick
 
-with quick(HFTrainer, "test", "/sailhome/houjun/theseus") as j:
-    j.config
+from theseus.experiments.llama import PretrainLlama
+
+with quick(PretrainLlama, "test", "/sailhome/houjun/theseus") as j:
+    # cfg = j.config
+
+    j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B"
+    j.config.training.dataset = [{
+        "name": "fineweb",
+        "rate": 1.0,
+        "style": "PMD",
+        "suffix": "llama",
+    }]
+    j.config.logging.report_interval=1
+    j.config.logging.validation_interval=4
+    j.config.training.evaluate = False
+    j.config.training.batch_size = 6
+    j.config.training.per_device_batch_size = 1
+    trainer = j.create()
+    # j()
+    # 1+1
+    # !nvidia-smi
+
+# trainer
+# import flax
+# print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
+# [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
+from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
+
+tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
+tk._tokenizer
+x.max()
 
 
+x,y,pmd = trainer.batch()
+trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
 
-# with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
-#     cfg = j.config
-#     # j.config.data.dataset = "mnli"
-#     # j.save("./configs/data/chicken.yaml")
-
-# block, params = init(
-#     ForkingAttention,
-#     cfg,
-#     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
-#     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
-#     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+# shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
+#     flax.linen.get_partition_spec(trainer.state),
+#     trainer.mesh,
+#     rules=tuple(trainer.model.sharding),  # type: ignore
 # )
-# params
 
-# # with configuration(cfg):
-# #     fb =  configure(ForkingAttention)
+# !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
+# res
 
-# # fb.init(jax.random.PRNGKey(7), 
+# #     1+1
+# # # ls ~/theseus/data/
+
+
+# # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
+# # #     cfg = j.config
+# # #     # j.config.data.dataset = "mnli"
+# #     # j.save("./configs/data/chicken.yaml")
+
+# # block, params = init(
+# #     ForkingAttention,
+# #     cfg,
+# #     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
+# #     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
+# #     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+# # )
+# # params
+
+# # # with configuration(cfg):
+# # #     fb =  configure(ForkingAttention)
+
+# # # fb.init(jax.random.PRNGKey(7), 
 
 
