@@ -117,16 +117,21 @@ class Lmfmao(nn.Module):
     meta_model: Any = None
 
     def setup(self):
-        if not self.has_variable("param", "_params"):
+        if not self.has_variable("params", "_params"):
             _base = AutoModelForCausalLM.from_pretrained(self.id, dtype="bfloat16")
             with tx.default_env():
                 _base.to("jax")
-                sd = dict(_base.state_dict())
-                sd_jax = jax.tree_util.tree_map(lambda x: x.jax(), sd)
-                self._params = self.param("_params", lambda *_: dict(sd_jax))
+                params = dict(_base.named_parameters())
+                buffers = dict(_base.named_buffers())
+
+                params_jax = jax.tree_util.tree_map(lambda x: x.jax(), params)
+                buffers_jax = jax.tree_util.tree_map(lambda x: x.jax(), buffers)
+
+                self._params = self.param("_params", lambda *_: dict(params_jax))
+                self.variable("buffers", "_buffers", lambda: dict(buffers_jax))
                 _base.to("meta")
         else:
-            self._params = self.get_variable("param", "_params")
+            self._params = self.get_variable("params", "_params")
 
     def __call__(self, x, attention_mask=None):
         if self.meta_model is None:
@@ -138,11 +143,24 @@ class Lmfmao(nn.Module):
         params = jax.tree_util.tree_map(
             lambda x: tx.tensor.Tensor(x, tx.default_env()), self._params
         )
+        buffer_state = self.get_variable("buffers", "_buffers")
+        if buffer_state is None:
+            raise ValueError("missing buffers/_buffers state")
+        buffers = jax.tree_util.tree_map(
+            lambda x: tx.tensor.Tensor(x, tx.default_env()), buffer_state
+        )
+
+        if isinstance(params, flax.core.FrozenDict):
+            params = flax.core.frozen_dict.unfreeze(params)
+        if isinstance(buffers, flax.core.FrozenDict):
+            buffers = flax.core.frozen_dict.unfreeze(buffers)
+        functional_tensors = dict(params)
+        functional_tensors.update(buffers)
 
         with tx.default_env():
             (logits,) = torch.func.functional_call(
                 self.meta_model,
-                flax.core.frozen_dict.unfreeze(params),
+                functional_tensors,
                 (x,),
                 dict(
                     attention_mask=attention_mask,
@@ -150,6 +168,17 @@ class Lmfmao(nn.Module):
                     use_cache=False,
                 ),
             )
+
+            if self.is_mutable_collection("buffers"):
+                self.put_variable(
+                    "buffers",
+                    "_buffers",
+                    {
+                        name: tensor.jax()
+                        for name, tensor in functional_tensors.items()
+                        if name in buffer_state
+                    },
+                )
         return logits
 
 
@@ -162,11 +191,25 @@ meta_model = meta_model.to("cpu")
 model = Lmfmao(MODEL, meta_model)
 variables = model.init(jax.random.PRNGKey(7), jnp.ones((8, 4)).astype(jnp.int32))
 
-model
-# tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-# model_inputs = tokenizer(["help me sober up please"], return_tensors="np")
 
-# logits = model.apply(variables, model_inputs["input_ids"])
-# logits.shape
+# model
+from transformers import AutoTokenizer
 
-# # variables
+tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
+model_inputs = tokenizer(["The Federal Reserve said last"], return_tensors="np")
+
+logits, buffer_updates = model.apply(
+    variables, model_inputs["input_ids"], mutable=["buffers"]
+)
+tokenizer.decode(logits.numpy().argmax(axis=-1))
+
+variables = flax.core.freeze(
+    {**flax.core.unfreeze(variables), "buffers": buffer_updates["buffers"]}
+)
+
+
+
+# model.has_variable("params", "_params")
+# # logits.shape
+
+# # # variables
