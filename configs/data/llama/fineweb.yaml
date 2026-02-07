@@ -1,6 +1,6 @@
 data:
   dataset: fineweb
-  suffix: ''
+  suffix: 'llama'
   val_pct: 0.05
   seed: 2357
   max_samples: -1
