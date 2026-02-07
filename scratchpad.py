@@ -17,9 +17,14 @@ logger.add(
 
 # import jax
 # import jax.numpy as jnp
-# from theseus.config import *
-# from theseus.quick import quick, init
-# from theseus.data.tokenize import TokenizeVariableDatasetJob
+from theseus.config import *
+from theseus.quick import quick, init
+from theseus.experiments.
+
+with quick(HFTrainer, "test", "/sailhome/houjun/theseus") as j:
+    j.config
+
+
 
 # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
 #     cfg = j.config

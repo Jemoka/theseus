@@ -2,13 +2,13 @@
 HuggingFace-specific evaluator wiring.
 """
 
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple
 
 import jax
 
 from theseus.inference import M
 from theseus.evaluation.base import Evaluator
-from theseus.inference_huggingface import HFInferenceJob
+from theseus.inference.huggingface import HFInferenceJob
 
 
 class HFEvaluator(Evaluator[M]):
@@ -24,13 +24,10 @@ class HFEvaluator(Evaluator[M]):
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
     ) -> Tuple[jax.Array, jax.Array]:
-        return cast(
-            Tuple[jax.Array, jax.Array],
-            HFInferenceJob.forward(
-                state=state,
-                params=params,
-                batch=batch,
-                key=key,
-                deterministic=deterministic,
-            ),
+        return HFInferenceJob.forward(
+            state=state,
+            params=params,
+            batch=batch,
+            key=key,
+            deterministic=deterministic,
         )
