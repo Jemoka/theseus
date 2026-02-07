@@ -183,7 +183,7 @@ class HFCompat(Module):
         attention_mask: Optional[Any] = None
         if padding_mask is not None:
             attention_mask = tx.tensor.Tensor(
-                padding_mask.astype(jnp.bool_), tx.default_env()
+                ~(padding_mask.astype(jnp.bool_)), tx.default_env()
             )
         params = jax.tree_util.tree_map(
             self._to_tx_tensor,
