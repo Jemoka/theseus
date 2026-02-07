@@ -150,6 +150,13 @@ __MODULES__
 
 __ENV_VARS__
 
+# JAX/XLA GPU allocator defaults for large-model runs.
+# Keep overridable by honoring pre-set environment values.
+: "${TF_GPU_ALLOCATOR:=cuda_malloc_async}"
+: "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
+export TF_GPU_ALLOCATOR
+export XLA_PYTHON_CLIENT_PREALLOCATE
+
 # ============================================================================
 # Working Directory & Payload Extraction
 # ============================================================================

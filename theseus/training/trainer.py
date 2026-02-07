@@ -213,7 +213,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
             flax.linen.get_partition_spec(self.state),
             self.mesh,
-            rules=tuple(self.model.sharding),  # type: ignore
+            rules=tuple(self.model.sharding),
         )
         self.state = jax.device_put(self.state, self.state_sharding)
 

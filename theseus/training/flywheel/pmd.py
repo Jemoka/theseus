@@ -26,7 +26,7 @@ class MemmapDataset(Dataset):
         self.block_size = block_size
 
         data_dir: Path = spec.hardware.hosts[jax.process_index()].cluster.data_dir
-        path: Path = data_dir / name if suffix == "" else f"{name}_{suffix}"  # type: ignore
+        path: Path = data_dir / name if suffix == "" else data_dir / f"{name}_{suffix}"
         self.path = path
 
         self.has_val = (path / "val.bin").exists()
