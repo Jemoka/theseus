@@ -6,7 +6,7 @@ or loaded from a checkpoint.
 """
 
 from pathlib import Path
-from typing import Any, Tuple, Generic, TypeVar, Optional, List, TYPE_CHECKING
+from typing import Any, Tuple, Generic, TypeVar, Optional, List, TYPE_CHECKING, cast
 from typing_extensions import Self
 
 import jax
@@ -117,6 +117,20 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
 
         return logits, loss
 
+    @staticmethod
+    def _init_template_state(model: M, block_size: int) -> train_state.TrainState:
+        import optax
+
+        key = jax.random.PRNGKey(0)
+        dummy_input = jnp.zeros((1, block_size), dtype=jnp.int32)
+        params = model.init(key, dummy_input)["params"]
+        state = train_state.TrainState.create(  # type: ignore[no-untyped-call]
+            apply_fn=model.apply,
+            params=params,
+            tx=optax.identity(),
+        )
+        return cast(train_state.TrainState, state)
+
     @classmethod
     def from_trainer(cls, trainer: "BaseTrainer[Any]") -> Self:
         """Create InferenceJob sharing trainer's state.
@@ -155,8 +169,6 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         Returns:
             (job, config) tuple
         """
-        import optax
-
         path = CheckpointedJob._get_checkpoint_path(spec, suffix)
         logger.debug("CHECKPOINT | loading {} from {}", cls.__name__, path)
 
@@ -178,14 +190,8 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             job.local_replicas = spec.topology.local_replicas
 
             # Initialize template state (for checkpoint structure)
-            key = jax.random.PRNGKey(0)
-            dummy_input = jnp.zeros((1, cfg.architecture.block_size), dtype=jnp.int32)
-            params = model.init(key, dummy_input)["params"]
-
-            template_state = train_state.TrainState.create(  # type: ignore[no-untyped-call]
-                apply_fn=model.apply,
-                params=params,
-                tx=optax.identity(),
+            template_state = cls._init_template_state(
+                model, int(cfg.architecture.block_size)
             )
 
             # Compute sharding

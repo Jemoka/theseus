@@ -2,7 +2,14 @@ from typing import Any
 
 from .datasets import DATASETS
 from .tokenize import TokenizeBlockwiseDatasetJob, TokenizeVariableDatasetJob
-from .tokenizer import get_chatml_encoder, encode_chat_template, decode_chat_template
+from .tokenizer import (
+    Tokenizer,
+    TokenizerConfig,
+    decode_chat_template,
+    encode_chat_template,
+    get_chatml_encoder,
+    get_tokenizer,
+)
 from theseus.job import BasicJob
 
 JOBS: dict[str, type[BasicJob[Any]]] = {
@@ -14,6 +21,9 @@ __all__ = [
     "TokenizeBlockwiseDatasetJob",
     "TokenizeVariableDatasetJob",
     "DATASETS",
+    "Tokenizer",
+    "TokenizerConfig",
+    "get_tokenizer",
     "get_chatml_encoder",
     "encode_chat_template",
     "decode_chat_template",

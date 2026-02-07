@@ -8,16 +8,14 @@ from abc import abstractproperty
 from typing import Type, List, Any, Tuple, Optional
 from flax.linen import Module as nn
 
-from theseus.model.axes import Axes
-
 
 class Module(nn):
     @abstractproperty
-    def sharding(self) -> List[Tuple[Axes, Optional[Any]]]:
+    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
         """Return the sharding configuration for this module.
 
         Returns:
-            Tuple[Tuple[Axes, Optional[Axis]]]: A dictionary mapping Axes to sharding dimensions.
+            Tuple[Tuple[str, Optional[Axis]]]: A dictionary mapping Axes to sharding dimensions.
         """
 
         ...

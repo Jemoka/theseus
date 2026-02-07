@@ -17,7 +17,11 @@ from theseus.data.datasets import (
     StreamingStringDataset,
     StreamingChatTemplateDataset,
 )
-from theseus.data.tokenizer import get_chatml_encoder, encode_chat_template
+from theseus.data.tokenizer import (
+    TokenizerConfig,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 # ========== Dataclass Configs ==========
@@ -69,8 +73,8 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
     """
 
     @classmethod
-    def config(cls) -> Type[TokenizeDatasetConfig]:
-        return TokenizeDatasetConfig
+    def config(cls) -> Type[TokenizeDatasetConfig] | list[Type[Any]]:
+        return [TokenizeDatasetConfig, TokenizerConfig]
 
     @property
     def done(self) -> bool:
@@ -149,8 +153,8 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
             split=args.split
         )
 
-        # Get encoder
-        encoder = get_chatml_encoder()
+        # Get tokenizer from tokenizer/* config
+        tokenizer = get_tokenizer()
 
         # Determine if it's a chat dataset by checking the first item
         first_item = dataset[0]
@@ -210,13 +214,19 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
                 item = dataset[dataset_idx]
 
                 # Encode based on type
+                ids: list[int]
                 if is_chat:
                     chat_item = cast(ChatTemplate, item)
-                    ids = encode_chat_template(chat_item, encoder, args.system_prompt)
+                    ids = encode_chat_template(
+                        chat_item,
+                        tokenizer,
+                        args.system_prompt,
+                        tokenize=True,
+                    )
                 else:
                     # String dataset
                     string_item = cast(str, item)
-                    ids = encoder.encode(string_item)
+                    ids = tokenizer.encode(string_item)
 
                 seq_len = len(ids)
 
@@ -236,7 +246,7 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
                     if seq_len < args.block_size:
                         num_padded += 1
                     padding_len = args.block_size - seq_len
-                    padded = [args.pad_token] * padding_len + ids  # type: ignore
+                    padded = [args.pad_token] * padding_len + ids
                     tokens_arr[arr_idx] = np.array(padded, dtype=dtype)
 
                     # Mask: False for padding, True for real tokens
@@ -297,8 +307,8 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
     """
 
     @classmethod
-    def config(cls) -> Type[TokenizePretrainingDatasetConfig]:
-        return TokenizePretrainingDatasetConfig
+    def config(cls) -> Type[TokenizePretrainingDatasetConfig] | list[Type[Any]]:
+        return [TokenizePretrainingDatasetConfig, TokenizerConfig]
 
     @property
     def done(self) -> bool:
@@ -330,8 +340,8 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
             dataset_cls()
         )
 
-        # Get encoder
-        encoder = get_chatml_encoder()
+        # Get tokenizer from tokenizer/* config
+        tokenizer = get_tokenizer()
 
         # Determine if it's a chat dataset by checking the first item
         iterator = iter(dataset)
@@ -420,15 +430,16 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
             sample_count += 1
 
             # Encode based on type
+            ids: list[int]
             if is_chat:
                 chat_item = cast(ChatTemplate, item)
-                ids = encode_chat_template(chat_item, encoder)
+                ids = encode_chat_template(chat_item, tokenizer, tokenize=True)
             else:
                 # String dataset - for pretraining, add EOT token
                 string_item = cast(str, item)
-                ids = encoder.encode_ordinary(string_item)
-                # Add end of text token (this is special token index in cl100k_base)
-                ids.append(encoder.eot_token)
+                ids = tokenizer.encode_ordinary(string_item)
+                # Add end of text token for sequence boundary.
+                ids.append(tokenizer.eot_token)
 
             sample_ids = np.array(ids, dtype=dtype)
             sample_len = len(sample_ids)

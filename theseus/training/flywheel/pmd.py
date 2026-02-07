@@ -26,7 +26,7 @@ class MemmapDataset(Dataset):
         self.block_size = block_size
 
         data_dir: Path = spec.hardware.hosts[jax.process_index()].cluster.data_dir
-        path: Path = data_dir / name if suffix == "" else f"{name}_{suffix}"  # type: ignore
+        path: Path = data_dir / name if suffix == "" else data_dir / f"{name}_{suffix}"
         self.path = path
 
         self.has_val = (path / "val.bin").exists()
@@ -163,14 +163,23 @@ class MemmapDataset(Dataset):
         data = self._get_memmap(split)
         block_size = self.block_size
 
-        # Deterministic access: use original sequential logic (for validation)
-        if deterministic_key:
-            portion = batch_size * block_size
-            ix = np.arange(
-                deterministic_key * portion,
-                (deterministic_key + 1) * portion,
-                block_size,
-            )
+        # Deterministic access for validation. Use wrapped sample indices so we
+        # never read past EOF and accidentally return empty sequences.
+        if deterministic_key is not None:
+            max_start = len(data) - block_size - 1
+            if max_start < 0:
+                raise ValueError(
+                    f"Dataset too small for block_size={block_size}: len={len(data)}"
+                )
+
+            valid_starts = np.arange(0, max_start + 1, block_size, dtype=np.int64)
+            if valid_starts.size == 0:
+                valid_starts = np.array([0], dtype=np.int64)
+
+            start = deterministic_key * batch_size
+            take = (start + np.arange(batch_size, dtype=np.int64)) % valid_starts.size
+            ix = valid_starts[take]
+
             x = np.stack([data[i : i + block_size].astype(np.int64) for i in ix])
             y = np.stack(
                 [data[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix]

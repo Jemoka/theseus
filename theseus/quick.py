@@ -65,15 +65,20 @@ class QuickJob:
         else:
             self.config = build(job_config)
 
+    def create(self) -> Any:
+        """Create and return the job instance without running it."""
+        if self._instance is None:
+            self._instance = self._job_cls.local(
+                self._out_path,
+                name=self._name,
+                project=self._project,
+                group=self._group,
+            )
+        return self._instance
+
     def __call__(self) -> Any:
         """Run the job."""
-        self._instance = self._job_cls.local(
-            self._out_path,
-            name=self._name,
-            project=self._project,
-            group=self._group,
-        )
-        return self._instance()
+        return self.create()()
 
     def save(
         self,

@@ -30,9 +30,9 @@ class Thoughtbubbles(GPT):
     )
 
     @property
-    def sharding(self) -> List[Tuple[Axes, Optional[Any]]]:
+    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
         base_sharding = super().sharding
-        return base_sharding + [(Axes.N_FORK, None)]
+        return base_sharding + [(Axes.N_FORK.value, None)]
 
     @classmethod
     def components(cls) -> List[Type[Any]]:

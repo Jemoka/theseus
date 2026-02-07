@@ -1,0 +1,13 @@
+data:
+  dataset: fineweb
+  suffix: 'llama'
+  val_pct: 0.05
+  seed: 2357
+  max_samples: -1
+tokenizer:
+  backend: huggingface
+  name: meta-llama/Llama-3.1-8B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+job: data/tokenize_variable_dataset

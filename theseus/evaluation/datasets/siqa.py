@@ -3,7 +3,11 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(
@@ -30,6 +34,7 @@ class SIQAEval(RolloutEvaluation):
 
     def __init__(self, split: str = "validation") -> None:
         self.ds = load_dataset("lighteval/siqa", split=split)
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -42,7 +47,7 @@ class SIQAEval(RolloutEvaluation):
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = ["A", "B", "C"][int(item["label"]) - 1]
-        prompt: str = encode_chat_template(
+        prompt = encode_chat_template(
             template(
                 item["context"],
                 item["question"],
@@ -50,8 +55,10 @@ class SIQAEval(RolloutEvaluation):
                 item["answerB"],
                 item["answerC"],
             ),
+            self.encoder,
             prompt=True,
-        )  # type: ignore
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:

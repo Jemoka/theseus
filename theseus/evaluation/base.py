@@ -25,12 +25,12 @@ from loguru import logger
 
 from theseus.base import Axis, ExecutionSpec
 
-from theseus.config import field, configure
+from theseus.config import field, configure, configuration
 from theseus.inference import InferenceJob, M
-from theseus.data.tokenizer import get_chatml_encoder
+from theseus.data.tokenizer import Tokenizer, TokenizerConfig, get_tokenizer
 
 if TYPE_CHECKING:
-    from theseus.training.trainers.base import BaseTrainer
+    from theseus.training.trainer import BaseTrainer
 
 
 class Evaluation(ABC):
@@ -772,11 +772,11 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     MODEL: type[M]  # Set by subclass (e.g., EvaluatorGPT)
     evaluations: List[Evaluation]
-    encoding: Any  # Tokenizer
+    encoding: Tokenizer
 
     @classmethod
     def config(cls) -> List[Any]:
-        return [EvaluatorConfig]
+        return [EvaluatorConfig, TokenizerConfig]
 
     def __init__(self, spec: ExecutionSpec):
         """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
@@ -798,7 +798,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         return self._get_results_path().exists()
 
     @classmethod
-    def from_trainer(cls, trainer: "BaseTrainer[Any]") -> "Evaluator[M]":
+    def from_trainer(cls, trainer: "BaseTrainer[Any, Any]") -> "Evaluator[M]":
         """Create Evaluator from trainer.
 
         Args:
@@ -812,7 +812,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         from theseus.evaluation.datasets.registry import DATASETS
 
         evaluator = super().from_trainer(trainer)
-        evaluator.encoding = get_chatml_encoder()
+        evaluator.encoding = get_tokenizer()
 
         cfg = configure(EvaluatorConfig)
         try:
@@ -838,7 +838,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
             (evaluator, config) tuple
         """
         evaluator, cfg = super().from_checkpoint(suffix, spec)
-        evaluator.encoding = get_chatml_encoder()
+        with configuration(cfg):
+            evaluator.encoding = get_tokenizer()
         return evaluator, cfg
 
     def evaluate(self) -> dict[str, float]:

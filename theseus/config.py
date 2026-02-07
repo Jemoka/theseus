@@ -184,14 +184,17 @@ def hydrate(cls: Any, config: DictConfig | ListConfig) -> Any:
     """
 
     flat_config: Dict[str, Any] = {}
-    for k, v in OmegaConf.to_container(config, resolve=True).items():
-        if isinstance(v, dict):
-            for sub_k, sub_v in OmegaConf.to_container(
-                OmegaConf.create(v), resolve=True
-            ).items():
-                flat_config[f"{k}/{sub_k}"] = sub_v
-        else:
-            flat_config[k] = v
+    config_obj = OmegaConf.to_container(config, resolve=True)
+
+    if isinstance(config_obj, dict):
+        stack: List[Tuple[List[str], Any]] = [([], config_obj)]
+        while stack:
+            prefix, value = stack.pop()
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    stack.append((prefix + [str(key)], nested))
+            elif prefix:
+                flat_config["/".join(prefix)] = value
 
     init_kwargs: Dict[str, Any] = {}
     for fld in fields(cls):
