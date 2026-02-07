@@ -4,7 +4,7 @@ I can't believe this is not butter.
 """
 
 from abc import abstractmethod
-from functools import lru_cache
+from collections import OrderedDict
 from typing import Any, Optional, Self, Type, TypeAlias
 
 import flax
@@ -28,14 +28,31 @@ from theseus.model.module import Module
 LogicalAxes: TypeAlias = tuple[Optional[Axes], ...]
 
 
-@lru_cache(maxsize=16)
+_META_MODEL_CACHE_MAX_SIZE = 16
+_META_MODEL_CACHE: OrderedDict[str, Any] = OrderedDict()
+
+
+def _cache_meta_model(model_id: str, model: Any) -> Any:
+    _META_MODEL_CACHE[model_id] = model
+    _META_MODEL_CACHE.move_to_end(model_id)
+    while len(_META_MODEL_CACHE) > _META_MODEL_CACHE_MAX_SIZE:
+        _META_MODEL_CACHE.popitem(last=False)
+    return model
+
+
 def _build_meta_model_cached(model_id: str) -> Any:
+    cached = _META_MODEL_CACHE.get(model_id)
+    if cached is not None:
+        _META_MODEL_CACHE.move_to_end(model_id)
+        return cached
+
     model_config = AutoConfig.from_pretrained(model_id)
     with no_init_weights():
         with torch.device("meta"):
-            return AutoModelForCausalLM.from_config(
+            model = AutoModelForCausalLM.from_config(
                 model_config, torch_dtype=torch.bfloat16
             )
+    return _cache_meta_model(model_id, model)
 
 
 def output_flatten(
@@ -64,7 +81,6 @@ except ValueError as e:
 
 class HFCompat(Module):
     id: str
-    meta_model: Any = None
 
     @classmethod
     @abstractmethod
@@ -123,12 +139,9 @@ class HFCompat(Module):
                 self._params = self.param("_params", lambda *_: params_jax)
                 self.variable("buffers", "_buffers", lambda: dict(buffers_jax))
                 _base.to("meta")  # free up memory
-                if self.meta_model is None:
-                    self.meta_model = _base
+                _cache_meta_model(self.id, _base)
         else:
             self._params = self.get_variable("params", "_params")
-            if self.meta_model is None:
-                self.meta_model = self._build_meta_model(self.id)
 
     def loss(self, logits: jax.Array, targets: jax.Array) -> jax.Array:
         """Compute cross-entropy loss given logits and targets."""
@@ -156,8 +169,7 @@ class HFCompat(Module):
         targets: Optional[jax.Array] = None,
         padding_mask: Optional[jax.Array] = None,
     ) -> tuple[jax.Array, Optional[jax.Array]]:
-        if self.meta_model is None:
-            raise ValueError("you must metamodel")
+        meta_model = self._build_meta_model(self.id)
 
         x = tx.tensor.Tensor(x, tx.default_env())
         attention_mask: Optional[Any] = None
@@ -184,7 +196,7 @@ class HFCompat(Module):
 
         with tx.default_env():
             (logits,) = torch.func.functional_call(
-                self.meta_model,
+                meta_model,
                 functional_tensors,
                 (x,),
                 dict(
@@ -214,10 +226,8 @@ class HFCompat(Module):
 
     @classmethod
     def from_pretrained(cls, model_id: str) -> Self:
-        meta_model = cls._build_meta_model(model_id)
-        model = cls(id=model_id, meta_model=meta_model)
-
-        return model
+        cls._build_meta_model(model_id)
+        return cls(id=model_id)
 
 
 # if __name__ == "__main__":
