@@ -3,7 +3,11 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(sentence: str) -> ChatTemplate:
@@ -23,6 +27,7 @@ class SST2Eval(RolloutEvaluation):
 
     def __init__(self, split: str = "validation") -> None:
         self.ds = load_dataset("stanfordnlp/sst2", split=split)
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -35,7 +40,12 @@ class SST2Eval(RolloutEvaluation):
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = "positive" if item["label"] == 1 else "negative"
-        prompt: str = encode_chat_template(template(item["sentence"]), prompt=True)  # type: ignore
+        prompt = encode_chat_template(
+            template(item["sentence"]),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:

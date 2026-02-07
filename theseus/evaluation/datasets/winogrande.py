@@ -3,7 +3,11 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(sentence: str, option1: str, option2: str) -> ChatTemplate:
@@ -26,6 +30,7 @@ class WinograndeEval(RolloutEvaluation):
 
     def __init__(self, split: str = "validation") -> None:
         self.ds = load_dataset("allenai/winogrande", "winogrande_xl", split=split)
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -38,9 +43,12 @@ class WinograndeEval(RolloutEvaluation):
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = "A" if item["answer"] == "1" else "B"
-        prompt: str = encode_chat_template(
-            template(item["sentence"], item["option1"], item["option2"]), prompt=True
-        )  # type: ignore
+        prompt = encode_chat_template(
+            template(item["sentence"], item["option1"], item["option2"]),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:

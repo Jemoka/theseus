@@ -1,51 +1,269 @@
-from typing import Optional
+from dataclasses import dataclass
+from functools import lru_cache
 import re
+from typing import Any, Literal, Optional, Protocol, Sequence, cast, overload
+
 import tiktoken
 
+from theseus.config import configure, current_config, field
 from theseus.data.datasets import ChatTemplate, ChatTurn
 
 
-def get_chatml_encoder() -> tiktoken.Encoding:
-    """Create tiktoken encoder with chatml special tokens"""
-    cl100k_base = tiktoken.get_encoding("cl100k_base")
+class Tokenizer(Protocol):
+    @property
+    def eot_token(self) -> int: ...
 
-    enc = tiktoken.Encoding(
-        name="cl100k_im",
-        pat_str=cl100k_base._pat_str,
-        mergeable_ranks=cl100k_base._mergeable_ranks,
+    def encode(self, text: str, allowed_special: Any = "all") -> list[int]: ...
+
+    def encode_batch(
+        self, texts: Sequence[str], allowed_special: Any = "all"
+    ) -> list[list[int]]: ...
+
+    def encode_ordinary(self, text: str) -> list[int]: ...
+
+    def decode(self, tokens: Sequence[int]) -> str: ...
+
+    def decode_batch(self, tokens_batch: Sequence[Sequence[int]]) -> list[str]: ...
+
+
+@dataclass
+class TokenizerConfig:
+    backend: str = field("tokenizer/backend", default="tiktoken")
+    name: str = field("tokenizer/name", default="cl100k_base")
+    hf_use_fast: bool = field("tokenizer/huggingface/use_fast", default=True)
+    hf_trust_remote_code: bool = field(
+        "tokenizer/huggingface/use_remote_code", default=False
+    )
+
+
+class TikTokenTokenizer:
+    def __init__(self, encoding: tiktoken.Encoding):
+        self._encoding = encoding
+
+    @property
+    def eot_token(self) -> int:
+        return int(getattr(self._encoding, "eot_token", 0))
+
+    def encode(self, text: str, allowed_special: Any = "all") -> list[int]:
+        if allowed_special is None:
+            return cast(list[int], self._encoding.encode(text))
+        return cast(
+            list[int], self._encoding.encode(text, allowed_special=allowed_special)
+        )
+
+    def encode_batch(
+        self, texts: Sequence[str], allowed_special: Any = "all"
+    ) -> list[list[int]]:
+        text_list = list(texts)
+        if allowed_special is None:
+            return cast(list[list[int]], self._encoding.encode_batch(text_list))
+        return cast(
+            list[list[int]],
+            self._encoding.encode_batch(text_list, allowed_special=allowed_special),
+        )
+
+    def encode_ordinary(self, text: str) -> list[int]:
+        return cast(list[int], self._encoding.encode_ordinary(text))
+
+    def decode(self, tokens: Sequence[int]) -> str:
+        return cast(str, self._encoding.decode(list(tokens)))
+
+    def decode_batch(self, tokens_batch: Sequence[Sequence[int]]) -> list[str]:
+        return cast(
+            list[str],
+            self._encoding.decode_batch([list(tokens) for tokens in tokens_batch]),
+        )
+
+
+class HuggingFaceTokenizer:
+    def __init__(self, tokenizer: Any):
+        self._tokenizer = tokenizer
+
+    @property
+    def eot_token(self) -> int:
+        eos = getattr(self._tokenizer, "eos_token_id", None)
+        if eos is not None:
+            return int(eos)
+        pad = getattr(self._tokenizer, "pad_token_id", None)
+        if pad is not None:
+            return int(pad)
+        return 0
+
+    def encode(self, text: str, allowed_special: Any = "all") -> list[int]:
+        del allowed_special
+        return cast(list[int], self._tokenizer.encode(text, add_special_tokens=False))
+
+    def encode_batch(
+        self, texts: Sequence[str], allowed_special: Any = "all"
+    ) -> list[list[int]]:
+        del allowed_special
+        tokenized = self._tokenizer(list(texts), add_special_tokens=False)
+        return cast(list[list[int]], tokenized["input_ids"])
+
+    def encode_ordinary(self, text: str) -> list[int]:
+        return self.encode(text)
+
+    def decode(self, tokens: Sequence[int]) -> str:
+        return cast(
+            str,
+            self._tokenizer.decode(
+                list(tokens),
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            ),
+        )
+
+    def decode_batch(self, tokens_batch: Sequence[Sequence[int]]) -> list[str]:
+        return cast(
+            list[str],
+            self._tokenizer.batch_decode(
+                [list(tokens) for tokens in tokens_batch],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            ),
+        )
+
+
+def _resolve_tokenizer_config(
+    tokenizer_cfg: Optional[TokenizerConfig],
+) -> TokenizerConfig:
+    if tokenizer_cfg is not None:
+        return tokenizer_cfg
+    if current_config() is not None:
+        return cast(TokenizerConfig, configure(TokenizerConfig))
+    return TokenizerConfig()
+
+
+def _build_chatml_tiktoken(name: str) -> tiktoken.Encoding:
+    base = tiktoken.get_encoding(name)
+    return tiktoken.Encoding(
+        name=f"{name}_chatml",
+        pat_str=base._pat_str,
+        mergeable_ranks=base._mergeable_ranks,
         special_tokens={
-            **cl100k_base._special_tokens,
+            **base._special_tokens,
             "<|im_start|>": 100264,
             "<|im_end|>": 100265,
         },
     )
-    return enc
+
+
+@lru_cache(maxsize=16)
+def _build_tokenizer_cached(
+    backend: str,
+    name: str,
+    hf_use_fast: bool,
+    hf_trust_remote_code: bool,
+) -> Tokenizer:
+    backend_name = backend.lower().strip()
+
+    if backend_name == "tiktoken":
+        # Always use ChatML formatting for tiktoken backends.
+        return TikTokenTokenizer(_build_chatml_tiktoken(name))
+
+    if backend_name in {"huggingface", "hf", "transformers"}:
+        try:
+            from transformers import AutoTokenizer
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "Tokenizer backend 'huggingface' requires transformers. "
+                "Install with the huggingface dependency group."
+            ) from exc
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            name,
+            use_fast=hf_use_fast,
+            trust_remote_code=hf_trust_remote_code,
+        )
+        return HuggingFaceTokenizer(tokenizer)
+
+    raise ValueError(
+        f"Unknown tokenizer backend '{backend}'. Supported backends: "
+        "'tiktoken', 'huggingface'."
+    )
+
+
+def get_tokenizer(tokenizer_cfg: Optional[TokenizerConfig] = None) -> Tokenizer:
+    cfg = _resolve_tokenizer_config(tokenizer_cfg)
+    return _build_tokenizer_cached(
+        backend=cfg.backend,
+        name=cfg.name,
+        hf_use_fast=cfg.hf_use_fast,
+        hf_trust_remote_code=cfg.hf_trust_remote_code,
+    )
+
+
+def get_chatml_encoder() -> Tokenizer:
+    """Back-compat helper for the legacy ChatML tiktoken setup."""
+    return get_tokenizer(
+        TokenizerConfig(
+            backend="tiktoken",
+            name="cl100k_base",
+        )
+    )
+
+
+@overload
+def encode_chat_template(
+    template: ChatTemplate,
+    encoder: Optional[Tokenizer] = None,
+    system_prompt: Optional[str] = None,
+    prompt: bool = False,
+    *,
+    tokenize: Literal[False],
+) -> str: ...
+
+
+@overload
+def encode_chat_template(
+    template: ChatTemplate,
+    encoder: Tokenizer = ...,
+    system_prompt: Optional[str] = None,
+    prompt: bool = False,
+    *,
+    tokenize: Literal[True] = True,
+) -> list[int]: ...
 
 
 def encode_chat_template(
     template: ChatTemplate,
-    encoder: Optional[tiktoken.Encoding] = None,
+    encoder: Optional[Tokenizer] = None,
     system_prompt: Optional[str] = None,
     prompt: bool = False,
+    *,
+    tokenize: bool = True,
 ) -> list[int] | str:
     """
-    Encode a chat template into tokens using chatml format.
+    Encode a chat template as tokens or formatted text.
 
-    Format:
-    <|im_start|>system
-    {system_prompt}<|im_end|>
-    <|im_start|>user
-    {message}<|im_end|>
-    <|im_start|>assistant
-    {message}<|im_end|>
+    - For tiktoken, formatting is always ChatML.
+    - For HuggingFace tokenizers, formatting uses tokenizer.apply_chat_template.
 
     Args:
         template: List of chat turns
-        encoder: Tokenizer (if None, returns the string instead of tokens)
+        encoder: Tokenizer to use. Required when tokenize=True.
         system_prompt: Optional system prompt to prepend
-        prompt: If True, end with <|im_start|>assistant for autoregressive generation
+        prompt: If True, append a generation prompt for autoregressive generation
+        tokenize: If True, return token ids. If False, return formatted text.
     """
-    # Build the full string first
+    # HuggingFace tokenizers should use their model-specific chat template.
+    if isinstance(encoder, HuggingFaceTokenizer):
+        turns: list[dict[str, str]] = []
+        if system_prompt and system_prompt != "":
+            turns.append({"role": "system", "content": system_prompt})
+        for turn in template:
+            turns.append({"role": turn.role, "content": turn.message})
+        rendered = encoder._tokenizer.apply_chat_template(
+            turns,
+            tokenize=tokenize,
+            add_generation_prompt=prompt,
+            return_tensors=None,
+        )
+        if tokenize:
+            return cast(list[int], rendered)
+        return cast(str, rendered)
+
+    # Build the full string first (ChatML).
     parts = []
 
     # Add system prompt if provided
@@ -67,9 +285,14 @@ def encode_chat_template(
     # Concatenate
     full_text = "".join(parts)
 
-    # Return string if no encoder, otherwise tokenize
-    if encoder is None:
+    if not tokenize:
         return full_text
+
+    if encoder is None:
+        raise ValueError(
+            "encode_chat_template(tokenize=True) requires an encoder. "
+            "Use tokenize=False to return formatted text."
+        )
 
     tokens: list[int] = encoder.encode(full_text, allowed_special="all")
     return tokens
@@ -77,7 +300,7 @@ def encode_chat_template(
 
 def decode_chat_template(
     tokens: list[int] | str,
-    encoder: Optional[tiktoken.Encoding] = None,
+    encoder: Optional[Tokenizer] = None,
 ) -> ChatTemplate:
     """
     Decode tokens back into a ChatTemplate.
@@ -93,19 +316,53 @@ def decode_chat_template(
     # Decode tokens to text, or use directly if encoder is None
     if encoder is None:
         text = tokens if isinstance(tokens, str) else "".join(map(str, tokens))
+    elif isinstance(tokens, str):
+        text = tokens
     else:
         text = encoder.decode(tokens)
 
-    # Parse chatml format
-    # Pattern: <|im_start|>role\nmessage<|im_end|>
-    pattern = r"<\|im_start\|>(.*?)\n(.*?)<\|im_end\|>"
-    matches = re.findall(pattern, text, re.DOTALL)
+    # 1) Parse ChatML format first.
+    chatml_matches = re.findall(
+        r"<\|im_start\|>(.*?)\n(.*?)<\|im_end\|>", text, re.DOTALL
+    )
+    if chatml_matches:
+        return [
+            ChatTurn(role=role.strip(), message=message.strip())
+            for role, message in chatml_matches
+        ]
 
-    # Build ChatTemplate, skipping system messages
-    template = []
-    for role, message in matches:
-        role = role.strip()
-        message = message.strip()
-        template.append(ChatTurn(role=role, message=message))
+    # 2) Parse Llama-3 style headers.
+    # <|start_header_id|>user<|end_header_id|>\n\nmessage<|eot_id|>
+    llama3_pattern = (
+        r"<\|start_header_id\|>\s*([^<\n]+?)\s*<\|end_header_id\|>\s*"
+        r"(.*?)(?=<\|eot_id\|>|<\|start_header_id\|>|$)"
+    )
+    llama3_matches = re.findall(llama3_pattern, text, re.DOTALL)
+    if llama3_matches:
+        return [
+            ChatTurn(role=role.strip(), message=message.strip())
+            for role, message in llama3_matches
+            if message.strip() != ""
+        ]
 
-    return template
+    # 3) Parse [INST]...[/INST] style (Llama-2 style).
+    inst_matches = re.findall(
+        r"\[INST\](.*?)\[/INST\](.*?)(?=\[INST\]|$)", text, re.DOTALL
+    )
+    if inst_matches:
+        template: ChatTemplate = []
+        for user_msg, assistant_msg in inst_matches:
+            user_clean = user_msg.strip()
+            if user_clean:
+                template.append(ChatTurn(role="user", message=user_clean))
+            assistant_clean = assistant_msg.strip()
+            if assistant_clean:
+                template.append(ChatTurn(role="assistant", message=assistant_clean))
+        if template:
+            return template
+
+    # 4) Best-effort fallback: treat full text as assistant output.
+    cleaned = text.strip()
+    if cleaned == "":
+        return []
+    return [ChatTurn(role="assistant", message=cleaned)]

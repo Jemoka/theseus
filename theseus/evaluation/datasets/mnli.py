@@ -3,7 +3,11 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(premise: str, hypothesis: str) -> ChatTemplate:
@@ -24,6 +28,7 @@ class MNLIEval(RolloutEvaluation):
 
     def __init__(self, split: str = "validation_matched") -> None:
         self.ds = load_dataset("nyu-mll/multi_nli", split=split)
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -45,7 +50,12 @@ class MNLIEval(RolloutEvaluation):
         else:
             answer = "contradiction"
 
-        prompt: str = encode_chat_template(template(premise, hypothesis), prompt=True)  # type: ignore
+        prompt = encode_chat_template(
+            template(premise, hypothesis),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:

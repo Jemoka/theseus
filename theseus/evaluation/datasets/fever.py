@@ -6,7 +6,11 @@ import wikipedia
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 DEV_URL = "https://fever.ai/download/fever/paper_dev.jsonl"
@@ -56,6 +60,7 @@ class FEVEREval(RolloutEvaluation):
                 self.data.append(json.loads(line))
 
         self._wiki_cache: dict[str, str | None] = {}
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -92,7 +97,12 @@ class FEVEREval(RolloutEvaluation):
         claim = item["claim"]
         answer = item["label"]
         evidence_text = self._get_evidence_text(item["evidence"])
-        prompt: str = encode_chat_template(template(claim, evidence_text), prompt=True)  # type: ignore
+        prompt = encode_chat_template(
+            template(claim, evidence_text),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:

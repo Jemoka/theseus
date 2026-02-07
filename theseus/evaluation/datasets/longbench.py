@@ -3,7 +3,11 @@ from typing import Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(context: str, question: str, choices: dict[str, str]) -> ChatTemplate:
@@ -29,6 +33,7 @@ Answer with only the letter (A, B, C, or D):""",
 class LongBench(RolloutEvaluation):
     def __init__(self, split: str = "train") -> None:
         self.ds = load_dataset("THUDM/LongBench-v2", split="train")
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -42,9 +47,12 @@ class LongBench(RolloutEvaluation):
             "C": item["choice_C"],
             "D": item["choice_D"],
         }
-        prompt: str = encode_chat_template(
-            template(item["context"], item["question"], choices), prompt=True
-        )  # type: ignore
+        prompt = encode_chat_template(
+            template(item["context"], item["question"], choices),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         answer = item["answer"]
         return prompt, answer
 

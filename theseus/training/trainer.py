@@ -40,6 +40,7 @@ from theseus.training.utils import (
 )
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
 from theseus.evaluation.base import Evaluator, EvaluatorConfig
+from theseus.data.tokenizer import TokenizerConfig
 
 M = TypeVar("M", bound=Module)
 
@@ -103,7 +104,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
-        cfg: List[Type[Any]] = [*cls.MODEL.gather(), EvaluatorConfig]
+        cfg: List[Type[Any]] = [*cls.MODEL.gather(), EvaluatorConfig, TokenizerConfig]
 
         if isinstance(cls.optimizer(), str):
             _, optim_cfg = OPTIMIZERS.get(cls.optimizer(), (None, None))

@@ -3,7 +3,11 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
-from theseus.data.tokenizer import encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    decode_chat_template,
+    encode_chat_template,
+    get_tokenizer,
+)
 
 
 def template(q1: str, q2: str) -> ChatTemplate:
@@ -24,6 +28,7 @@ class QQPEval(RolloutEvaluation):
 
     def __init__(self, split: str = "validation") -> None:
         self.ds = load_dataset("nyu-mll/glue", "qqp", split=split)
+        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
@@ -36,9 +41,12 @@ class QQPEval(RolloutEvaluation):
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
         answer = "yes" if item["label"] else "no"
-        prompt: str = encode_chat_template(
-            template(item["question1"], item["question2"]), prompt=True
-        )  # type: ignore
+        prompt = encode_chat_template(
+            template(item["question1"], item["question2"]),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
         return prompt, answer
 
     def __len__(self) -> int:
