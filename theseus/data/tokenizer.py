@@ -260,7 +260,33 @@ def encode_chat_template(
             return_tensors=None,
         )
         if tokenize:
-            return cast(list[int], rendered)
+            ids_obj: Any = rendered
+
+            # Some tokenizer versions return BatchEncoding with input_ids.
+            if isinstance(rendered, dict) and "input_ids" in rendered:
+                ids_obj = rendered["input_ids"]
+            elif hasattr(rendered, "input_ids"):
+                ids_obj = getattr(rendered, "input_ids")
+
+            # Normalize tensor/ndarray-like values.
+            if hasattr(ids_obj, "tolist"):
+                ids_obj = ids_obj.tolist()
+
+            if isinstance(ids_obj, tuple):
+                ids_obj = list(ids_obj)
+
+            if isinstance(ids_obj, list):
+                if len(ids_obj) == 0:
+                    return []
+                if isinstance(ids_obj[0], list):
+                    # apply_chat_template may return a batched shape; use first sample.
+                    return [int(token) for token in ids_obj[0]]
+                return [int(token) for token in ids_obj]
+
+            raise TypeError(
+                "Unexpected tokenized output type from apply_chat_template: "
+                f"{type(ids_obj).__name__}"
+            )
         return cast(str, rendered)
 
     # Build the full string first (ChatML).
