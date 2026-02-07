@@ -36,77 +36,6 @@ register_pytree_node(
     output_unflatten,
 )
 
-# model = AutoModelForCausalLM.from_pretrained(
-#     "meta-llama/Llama-2-7b-hf",
-#     dtype="bfloat16"
-# )
-
-# def shard_weights_llama(mesh, weights):
-#     weights = model.state_dict()
-#     result = {}
-
-#     for k, v in weights.items():
-#         if (('q_proj.weight' in k) or
-#             ('k_proj.weight' in k) or
-#             ('v_proj.weight' in k) or
-#             ('gate_proj.weight' in k) or
-#             ('up_proj.weight' in k)):
-#             sharding = P('shard', None)
-#         elif(('o_proj.weight' in k) or
-#             ('down_proj.weight' in k) or
-#             ('lm_head.weight' in k) or
-#             ('embed_tokens' in k)):
-#             sharding = P(None, 'shard')
-#         else:
-#             sharding = P() # replicated
-
-#         result[k] = v.apply_jax(jax.device_put, NamedSharding(mesh, sharding))
-
-
-#     return result
-
-
-# # jax array inside
-# with env:
-#   model.to('jax')
-#   weights = shard_weights_llama(mesh, model.state_dict())
-
-
-# with env:
-#     def
-#     input_ids = model_inputs.input_ids.to('jax').apply_jax_(
-#         jax.device_put,
-#         NamedSharding(mesh, P()))
-
-#     attention_mask = model_inputs.attention_mask.to('jax').apply_jax_(
-#         jax.device_put,
-#         NamedSharding(mesh, P())
-#     )
-
-#     (logits, ) = torch.func.functional_call(
-#         model,
-#         weights,
-#         (input_ids,),
-#         dict(
-#             attention_mask=attention_mask,
-#             return_dict=False,
-#             use_cache=False,
-#         ),
-#     )
-
-# with env:
-#     rs = logits.argmax(dim=-1)
-#     decoded = rs.cpu()
-
-# tokenizer.decode(decoded)
-
-
-# model = AutoModelForCausalLM.from_pretrained(
-#     "meta-llama/Llama-2-7b-hf",
-#     dtype="meta"
-# )
-# state_dict =
-
 from flax import linen as nn
 import flax
 from typing import Any
@@ -179,7 +108,7 @@ class Lmfmao(nn.Module):
                         if name in buffer_state
                     },
                 )
-        return logits
+            return logits.jax()
 
 
 import jax.numpy as jnp
@@ -196,20 +125,49 @@ variables = model.init(jax.random.PRNGKey(7), jnp.ones((8, 4)).astype(jnp.int32)
 from transformers import AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf")
-model_inputs = tokenizer(["The Federal Reserve said last"], return_tensors="np")
+model_inputs = tokenizer(["Hello! What's the point of"], return_tensors="np")
 
-logits, buffer_updates = model.apply(
-    variables, model_inputs["input_ids"], mutable=["buffers"]
-)
-tokenizer.decode(logits.numpy().argmax(axis=-1))
+@jax.jit
+def apply_input(input_ids, variables):
+    logits, buffer_updates = model.apply(
+        variables, input_ids, mutable=["buffers"]
+    )
+    variables = flax.core.freeze(
+        {**flax.core.unfreeze(variables), "buffers": buffer_updates["buffers"]}
+    )
 
-variables = flax.core.freeze(
-    {**flax.core.unfreeze(variables), "buffers": buffer_updates["buffers"]}
-)
+    return logits, variables
 
+out, variables = apply_input(model_inputs["input_ids"], variables)
+nn.with_partitioning(
 
 
 # model.has_variable("params", "_params")
 # # logits.shape
 
 # # # variables
+
+# def shard_weights_llama(mesh, weights):
+#     weights = model.state_dict()
+#     result = {}
+
+#     for k, v in weights.items():
+#         if (('q_proj.weight' in k) or
+#             ('k_proj.weight' in k) or
+#             ('v_proj.weight' in k) or
+#             ('gate_proj.weight' in k) or
+#             ('up_proj.weight' in k)):
+#             sharding = P('shard', None)
+#         elif(('o_proj.weight' in k) or
+#             ('down_proj.weight' in k) or
+#             ('lm_head.weight' in k) or
+#             ('embed_tokens' in k)):
+#             sharding = P(None, 'shard')
+#         else:
+#             sharding = P() # replicated
+
+#         result[k] = v.apply_jax(jax.device_put, NamedSharding(mesh, sharding))
+
+
+#     return result
+
