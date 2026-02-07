@@ -1,12 +1,24 @@
-from typing import Optional
+from typing import Any, Optional
 
+from theseus.base.axis import Axis
 from theseus.config import field
 from theseus.model.axes import Axes
 from theseus.model.huggingface import HFCompat, LogicalAxes
 
 
 class Llama(HFCompat):
-    id: str = field("architecture/model_id")
+    id: str = field("architecture/huggingface/model")
+
+    @property
+    def sharding(self) -> list[tuple[Axes, Optional[Any]]]:
+        return [
+            (Axes.VOCAB, None),
+            (Axes.BLOCK_SIZE, None),
+            (Axes.N_EMBD, None),
+            (Axes.N_EMBD_FF, Axis.SHARD),
+            (Axes.N_EMBD_OUT, Axis.SHARD),
+            (Axes.N_ATTN, Axis.SHARD),
+        ]
 
     @classmethod
     def axes(cls, x: str) -> Optional[LogicalAxes]:

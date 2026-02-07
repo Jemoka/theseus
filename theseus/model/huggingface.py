@@ -5,7 +5,7 @@ I can't believe this is not butter.
 
 from abc import abstractmethod
 from functools import lru_cache
-from typing import Any, Optional, Self, TypeAlias
+from typing import Any, Optional, Self, Type, TypeAlias
 
 import flax
 import jax
@@ -70,6 +70,10 @@ class HFCompat(Module):
     @abstractmethod
     def axes(cls, x: str) -> Optional[LogicalAxes]:
         raise NotImplementedError
+
+    @classmethod
+    def components(cls) -> list[Type[Any]]:
+        return []
 
     @classmethod
     def _build_meta_model(cls, model_id: str) -> Any:
