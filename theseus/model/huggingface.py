@@ -116,6 +116,14 @@ class HFCompat(Module):
             return x
         return flax.linen.Partitioned(x, self._partition_names(maybe_axes))
 
+    @staticmethod
+    def _to_tx_tensor(x: Any) -> Any:
+        while isinstance(x, flax.core.meta.Partitioned):
+            x = x.value
+        if isinstance(x, tx.tensor.Tensor):
+            return x
+        return tx.tensor.Tensor(x, tx.default_env())
+
     def setup(self) -> None:
         if not self.has_variable("params", "_params"):
             _base = AutoModelForCausalLM.from_pretrained(
@@ -178,13 +186,17 @@ class HFCompat(Module):
                 padding_mask.astype(jnp.bool_), tx.default_env()
             )
         params = jax.tree_util.tree_map(
-            lambda x: tx.tensor.Tensor(x, tx.default_env()), self._params
+            self._to_tx_tensor,
+            self._params,
+            is_leaf=lambda leaf: isinstance(leaf, flax.core.meta.Partitioned),
         )
         buffer_state: Optional[Any] = self.get_variable("buffers", "_buffers")
         if buffer_state is None:
             raise ValueError("missing buffers/_buffers state")
         buffers = jax.tree_util.tree_map(
-            lambda x: tx.tensor.Tensor(x, tx.default_env()), buffer_state
+            self._to_tx_tensor,
+            buffer_state,
+            is_leaf=lambda leaf: isinstance(leaf, flax.core.meta.Partitioned),
         )
 
         if isinstance(params, flax.core.FrozenDict):
