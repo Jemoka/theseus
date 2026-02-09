@@ -11,6 +11,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+
 from loguru import logger
 from omegaconf import OmegaConf
 from theseus.config import configuration
@@ -27,6 +28,11 @@ HARDWARE_JSON = """__HARDWARE_JSON__"""
 JOB_NAME = "__JOB_NAME__"
 PROJECT = "__PROJECT__"
 GROUP = "__GROUP__"
+
+BATCH_SIZE_OVERRIDE_ENV = "THESEUS_DISPATCH_BATCH_SIZE"
+DISABLE_WANDB_ENV = "THESEUS_DISPATCH_DISABLE_WANDB"
+RUN_ID_OVERRIDE_ENV = "THESEUS_DISPATCH_RUN_ID"
+START_TIME_OVERRIDE_ENV = "THESEUS_DISPATCH_START_TIME"
 
 
 def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
@@ -95,6 +101,44 @@ def _generate_run_id() -> str:
     if slurm_job_id:
         return f"{timestamp}_{slurm_job_id}"
     return timestamp
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _apply_runtime_config_overrides(cfg: OmegaConf) -> None:
+    """Apply runtime config overrides provided by bootstrap.sh."""
+    batch_size_override = os.environ.get(BATCH_SIZE_OVERRIDE_ENV)
+    if batch_size_override is not None:
+        try:
+            batch_size = int(batch_size_override)
+        except ValueError as exc:
+            raise ValueError(
+                f"{BATCH_SIZE_OVERRIDE_ENV} must be an integer, got: {batch_size_override}"
+            ) from exc
+
+        if (
+            OmegaConf.select(cfg, "training.per_device_batch_size", default=None)
+            is None
+        ):
+            print(
+                "[bootstrap] WARNING:"
+                " training.per_device_batch_size not found; skipping batch override"
+            )
+        else:
+            OmegaConf.update(cfg, "training.per_device_batch_size", batch_size)
+            print(
+                f"[bootstrap] overriding training.per_device_batch_size to {batch_size}"
+            )
+
+    if _env_flag(DISABLE_WANDB_ENV):
+        if OmegaConf.select(cfg, "logging.wandb", default=None) is not None:
+            OmegaConf.update(cfg, "logging.wandb", False)
+            print("[bootstrap] overriding logging.wandb to false for batch-size search")
 
 
 def _write_metadata(
@@ -213,6 +257,7 @@ class HeartbeatUpdater:
 
 def main():
     cfg = OmegaConf.create(CONFIG_YAML)
+    _apply_runtime_config_overrides(cfg)
     hardware = _reconstruct_hardware(json.loads(HARDWARE_JSON))
 
     topology = Topology.new(hardware.chip) if hardware.chip else None
@@ -230,8 +275,11 @@ def main():
     status_dir = _get_status_dir(cluster)
 
     # Generate unique run ID and capture start time
-    run_id = _generate_run_id()
-    start_time = datetime.now().isoformat()
+    run_id = os.environ.get(RUN_ID_OVERRIDE_ENV, "").strip() or _generate_run_id()
+    start_time = (
+        os.environ.get(START_TIME_OVERRIDE_ENV, "").strip()
+        or datetime.now().isoformat()
+    )
 
     # Create run-specific directory structure: status/{project}/{group}/{name}/{run_id}/
     project = spec.project or "general"

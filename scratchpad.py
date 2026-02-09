@@ -21,21 +21,26 @@ from theseus.config import *
 from theseus.quick import quick
 
 from theseus.experiments.llama import PretrainLlama
+from theseus.experiments.continual import ABCDTrainer
 
-with quick(PretrainLlama, "test", "/sailhome/houjun/theseus") as j:
+with quick(ABCDTrainer, "test", "/sailhome/houjun/theseus") as j:
     # cfg = j.config
-    j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
-    j.config.training.dataset = [{
+    # j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
+    j.config.architecture.n_layers = 16
+    j.config.training.dataset = [[{
         "name": "fineweb",
         "rate": 1.0,
         "style": "PMD",
-        "suffix": "llama",
-    }]
+        "suffix": "",
+    }]]
+    j.config.training.tokens = [1000000000]
+    j.config.eval.evaluations = ["mnli", "qqp", "sst2", "siqa"]
+
     j.config.logging.report_interval=1
-    j.config.logging.validation_interval=4
+    # j.config.logging.validation_interval=4
     j.config.training.evaluate = False
-    j.config.training.batch_size = 6
-    j.config.training.per_device_batch_size = 2
+    # j.config.training.batch_size = 6
+    j.config.training.per_device_batch_size = 96
     # trainer = j.create()
     j()
     # 1+1
