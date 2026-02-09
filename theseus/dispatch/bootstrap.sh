@@ -565,7 +565,12 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
+    # `spawn` cannot re-import a heredoc main module (`<stdin>`), so prefer
+    # `fork` when available in this bootstrap context.
+    if "fork" in mp.get_all_start_methods():
+        mp.set_start_method("fork", force=True)
+    else:
+        mp.set_start_method("spawn", force=True)
     raise SystemExit(main())
 PY
 }
