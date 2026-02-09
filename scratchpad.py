@@ -24,8 +24,7 @@ from theseus.experiments.llama import PretrainLlama
 
 with quick(PretrainLlama, "test", "/sailhome/houjun/theseus") as j:
     # cfg = j.config
-
-    j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B"
+    j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
     j.config.training.dataset = [{
         "name": "fineweb",
         "rate": 1.0,
@@ -36,37 +35,37 @@ with quick(PretrainLlama, "test", "/sailhome/houjun/theseus") as j:
     j.config.logging.validation_interval=4
     j.config.training.evaluate = False
     j.config.training.batch_size = 6
-    j.config.training.per_device_batch_size = 1
-    trainer = j.create()
-    # j()
+    j.config.training.per_device_batch_size = 2
+    # trainer = j.create()
+    j()
     # 1+1
     # !nvidia-smi
 
-# trainer
-# import flax
-# print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
-# [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
-from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
+# # trainer
+# # import flax
+# # print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
+# # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
+# from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
 
-tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
-tk._tokenizer
-x.max()
+# tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
+# tk._tokenizer
+# x.max()
 
 
-x,y,pmd = trainer.batch()
-trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
+# x,y,pmd = trainer.batch()
+# trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
 
-# shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
-#     flax.linen.get_partition_spec(trainer.state),
-#     trainer.mesh,
-#     rules=tuple(trainer.model.sharding),  # type: ignore
-# )
+# # shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
+# #     flax.linen.get_partition_spec(trainer.state),
+# #     trainer.mesh,
+# #     rules=tuple(trainer.model.sharding),  # type: ignore
+# # )
 
-# !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
-# res
+# # !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
+# # res
 
-# #     1+1
-# # # ls ~/theseus/data/
+# # #     1+1
+# # # # ls ~/theseus/data/
 
 
 # # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:

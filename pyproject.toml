@@ -32,6 +32,12 @@ dev = [
     "pre-commit>=4.2.0",
     "mypy>=1.16.1",
 ]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.20",
+    "mkdocstrings[python]>=0.30.0",
+    "pymdown-extensions>=10.15",
+]
 cuda = [
     {include-group = "cuda13"},
 ]
@@ -153,4 +159,3 @@ ignore_missing_imports = true
 where = ["."]
 include = ["theseus"]
 exclude = []
-

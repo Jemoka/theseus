@@ -140,8 +140,6 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         Args:
             spec (ExecutionSpec): execution specification
-            abstract (bool, optional): whether not we will load in a checkpoint later
-                                       and thus should not initialize parameters now.
 
         Raises:
             AssertionError: if topology is not provided in spec

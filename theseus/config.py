@@ -176,8 +176,8 @@ def hydrate(cls: Any, config: DictConfig | ListConfig) -> Any:
     """Hydrates a dataclass instance from an OmegaConf configuration.
 
     Args:
-        class (DataclassInstance | type[DataclassInstance]): Dataclass type to instantiate.
-        config (OmegaConf): OmegaConf configuration.
+        cls (DataclassInstance | type[DataclassInstance]): Dataclass type to instantiate.
+        config (DictConfig | ListConfig): OmegaConf configuration.
 
     Returns:
         DataclassInstance: Instantiated dataclass with values from config.

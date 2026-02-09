@@ -74,7 +74,7 @@ class AsyncStrategy:
             Tuple of numpy arrays (x, y, padding_mask)
 
         Raises:
-            Exception if the worker thread encountered an error
+            Exception: If the worker thread encountered an error.
         """
         if self.error is not None:
             raise self.error
