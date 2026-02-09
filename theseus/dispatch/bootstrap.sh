@@ -190,7 +190,7 @@ __SETUP_COMMANDS__
 
 echo "[bootstrap] running command..."
 MAIN_COMMAND="__COMMAND__"
-BATCH_SIZE_CANDIDATES=(128 64 32 16 10 8 4 3 2 1)
+BATCH_SIZE_CANDIDATES=(256 128 64 32 16 10 8 4 3 2 1)
 
 should_search_batch_size() {
     if [[ -n "${THESEUS_DISPATCH_BATCH_SIZE:-}" ]]; then
@@ -223,7 +223,7 @@ from datetime import datetime
 
 RESOURCE_MARKER = "RESOURCE_EXHAUSTED"
 INITIAL_STABILITY_TIMEOUT = float(
-    os.environ.get("THESEUS_DISPATCH_INITIAL_STABILITY_TIMEOUT", "180")
+    os.environ.get("THESEUS_DISPATCH_INITIAL_STABILITY_TIMEOUT", "420")
 )
 MIN_TIMEOUT_SECONDS = 5.0
 
@@ -232,6 +232,15 @@ def _put_event(events: mp.Queue, payload: tuple) -> None:
     try:
         events.put(payload)
     except Exception:
+        pass
+
+
+def _signal_child_group(child_pid: int | None, sig: int) -> None:
+    if child_pid is None:
+        return
+    try:
+        os.killpg(child_pid, sig)
+    except (ProcessLookupError, PermissionError):
         pass
 
 
@@ -266,6 +275,7 @@ def _run_command_worker(command: str, env: dict[str, str], events: mp.Queue) -> 
             bufsize=1,
             start_new_session=True,
         )
+        _put_event(events, ("child_pid", child.pid))
 
         assert child.stdout is not None
         for line in child.stdout:
@@ -301,6 +311,7 @@ def _run_attempt(
 
     started = time.monotonic()
     saw_resource = False
+    child_pid: int | None = None
     done_payload: tuple[int, float, bool] | None = None
     worker_dead_since: float | None = None
 
@@ -319,6 +330,8 @@ def _run_attempt(
                         saw_resource = True
                     sys.stdout.write(line)
                     sys.stdout.flush()
+                elif kind == "child_pid":
+                    child_pid = int(event[1])
                 elif kind == "done":
                     done_payload = (
                         int(event[1]),
@@ -329,8 +342,14 @@ def _run_attempt(
 
             elapsed = time.monotonic() - started
             if timeout_s is not None and elapsed >= timeout_s and worker.is_alive():
+                print(
+                    "[bootstrap] AUTO_BATCH probe timeout; "
+                    f"terminating batch_size={batch_size}"
+                )
+                _signal_child_group(child_pid, signal.SIGTERM)
                 worker.terminate()
                 worker.join(timeout=10)
+                _signal_child_group(child_pid, signal.SIGKILL)
                 if worker.is_alive():
                     worker.kill()
                     worker.join(timeout=5)
@@ -371,6 +390,7 @@ def _run_attempt(
                     continue
                 if (time.monotonic() - worker_dead_since) < 2.0:
                     continue
+                _signal_child_group(child_pid, signal.SIGKILL)
                 return {
                     "kind": "error",
                     "elapsed": elapsed,
@@ -381,8 +401,10 @@ def _run_attempt(
                 worker_dead_since = None
     finally:
         if worker.is_alive():
+            _signal_child_group(child_pid, signal.SIGTERM)
             worker.terminate()
             worker.join(timeout=5)
+            _signal_child_group(child_pid, signal.SIGKILL)
             if worker.is_alive():
                 worker.kill()
                 worker.join(timeout=5)
