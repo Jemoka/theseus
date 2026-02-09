@@ -52,6 +52,7 @@ with quick(ABCDTrainer, "test", "/sailhome/houjun/theseus") as j:
 # # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
 # from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
 
+kl = sum_x(p(x) * (p(x) - q(x)))
 # tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
 # tk._tokenizer
 # x.max()

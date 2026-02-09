@@ -136,6 +136,61 @@ ensure_juicefs() {
 ensure_uv
 ensure_juicefs
 
+# Allow runtime path overrides when running standalone bootstrap scripts.
+print_bootstrap_usage() {
+    cat <<'EOF'
+Usage: bootstrap.sh [--root PATH] [--work PATH] [--log PATH]
+
+Options:
+  --root PATH  Override cluster root path.
+  --work PATH  Override cluster work path.
+  --log PATH   Override cluster log path.
+  -h, --help   Show this message and exit.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --root)
+            if [[ $# -lt 2 ]]; then
+                echo "[bootstrap] ERROR: --root requires a value"
+                exit 2
+            fi
+            export THESEUS_DISPATCH_ROOT_OVERRIDE="$2"
+            shift 2
+            ;;
+        --work)
+            if [[ $# -lt 2 ]]; then
+                echo "[bootstrap] ERROR: --work requires a value"
+                exit 2
+            fi
+            export THESEUS_DISPATCH_WORK_OVERRIDE="$2"
+            shift 2
+            ;;
+        --log)
+            if [[ $# -lt 2 ]]; then
+                echo "[bootstrap] ERROR: --log requires a value"
+                exit 2
+            fi
+            export THESEUS_DISPATCH_LOG_OVERRIDE="$2"
+            shift 2
+            ;;
+        -h|--help)
+            print_bootstrap_usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            echo "[bootstrap] ERROR: unknown argument: $1"
+            print_bootstrap_usage
+            exit 2
+            ;;
+    esac
+done
+
 # ============================================================================
 # JuiceFS Mount (if configured)
 # ============================================================================
@@ -161,9 +216,9 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION
 # Working Directory & Payload Extraction
 # ============================================================================
 
+BOOTSTRAP_WORKDIR="${THESEUS_DISPATCH_WORK_OVERRIDE:-__WORKDIR__}"
 __PAYLOAD_EXTRACT__
 
-BOOTSTRAP_WORKDIR="__WORKDIR__"
 cd "$BOOTSTRAP_WORKDIR"
 echo "[bootstrap] working directory: $(pwd)"
 

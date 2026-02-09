@@ -491,6 +491,218 @@ def submit(
 
 @theseus.command()  # type: ignore[misc]
 @click.argument("name")  # type: ignore[misc]
+@click.argument("yaml_path")  # type: ignore[misc]
+@click.argument("out_script")  # type: ignore[misc]
+@click.option(
+    "-j", "--job", default=None, help="Job name (read from YAML if not specified)"
+)  # type: ignore[misc]
+@click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
+@click.option(
+    "-g", "--group", default=None, help="Group under the project this run belongs to"
+)  # type: ignore[misc]
+@click.option(
+    "--chip", default=None, help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})"
+)  # type: ignore[misc]
+@click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option("--root", required=True, help="Cluster root path (required)")  # type: ignore[misc]
+@click.option("--work", default=None, help="Cluster work path (default: <root>/work)")  # type: ignore[misc]
+@click.option("--log", default=None, help="Cluster log path (default: <work>/logs)")  # type: ignore[misc]
+@click.option(
+    "--mount",
+    default=None,
+    help="JuiceFS Redis URL to mount at root (default: disabled)",
+)  # type: ignore[misc]
+@click.option("--cache-size", default=None, help="JuiceFS cache size")  # type: ignore[misc]
+@click.option("--cache-dir", default=None, help="JuiceFS cache directory")  # type: ignore[misc]
+@click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
+@click.argument("overrides", nargs=-1)  # type: ignore[misc]
+def bootstrap(
+    name: str,
+    yaml_path: str,
+    out_script: str,
+    job: str | None,
+    project: str | None,
+    group: str | None,
+    chip: str | None,
+    chips: int | None,
+    root: str,
+    work: str | None,
+    log: str | None,
+    mount: str | None,
+    cache_size: str | None,
+    cache_dir: str | None,
+    dirty: bool,
+    overrides: tuple[str, ...],
+) -> None:
+    """Generate a standalone bootstrap script (like SLURM submit payload).
+
+    NAME: Name of the job run
+    YAML_PATH: Path to the configuration YAML file
+    OUT_SCRIPT: Output path for the generated bootstrap shell script
+    OVERRIDES: Optional config overrides in key=value format
+    """
+    import subprocess
+
+    from theseus.base.hardware import Cluster, ClusterMachine, HardwareResult
+    from theseus.dispatch.config import JuiceFSMount
+    from theseus.dispatch.dispatch import _generate_bootstrap
+    from theseus.dispatch.slurm import SlurmJob
+    from theseus.dispatch.sync import snapshot
+
+    def normalize_path(path: str) -> str:
+        path = path.strip()
+        if path == "/":
+            return "/"
+        return path.rstrip("/")
+
+    if not Path(yaml_path).exists():
+        console.print(f"\n[red]Error: Config file '{yaml_path}' not found[/red]\n")
+        sys.exit(1)
+
+    cfg = OmegaConf.load(yaml_path)
+
+    # Get job name from option or config
+    if job is None:
+        if "job" not in cfg:
+            console.print(
+                "\n[red]Error: No job specified and 'job' not found in config[/red]"
+            )
+            console.print(
+                "[yellow]Use -j/--job option or add 'job: <name>' to your YAML[/yellow]\n"
+            )
+            sys.exit(1)
+        job = cfg.job
+    else:
+        OmegaConf.set_struct(cfg, False)
+        cfg.job = job
+        OmegaConf.set_struct(cfg, True)
+
+    if job not in JOBS:
+        console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
+        console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
+        sys.exit(1)
+
+    request_chip = chip
+    request_chips = chips
+    if request_chip is None and "request" in cfg and "chip" in cfg.request:
+        request_chip = cfg.request.chip
+    if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
+        request_chips = cfg.request.min_chips
+
+    if request_chip is None:
+        console.print("\n[red]Error: No chip specified[/red]")
+        console.print(
+            "[yellow]Use --chip option or add 'request.chip' to your YAML[/yellow]\n"
+        )
+        sys.exit(1)
+    if request_chips is None:
+        console.print("\n[red]Error: No chip count specified[/red]")
+        console.print(
+            "[yellow]Use -n/--chips option or add 'request.min_chips' to your YAML[/yellow]\n"
+        )
+        sys.exit(1)
+    if request_chip not in SUPPORTED_CHIPS:
+        console.print(f"\n[red]Error: Unknown chip '{request_chip}'[/red]")
+        console.print(
+            f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
+        )
+        sys.exit(1)
+    if request_chips < 1:
+        console.print("\n[red]Error: --chips must be >= 1[/red]\n")
+        sys.exit(1)
+
+    if overrides:
+        cfg_cli = OmegaConf.from_dotlist(list(overrides))
+        cfg = OmegaConf.merge(cfg, cfg_cli)
+
+        console.print()
+        console.print("[yellow]Config Overrides:[/yellow]")
+        for override in overrides:
+            console.print(f"[yellow]  • {override}[/yellow]")
+        console.print()
+
+    root_path = normalize_path(root)
+    if not root_path:
+        console.print("\n[red]Error: --root cannot be empty[/red]\n")
+        sys.exit(1)
+    work_path = normalize_path(work) if work else f"{root_path}/work"
+    log_path = normalize_path(log) if log else f"{work_path}/logs"
+    project_name = project or "general"
+    group_name = group or "default"
+    work_dir = f"{work_path}/{project_name}/{group_name}/{name}"
+
+    cluster = Cluster(name="bootstrap", root=root_path, work=work_path, log=log_path)
+    chip_obj = SUPPORTED_CHIPS[request_chip]
+    hardware = HardwareResult(
+        chip=chip_obj,
+        hosts=[
+            ClusterMachine(
+                name="bootstrap",
+                cluster=cluster,
+                resources={chip_obj: request_chips},
+            )
+        ],
+        total_chips=request_chips,
+    )
+
+    spec = JobSpec(name=name, project=project, group=group)
+    bootstrap_py_content = _generate_bootstrap(cfg, hardware, spec)
+
+    juicefs_mount = (
+        JuiceFSMount(
+            redis_url=mount,
+            mount_point=root_path,
+            cache_size=cache_size,
+            cache_dir=cache_dir,
+        )
+        if mount
+        else None
+    )
+    job_name = f"{project_name}-{group_name}-{name}"
+    slurm_job = SlurmJob(
+        name=job_name,
+        command="python _bootstrap_dispatch.py",
+        is_slurm=False,
+        payload_extract_to=work_dir,
+        juicefs_mount=juicefs_mount,
+        bootstrap_py=bootstrap_py_content,
+    )
+
+    if dirty:
+        stash_result = subprocess.run(
+            ["git", "stash", "create"],
+            capture_output=True,
+            text=True,
+        )
+        ref = stash_result.stdout.strip() or "HEAD"
+    else:
+        ref = "HEAD"
+    tarball = snapshot(".", ref)
+    script = slurm_job.pack(tarball).to_bootstrap_script()
+
+    out_path = Path(out_script)
+    if not out_path.parent.exists():
+        console.print(
+            f"\n[red]Error: Parent directory '{out_path.parent}' does not exist[/red]\n"
+        )
+        sys.exit(1)
+    out_path.write_text(script)
+    out_path.chmod(0o755)
+
+    console.print()
+    console.print(f"[green]Bootstrap script generated:[/green] {out_script}")
+    console.print(f"[blue]Job:[/blue] {job}")
+    console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
+    console.print(f"[blue]Root:[/blue] {root_path}")
+    console.print(f"[blue]Work:[/blue] {work_path}")
+    console.print(f"[blue]Log:[/blue] {log_path}")
+    console.print(f"[blue]Mount:[/blue] {mount or 'disabled'}")
+    console.print("[dim]Runtime overrides: --root/--work/--log[/dim]")
+    console.print()
+
+
+@theseus.command()  # type: ignore[misc]
+@click.argument("name")  # type: ignore[misc]
 @click.argument("out_path")  # type: ignore[misc]
 @click.option("-p", "--project", default=None, help="Project this run belongs to")  # type: ignore[misc]
 @click.option("-g", "--group", default=None, help="Group under the project")  # type: ignore[misc]

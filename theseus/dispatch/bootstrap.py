@@ -33,6 +33,9 @@ BATCH_SIZE_OVERRIDE_ENV = "THESEUS_DISPATCH_BATCH_SIZE"
 DISABLE_WANDB_ENV = "THESEUS_DISPATCH_DISABLE_WANDB"
 RUN_ID_OVERRIDE_ENV = "THESEUS_DISPATCH_RUN_ID"
 START_TIME_OVERRIDE_ENV = "THESEUS_DISPATCH_START_TIME"
+ROOT_OVERRIDE_ENV = "THESEUS_DISPATCH_ROOT_OVERRIDE"
+WORK_OVERRIDE_ENV = "THESEUS_DISPATCH_WORK_OVERRIDE"
+LOG_OVERRIDE_ENV = "THESEUS_DISPATCH_LOG_OVERRIDE"
 
 
 def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
@@ -71,12 +74,17 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
 def _reconstruct_hardware(data: dict) -> HardwareResult:
     """Reconstruct HardwareResult from serialized JSON."""
     chip = SUPPORTED_CHIPS.get(data["chip"]) if data["chip"] else None
+    root_override = os.environ.get(ROOT_OVERRIDE_ENV, "").strip() or None
+    work_override = os.environ.get(WORK_OVERRIDE_ENV, "").strip() or None
+    log_override = os.environ.get(LOG_OVERRIDE_ENV, "").strip() or None
     hosts = []
     for h in data["hosts"]:
+        cluster_data = h["cluster"]
         cluster = Cluster(
-            name=h["cluster"]["name"],
-            root=h["cluster"]["root"],
-            work=h["cluster"]["work"],
+            name=cluster_data["name"],
+            root=root_override or cluster_data["root"],
+            work=work_override or cluster_data["work"],
+            log=log_override or cluster_data.get("log"),
         )
         resources = {
             SUPPORTED_CHIPS[k]: v

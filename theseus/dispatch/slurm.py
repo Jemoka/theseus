@@ -264,13 +264,14 @@ class SlurmJob:
                 mount_opts.append(f"--cache-dir {self.juicefs_mount.cache_dir}")
             opts_str = " ".join(mount_opts)
             juicefs_str = f"""
-if ! mountpoint -q {self.juicefs_mount.mount_point}; then
-    echo "[bootstrap] mounting JuiceFS at {self.juicefs_mount.mount_point}..."
-    mkdir -p {self.juicefs_mount.mount_point}
-    juicefs mount -d {opts_str} {self.juicefs_mount.redis_url} {self.juicefs_mount.mount_point}
+MOUNT_POINT="${{THESEUS_DISPATCH_ROOT_OVERRIDE:-{self.juicefs_mount.mount_point}}}"
+if ! mountpoint -q "$MOUNT_POINT"; then
+    echo "[bootstrap] mounting JuiceFS at $MOUNT_POINT..."
+    mkdir -p "$MOUNT_POINT"
+    juicefs mount -d {opts_str} {self.juicefs_mount.redis_url} "$MOUNT_POINT"
 fi
 # Track mount point for cleanup on exit/preemption
-JUICEFS_MOUNT_POINT="{self.juicefs_mount.mount_point}"
+JUICEFS_MOUNT_POINT="$MOUNT_POINT"
 """
         else:
             juicefs_str = ""
@@ -295,18 +296,17 @@ JUICEFS_MOUNT_POINT="{self.juicefs_mount.mount_point}"
         if self.payload:
             payload_extract_parts.append(f"""
 echo "[bootstrap] extracting code payload..."
-mkdir -p {self.payload_extract_to}
-base64 -d <<'__PAYLOAD_EOF__' | tar -xzf - -C {self.payload_extract_to}
+mkdir -p "$BOOTSTRAP_WORKDIR"
+base64 -d <<'__PAYLOAD_EOF__' | tar -xzf - -C "$BOOTSTRAP_WORKDIR"
 {self.payload}
 __PAYLOAD_EOF__
 """)
 
         # Write Python bootstrap script (not included in git archive, so embedded here)
         if self.bootstrap_py:
-            workdir = self.payload_extract_to if self.payload else (self.workdir or ".")
             payload_extract_parts.append(f"""
 echo "[bootstrap] writing _bootstrap_dispatch.py..."
-cat > {workdir}/_bootstrap_dispatch.py << '__BOOTSTRAP_PY_EOF__'
+cat > "$BOOTSTRAP_WORKDIR"/_bootstrap_dispatch.py << '__BOOTSTRAP_PY_EOF__'
 {self.bootstrap_py}
 __BOOTSTRAP_PY_EOF__
 """)

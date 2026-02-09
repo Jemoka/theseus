@@ -79,6 +79,7 @@ def _serialize_hardware(result: HardwareResult) -> str:
                     "name": h.cluster.name,
                     "root": h.cluster.root,
                     "work": h.cluster.work,
+                    "log": h.cluster.log,
                 },
                 "resources": {chip.name: count for chip, count in h.resources.items()},
             }
