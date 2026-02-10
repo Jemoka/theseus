@@ -295,6 +295,8 @@ def _dispatch_slurm(
         output=f"{cluster.log_dir}/{job_name}-%j.out",
         juicefs_mount=juicefs_mount,
         bootstrap_py=bootstrap_py_content,
+        cpus_per_task=2,
+        time="14-0",
     )
 
     result = submit_packed(
