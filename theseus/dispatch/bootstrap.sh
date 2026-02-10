@@ -227,9 +227,7 @@ __ENV_VARS__
 
 # JAX/XLA GPU allocator defaults for large-model runs.
 # Keep overridable by honoring pre-set environment values.
-: "${TF_GPU_ALLOCATOR:=cuda_malloc_async}"
-: "${XLA_PYTHON_CLIENT_MEM_FRACTION:=0.96}"
-export TF_GPU_ALLOCATOR
+: "${XLA_PYTHON_CLIENT_MEM_FRACTION:=0.85}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION
 
 # ============================================================================
@@ -302,6 +300,12 @@ INITIAL_STABILITY_TIMEOUT = float(
     os.environ.get("THESEUS_DISPATCH_INITIAL_STABILITY_TIMEOUT", "420")
 )
 MIN_TIMEOUT_SECONDS = 5.0
+MIN_STABLE_CHECK_SECONDS = float(
+    os.environ.get("THESEUS_DISPATCH_MIN_STABLE_CHECK_SECONDS", "60")
+)
+PROBE_COOLDOWN_SECONDS = float(
+    os.environ.get("THESEUS_DISPATCH_PROBE_COOLDOWN_SECONDS", "8")
+)
 
 
 def _put_event(events: mp.Queue, payload: tuple) -> None:
@@ -318,6 +322,16 @@ def _signal_child_group(child_pid: int | None, sig: int) -> None:
         os.killpg(child_pid, sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def _cooldown_between_allocates() -> None:
+    if PROBE_COOLDOWN_SECONDS <= 0:
+        return
+    print(
+        "[bootstrap] AUTO_BATCH cooldown "
+        f"{PROBE_COOLDOWN_SECONDS:.1f}s between allocation attempts"
+    )
+    time.sleep(PROBE_COOLDOWN_SECONDS)
 
 
 def _run_command_worker(command: str, env: dict[str, str], events: mp.Queue) -> None:
@@ -499,7 +513,7 @@ def _select_batch_size(
 
     for idx, batch_size in enumerate(candidates):
         timeout_s = (
-            max(MIN_TIMEOUT_SECONDS, (upper_crash_time or 0.0) * 1.5)
+            max(MIN_TIMEOUT_SECONDS, MIN_STABLE_CHECK_SECONDS, (upper_crash_time or 0.0) * 1.5)
             if upper_crash_time is not None
             else INITIAL_STABILITY_TIMEOUT
         )
@@ -514,12 +528,13 @@ def _select_batch_size(
             timeout_s=timeout_s,
             probe_mode=True,
         )
+        _cooldown_between_allocates()
 
         kind = str(attempt["kind"])
         elapsed = float(attempt["elapsed"])
         if kind == "resource":
             upper_idx = idx
-            upper_crash_time = max(elapsed, 0.1)
+            upper_crash_time = max(upper_crash_time or 0.0, elapsed, 0.1)
             print(
                 "[bootstrap] AUTO_BATCH RESOURCE_EXHAUSTED at "
                 f"batch_size={batch_size} after {elapsed:.1f}s"
@@ -561,7 +576,11 @@ def _select_batch_size(
     while lower_idx - upper_idx > 1:
         mid_idx = (upper_idx + lower_idx) // 2
         batch_size = candidates[mid_idx]
-        timeout_s = max(MIN_TIMEOUT_SECONDS, (upper_crash_time or 0.0) * 1.5)
+        timeout_s = max(
+            MIN_TIMEOUT_SECONDS,
+            MIN_STABLE_CHECK_SECONDS,
+            (upper_crash_time or 0.0) * 1.5,
+        )
 
         print(
             "[bootstrap] AUTO_BATCH binary probe batch_size="
@@ -574,12 +593,13 @@ def _select_batch_size(
             timeout_s=timeout_s,
             probe_mode=True,
         )
+        _cooldown_between_allocates()
 
         kind = str(attempt["kind"])
         elapsed = float(attempt["elapsed"])
         if kind == "resource":
             upper_idx = mid_idx
-            upper_crash_time = max(elapsed, 0.1)
+            upper_crash_time = max(upper_crash_time or 0.0, elapsed, 0.1)
             print(
                 "[bootstrap] AUTO_BATCH binary result: "
                 f"batch_size={batch_size} crashes (RESOURCE_EXHAUSTED)"
@@ -638,6 +658,7 @@ def main() -> int:
         "[bootstrap] AUTO_BATCH launching real run with "
         f"training.per_device_batch_size={selected}"
     )
+    _cooldown_between_allocates()
     final = _run_attempt(
         command=command,
         base_env=base_env,

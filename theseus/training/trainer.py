@@ -3,8 +3,9 @@ a very basic trainer
 """
 
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from abc import abstractmethod
+from pprint import pformat
 from typing import Generic, TypeVar, Type, Dict, Any, Optional, List, Tuple, Callable
 
 from omegaconf import OmegaConf
@@ -154,6 +155,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         logger.info(f"TOPOLOGY | \n{spec.model_dump_json(indent=2)}\n")
 
         self.args = configure(self.CONFIG)
+        config_dump = asdict(self.args) if is_dataclass(self.args) else self.args
+        logger.info(f"CONFIG | \n{pformat(config_dump, sort_dicts=False)}\n")
         topology = self._init_topology(spec)
         params = self._init_model()
         self._init_optimizer(params)
