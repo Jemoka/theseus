@@ -6,7 +6,7 @@ import optax
 
 @dataclass
 class WSDConfig:
-    lr: float = field("optimization/lr", default=3.0 - 4)
+    lr: float = field("optimization/lr", default=3e-4)
     warmup_pct: float = field("optimization/warmup_pct", default=0.005)
     decay_pct: float = field("optimization/decay_pct", default=0.01)
 

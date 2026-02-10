@@ -29,6 +29,11 @@ class ABCDConfig(BaseTrainerConfig):
             100_000_000,
         ],
     )  # type: ignore
+
+    warmup_pct: float = field("optimization/warmup_pct", default=0.01)
+    decay_pct: float = field("optimization/decay_pct", default=0.01)
+    constant_pct: float = field("optimization/constant_pct", default=0.30)
+
     datasets: List[List[Sampling]] = field(  # type: ignore
         "training/dataset",
         default_factory=lambda: [
@@ -71,7 +76,7 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
 
     @classmethod
     def schedule(cls) -> optax._src.base.Schedule:
-        return None  # we want to use a contsant LR
+        return "wsds"  # we want to use a contsant LR
 
     def _init_topology(self, spec: ExecutionSpec) -> Topology:
         """Initialize topology, mesh, and compute total steps."""
@@ -84,8 +89,8 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
         self.mesh = spec.topology.mesh
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
-        self.total_steps = (
-            sum(self.args.total_tokens) // self.args.batch_size // self.args.block_size
+        self.total_steps = int(
+            sum(self.args.total_tokens) / self.args.batch_size / self.args.block_size
         )
         return topology
 

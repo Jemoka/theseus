@@ -136,6 +136,21 @@ ensure_juicefs() {
 ensure_uv
 ensure_juicefs
 
+ROOT_PLACEHOLDER="__THESEUS_RUNTIME_ROOT__"
+
+# Resolve runtime root placeholders in generated paths.
+resolve_runtime_root_tokens() {
+    local value="$1"
+    if [[ "$value" == *"$ROOT_PLACEHOLDER"* ]]; then
+        if [[ -z "${THESEUS_DISPATCH_ROOT_OVERRIDE:-}" ]]; then
+            echo "[bootstrap] ERROR: this script requires --root PATH at runtime"
+            exit 2
+        fi
+        value="${value//$ROOT_PLACEHOLDER/${THESEUS_DISPATCH_ROOT_OVERRIDE}}"
+    fi
+    printf '%s\n' "$value"
+}
+
 # Allow runtime path overrides when running standalone bootstrap scripts.
 print_bootstrap_usage() {
     cat <<'EOF'
@@ -191,6 +206,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "${THESEUS_DISPATCH_REQUIRE_ROOT:-0}" == "1" ]] && [[ -z "${THESEUS_DISPATCH_ROOT_OVERRIDE:-}" ]]; then
+    echo "[bootstrap] ERROR: root path is required; pass --root PATH"
+    exit 2
+fi
+
 # ============================================================================
 # JuiceFS Mount (if configured)
 # ============================================================================
@@ -217,6 +237,7 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION
 # ============================================================================
 
 BOOTSTRAP_WORKDIR="${THESEUS_DISPATCH_WORK_OVERRIDE:-__WORKDIR__}"
+BOOTSTRAP_WORKDIR="$(resolve_runtime_root_tokens "$BOOTSTRAP_WORKDIR")"
 __PAYLOAD_EXTRACT__
 
 cd "$BOOTSTRAP_WORKDIR"

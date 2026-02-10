@@ -36,7 +36,6 @@ from theseus.training.optimizers import OPTIMIZERS
 from theseus.training.schedules import SCHEDULES
 from theseus.training.utils import (
     find_accumulation_steps,
-    estimate_per_device_batch_size,
 )
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
 from theseus.evaluation.base import Evaluator, EvaluatorConfig
@@ -50,7 +49,7 @@ class BaseTrainerConfig:
     # Training hyperparameters
     batch_size: int = field("training/batch_size", default=512)
     per_device_batch_size: int = field(
-        "training/per_device_batch_size", default=8
+        "training/per_device_batch_size", default=-1
     )  # -1 = auto-estimate based on VRAM
     vram_calib_factor: float = field("architecture/vram_calib_factor", default=1.0)
     total_tokens: int = field("training/tokens", default=1_000_000_000)
@@ -70,6 +69,12 @@ class BaseTrainerConfig:
         default_factory=lambda: [
             Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)
         ],
+    )
+
+    # evaluation
+    evaluations: List[str] = field(
+        "eval/evaluations",
+        default_factory=lambda: [],
     )
 
     # Some Architecture
@@ -124,7 +129,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         sched, cfg = SCHEDULES[sched_name]
 
-        return sched(self.total_steps, configure(cfg))
+        return sched(self.total_steps, configure(cfg))  # type: ignore
 
     def _optimizer(self) -> optax.GradientTransformation:
         optim_name = self.optimizer()
@@ -169,8 +174,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         self.mesh = spec.topology.mesh
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
-        self.total_steps = (
-            self.args.total_tokens // self.args.batch_size // self.args.block_size
+        self.total_steps = int(
+            self.args.total_tokens / self.args.batch_size / self.args.block_size
         )
         return topology
 
@@ -219,31 +224,9 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         """Compute batch size, accumulation steps, and log configuration."""
         # Compute batch size (auto-estimate or manual override)
         if self.args.per_device_batch_size < 0:
-            if self.spec.hardware.chip is None:
-                raise ValueError(
-                    "Cannot auto-estimate per-device batch size without chip specification in hardware!"
-                )
-            chip_memory = self.spec.hardware.chip.memory
-            shards = self.mesh.shape[Axis.SHARD]
-
-            fitted_bs = estimate_per_device_batch_size(
-                chip_memory=chip_memory,
-                total_params_millions=self.total_params,
-                shards=shards,
-                block_size=self.args.block_size,
-                vram_calib_factor=self.args.vram_calib_factor,
+            raise ValueError(
+                "You specified -1 for the per-device batch size, but auto-estimation requires running with dispatch harness which you didn't appear to use; please either use `theseus bootstrap` or `theseus submit` endpoints OR specify a positive integer for `per_device_batch_size` in your config."
             )
-
-            if self.main_process():
-                logger.info(
-                    "AUTO_BATCH | vram={:.1f}GB params={:.1f}M shards={} seq={} calib={:.2f} -> batch_size={}",
-                    chip_memory / 1e9,
-                    self.total_params,
-                    shards,
-                    self.args.block_size,
-                    self.args.vram_calib_factor,
-                    fitted_bs,
-                )
         else:
             fitted_bs = self.args.per_device_batch_size
 

@@ -504,7 +504,11 @@ def submit(
     "--chip", default=None, help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})"
 )  # type: ignore[misc]
 @click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
-@click.option("--root", required=True, help="Cluster root path (required)")  # type: ignore[misc]
+@click.option(
+    "--root",
+    default=None,
+    help="Cluster root path (optional; if omitted, generated script requires --root at runtime)",
+)  # type: ignore[misc]
 @click.option("--work", default=None, help="Cluster work path (default: <root>/work)")  # type: ignore[misc]
 @click.option("--log", default=None, help="Cluster log path (default: <work>/logs)")  # type: ignore[misc]
 @click.option(
@@ -525,7 +529,7 @@ def bootstrap(
     group: str | None,
     chip: str | None,
     chips: int | None,
-    root: str,
+    root: str | None,
     work: str | None,
     log: str | None,
     mount: str | None,
@@ -621,7 +625,14 @@ def bootstrap(
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
 
-    root_path = normalize_path(root)
+    root_placeholder = "__THESEUS_RUNTIME_ROOT__"
+    if root is None:
+        root_path = root_placeholder
+        require_root_at_runtime = True
+    else:
+        root_path = normalize_path(root)
+        require_root_at_runtime = False
+
     if not root_path:
         console.print("\n[red]Error: --root cannot be empty[/red]\n")
         sys.exit(1)
@@ -663,6 +674,7 @@ def bootstrap(
         name=job_name,
         command="python _bootstrap_dispatch.py",
         is_slurm=False,
+        env={"THESEUS_DISPATCH_REQUIRE_ROOT": "1"} if require_root_at_runtime else {},
         payload_extract_to=work_dir,
         juicefs_mount=juicefs_mount,
         bootstrap_py=bootstrap_py_content,
@@ -693,7 +705,10 @@ def bootstrap(
     console.print(f"[green]Bootstrap script generated:[/green] {out_script}")
     console.print(f"[blue]Job:[/blue] {job}")
     console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
-    console.print(f"[blue]Root:[/blue] {root_path}")
+    root_display = (
+        root_path if not require_root_at_runtime else "<runtime --root required>"
+    )
+    console.print(f"[blue]Root:[/blue] {root_display}")
     console.print(f"[blue]Work:[/blue] {work_path}")
     console.print(f"[blue]Log:[/blue] {log_path}")
     console.print(f"[blue]Mount:[/blue] {mount or 'disabled'}")

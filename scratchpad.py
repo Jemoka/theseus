@@ -23,74 +23,81 @@ from theseus.quick import quick
 from theseus.experiments.llama import PretrainLlama
 from theseus.experiments.continual import ABCDTrainer
 
-with quick(ABCDTrainer, "test", "/sailhome/houjun/theseus") as j:
-    # cfg = j.config
+with quick(ABCDTrainer, "test", "/Users/houjun/theseus/") as j:
+    cfg = j.config
+    # j.config.training.per_device_batch_size = 1
+    # j.config.training.batch_size = 2
+    # j.config.logging.report_interval = 2
+    # j()
+    j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
+
+cfg
     # j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
-    j.config.architecture.n_layers = 16
-    j.config.training.dataset = [[{
-        "name": "fineweb",
-        "rate": 1.0,
-        "style": "PMD",
-        "suffix": "",
-    }]]
-    j.config.training.tokens = [1000000000]
-    j.config.eval.evaluations = ["mnli", "qqp", "sst2", "siqa"]
+#     j.config.architecture.n_layers = 16
+#     j.config.training.dataset = [[{
+#         "name": "fineweb",
+#         "rate": 1.0,
+#         "style": "PMD",
+#         "suffix": "",
+#     }]]
+#     j.config.training.tokens = [1000000000]
+#     j.config.eval.evaluations = ["mnli", "qqp", "sst2", "siqa"]
 
-    j.config.logging.report_interval=1
-    # j.config.logging.validation_interval=4
-    j.config.training.evaluate = False
-    # j.config.training.batch_size = 6
-    j.config.training.per_device_batch_size = 96
-    # trainer = j.create()
-    j()
-    # 1+1
-    # !nvidia-smi
+#     j.config.logging.report_interval=1
+#     # j.config.logging.validation_interval=4
+#     j.config.training.evaluate = False
+#     # j.config.training.batch_size = 6
+#     j.config.training.per_device_batch_size = 96
+#     # trainer = j.create()
+#     j()
+#     # 1+1
+#     # !nvidia-smi
 
-# # trainer
-# # import flax
-# # print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
-# # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
-# from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
+# # # trainer
+# # # import flax
+# # # print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
+# # # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
+# # from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
 
-kl = sum_x(p(x) * (p(x) - q(x)))
-# tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
-# tk._tokenizer
-# x.max()
-
-
-# x,y,pmd = trainer.batch()
-# trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
-
-# # shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
-# #     flax.linen.get_partition_spec(trainer.state),
-# #     trainer.mesh,
-# #     rules=tuple(trainer.model.sharding),  # type: ignore
-# # )
-
-# # !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
-# # res
-
-# # #     1+1
-# # # # ls ~/theseus/data/
+# # kl = sum_x(p(x) * (p(x) - q(x)))
+# # tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
+# # tk._tokenizer
+# # x.max()
 
 
-# # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
-# # #     cfg = j.config
-# # #     # j.config.data.dataset = "mnli"
-# #     # j.save("./configs/data/chicken.yaml")
+# # x,y,pmd = trainer.batch()
+# # trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
 
-# # block, params = init(
-# #     ForkingAttention,
-# #     cfg,
-# #     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
-# #     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
-# #     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
-# # )
-# # params
+# # # shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
+# # #     flax.linen.get_partition_spec(trainer.state),
+# # #     trainer.mesh,
+# # #     rules=tuple(trainer.model.sharding),  # type: ignore
+# # # )
 
-# # # with configuration(cfg):
-# # #     fb =  configure(ForkingAttention)
+# # # !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
+# # # res
 
-# # # fb.init(jax.random.PRNGKey(7), 
+# # # #     1+1
+# # # # # ls ~/theseus/data/
+
+
+# # # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
+# # # #     cfg = j.config
+# # # #     # j.config.data.dataset = "mnli"
+# # #     # j.save("./configs/data/chicken.yaml")
+
+# # # block, params = init(
+# # #     ForkingAttention,
+# # #     cfg,
+# # #     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
+# # #     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
+# # #     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+# # # )
+# # # params
+
+# # # # with configuration(cfg):
+# # # #     fb =  configure(ForkingAttention)
+
+# # # # fb.init(jax.random.PRNGKey(7), 
 
 

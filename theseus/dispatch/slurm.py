@@ -265,6 +265,7 @@ class SlurmJob:
             opts_str = " ".join(mount_opts)
             juicefs_str = f"""
 MOUNT_POINT="${{THESEUS_DISPATCH_ROOT_OVERRIDE:-{self.juicefs_mount.mount_point}}}"
+MOUNT_POINT="$(resolve_runtime_root_tokens "$MOUNT_POINT")"
 if ! mountpoint -q "$MOUNT_POINT"; then
     echo "[bootstrap] mounting JuiceFS at $MOUNT_POINT..."
     mkdir -p "$MOUNT_POINT"

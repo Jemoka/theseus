@@ -36,6 +36,7 @@ START_TIME_OVERRIDE_ENV = "THESEUS_DISPATCH_START_TIME"
 ROOT_OVERRIDE_ENV = "THESEUS_DISPATCH_ROOT_OVERRIDE"
 WORK_OVERRIDE_ENV = "THESEUS_DISPATCH_WORK_OVERRIDE"
 LOG_OVERRIDE_ENV = "THESEUS_DISPATCH_LOG_OVERRIDE"
+ROOT_PLACEHOLDER = "__THESEUS_RUNTIME_ROOT__"
 
 
 def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
@@ -71,6 +72,18 @@ def setup_logging(verbose: bool = False, log_file: Path | None = None) -> None:
         )
 
 
+def _resolve_runtime_root_placeholders(
+    value: str | None, root_override: str | None
+) -> str | None:
+    if value is None or ROOT_PLACEHOLDER not in value:
+        return value
+    if not root_override:
+        raise ValueError(
+            "This bootstrap script requires a root override. Run with --root PATH."
+        )
+    return value.replace(ROOT_PLACEHOLDER, root_override)
+
+
 def _reconstruct_hardware(data: dict) -> HardwareResult:
     """Reconstruct HardwareResult from serialized JSON."""
     chip = SUPPORTED_CHIPS.get(data["chip"]) if data["chip"] else None
@@ -80,11 +93,20 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
     hosts = []
     for h in data["hosts"]:
         cluster_data = h["cluster"]
+        cluster_root = root_override or _resolve_runtime_root_placeholders(
+            cluster_data["root"], root_override
+        )
+        cluster_work = work_override or _resolve_runtime_root_placeholders(
+            cluster_data["work"], root_override
+        )
+        cluster_log = log_override or _resolve_runtime_root_placeholders(
+            cluster_data.get("log"), root_override
+        )
         cluster = Cluster(
             name=cluster_data["name"],
-            root=root_override or cluster_data["root"],
-            work=work_override or cluster_data["work"],
-            log=log_override or cluster_data.get("log"),
+            root=cluster_root,
+            work=cluster_work,
+            log=cluster_log,
         )
         resources = {
             SUPPORTED_CHIPS[k]: v
