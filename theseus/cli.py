@@ -98,10 +98,16 @@ def jobs() -> None:
 )
 @click.option(  # type: ignore[misc]
     "-n",
-    "--chips",
+    "--n_chips",
     type=int,
     default=None,
     help="Minimum number of chips for hardware request",
+)
+@click.option(  # type: ignore[misc]
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model",
 )
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def configure(
@@ -109,7 +115,8 @@ def configure(
     out_yaml: str,
     previous: str | None,
     chip: str | None,
-    chips: int | None,
+    n_chips: int | None,
+    n_shards: int | None,
     overrides: tuple[str, ...],
 ) -> None:
     """Generate a configuration YAML for a job.
@@ -163,12 +170,14 @@ def configure(
     config.job = job
 
     # Add hardware request if specified
-    if chip or chips:
+    if chip or n_chips or n_shards:
         config.request = OmegaConf.create({})
         if chip:
             config.request.chip = chip
-        if chips:
-            config.request.min_chips = chips
+        if n_chips:
+            config.request.min_chips = n_chips
+        if n_shards:
+            config.request.n_shards = n_shards
 
     OmegaConf.set_struct(config, True)
 
@@ -306,7 +315,13 @@ def run(
 @click.option(
     "--chip", default=None, help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})"
 )  # type: ignore[misc]
-@click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option("-n", "--n_chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option(
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model",
+)  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
 @click.option(
     "--cluster", default=None, help="Only use these clusters (comma-separated)"
@@ -324,7 +339,8 @@ def submit(
     project: str | None,
     group: str | None,
     chip: str | None,
-    chips: int | None,
+    n_chips: int | None,
+    n_shards: int | None,
     mem: str | None,
     cluster: str | None,
     exclude_cluster: str | None,
@@ -391,13 +407,16 @@ def submit(
 
     # Get hardware request from CLI flags or config
     request_chip = chip
-    request_chips = chips
+    request_chips = n_chips
+    request_n_shards = n_shards
 
     # Fall back to config.request if CLI flags not specified
     if request_chip is None and "request" in cfg and "chip" in cfg.request:
         request_chip = cfg.request.chip
     if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
         request_chips = cfg.request.min_chips
+    if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
+        request_n_shards = cfg.request.n_shards
 
     # Validate we have hardware request
     if request_chip is None:
@@ -409,10 +428,9 @@ def submit(
     if request_chips is None:
         console.print("\n[red]Error: No chip count specified[/red]")
         console.print(
-            "[yellow]Use -n/--chips option or add 'request.min_chips' to your YAML[/yellow]\n"
+            "[yellow]Use -n/--n_chips option or add 'request.min_chips' to your YAML[/yellow]\n"
         )
         sys.exit(1)
-
     # Validate chip
     if request_chip not in SUPPORTED_CHIPS:
         console.print(f"\n[red]Error: Unknown chip '{request_chip}'[/red]")
@@ -420,6 +438,13 @@ def submit(
             f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
         )
         sys.exit(1)
+
+    if request_n_shards is not None:
+        OmegaConf.set_struct(cfg, False)
+        if "request" not in cfg:
+            cfg.request = OmegaConf.create({})
+        cfg.request.n_shards = request_n_shards
+        OmegaConf.set_struct(cfg, True)
 
     # Apply CLI overrides
     if overrides:
@@ -503,7 +528,13 @@ def submit(
 @click.option(
     "--chip", default=None, help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})"
 )  # type: ignore[misc]
-@click.option("-n", "--chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option("-n", "--n_chips", type=int, default=None, help="Minimum number of chips")  # type: ignore[misc]
+@click.option(
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model",
+)  # type: ignore[misc]
 @click.option(
     "--root",
     default=None,
@@ -528,7 +559,8 @@ def bootstrap(
     project: str | None,
     group: str | None,
     chip: str | None,
-    chips: int | None,
+    n_chips: int | None,
+    n_shards: int | None,
     root: str | None,
     work: str | None,
     log: str | None,
@@ -644,11 +676,14 @@ def bootstrap(
         sys.exit(1)
 
     request_chip = chip
-    request_chips = chips
+    request_chips = n_chips
+    request_n_shards = n_shards
     if request_chip is None and "request" in cfg and "chip" in cfg.request:
         request_chip = cfg.request.chip
     if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
         request_chips = cfg.request.min_chips
+    if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
+        request_n_shards = cfg.request.n_shards
 
     if request_chip is None:
         console.print("\n[red]Error: No chip specified[/red]")
@@ -659,7 +694,7 @@ def bootstrap(
     if request_chips is None:
         console.print("\n[red]Error: No chip count specified[/red]")
         console.print(
-            "[yellow]Use -n/--chips option or add 'request.min_chips' to your YAML[/yellow]\n"
+            "[yellow]Use -n/--n_chips option or add 'request.min_chips' to your YAML[/yellow]\n"
         )
         sys.exit(1)
     if request_chip not in SUPPORTED_CHIPS:
@@ -668,9 +703,13 @@ def bootstrap(
             f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
         )
         sys.exit(1)
-    if request_chips < 1:
-        console.print("\n[red]Error: --chips must be >= 1[/red]\n")
-        sys.exit(1)
+
+    if request_n_shards is not None:
+        OmegaConf.set_struct(cfg, False)
+        if "request" not in cfg:
+            cfg.request = OmegaConf.create({})
+        cfg.request.n_shards = request_n_shards
+        OmegaConf.set_struct(cfg, True)
 
     if overrides:
         cfg_cli = OmegaConf.from_dotlist(list(overrides))

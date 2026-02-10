@@ -17,7 +17,7 @@ Usage:
     # Or save config to file for later submission:
     with quick(job, "/sailhome/houjun/theseus/", "test") as j:
         j.config.training.per_device_batch_size = 16
-        j.save("config.yaml", chip="h100", n_chips=8)
+        j.save("config.yaml", chip="h100", n_chips=8, n_shards=4)
 """
 
 from __future__ import annotations
@@ -85,6 +85,7 @@ class QuickJob:
         out_yaml: str,
         chip: str | None = None,
         n_chips: int | None = None,
+        n_shards: int | None = None,
     ) -> Path:
         """Save the config to a YAML file.
 
@@ -92,6 +93,7 @@ class QuickJob:
             out_yaml: Output path for the YAML config
             chip: Optional chip type for hardware request (e.g., "h100", "a100")
             n_chips: Optional minimum number of chips for hardware request
+            n_shards: Optional number of tensor parallel shards for the model
 
         Returns:
             Path to the saved config file
@@ -112,12 +114,14 @@ class QuickJob:
         config.job = self._job_name
 
         # Add hardware request if specified
-        if chip or n_chips:
+        if chip or n_chips or n_shards:
             config.request = OmegaConf.create({})
             if chip:
                 config.request.chip = chip
             if n_chips:
                 config.request.min_chips = n_chips
+            if n_shards:
+                config.request.n_shards = n_shards
 
         OmegaConf.set_struct(config, True)
 

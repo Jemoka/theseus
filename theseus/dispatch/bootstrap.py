@@ -290,7 +290,13 @@ def main():
     _apply_runtime_config_overrides(cfg)
     hardware = _reconstruct_hardware(json.loads(HARDWARE_JSON))
 
-    topology = Topology.new(hardware.chip) if hardware.chip else None
+    n_shards = None
+    if "request" in cfg and "n_shards" in cfg.request:
+        n_shards = cfg.request.n_shards
+
+    topology = (
+        Topology.new(hardware.chip, shard_into=n_shards) if hardware.chip else None
+    )
     spec = ExecutionSpec(
         name=JOB_NAME,
         project=PROJECT or None,

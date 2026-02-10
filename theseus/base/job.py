@@ -46,7 +46,7 @@ class ExecutionSpec(JobSpec):
         if hardware.chip is None:
             topology = None
         else:
-            topology = Topology.new(hardware.chip)
+            topology = Topology.new(hardware.chip, shard_into=None)
         spec = cls(
             name=name,
             project=project,
