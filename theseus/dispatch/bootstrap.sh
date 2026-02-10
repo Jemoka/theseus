@@ -264,7 +264,7 @@ __SETUP_COMMANDS__
 
 echo "[bootstrap] running command..."
 MAIN_COMMAND="__COMMAND__"
-BATCH_SIZE_CANDIDATES=(256 128 64 32 16 10 8 4 3 2 1)
+BATCH_SIZE_CANDIDATES=(512 256 128 64 32 16 10 8 4 3 2 1)
 
 should_search_batch_size() {
     if [[ -n "${THESEUS_DISPATCH_BATCH_SIZE:-}" ]]; then

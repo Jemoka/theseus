@@ -1,4 +1,4 @@
-# uv run theseus submit 1B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e0 --mem 128G
+# uv run theseus submit 20B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e1 --mem 128G
 
 architecture:
   n_embd: 2048
@@ -27,14 +27,14 @@ optimization:
   beta1: 0.9
   beta2: 0.95
   lr: 0.0003
-  warmup_pct: 0.01
-  decay_pct: 0.01
-  constant_pct: 0.3
+  warmup_pct: 0.05
+  decay_pct: 0.10
+  constant_pct: 0.02
 training:
   batch_size: 512
   per_device_batch_size: -1
   tokens:
-  - 1000000000
+  - 20000000000
   - 100000000
   - 100000000
   - 100000000
@@ -71,4 +71,4 @@ logging:
 job: continual/train/abcd
 request:
   chip: h200
-  min_chips: 1
+  min_chips: 4
