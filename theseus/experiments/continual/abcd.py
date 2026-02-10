@@ -3,18 +3,22 @@ import wandb
 import numpy as np
 from pathlib import Path
 
-from typing import List, Tuple
+from typing import List, Tuple, Generic, TypeVar
 from loguru import logger
 from jax.experimental import multihost_utils
 
 from dataclasses import dataclass
 from theseus.config import field
 from theseus.model.models import GPT
+from theseus.model.models.llama import Llama
 from theseus.base import Topology, ExecutionSpec
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
+from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
+from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
 from theseus.evaluation.base import Evaluator
+from theseus.evaluation.huggingface import HFEvaluator
 from theseus.experiments.gpt import EvaluateGPT
+from theseus.experiments.llama import EvaluateLlama
 
 
 @dataclass
@@ -65,14 +69,15 @@ class ABCDConfig(BaseTrainerConfig):
     )
 
 
-class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
+C = TypeVar("C", bound=ABCDConfig)
+
+
+@dataclass
+class ABCDHFConfig(ABCDConfig, HFTrainerConfig): ...
+
+
+class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
     """Standard continual learning: sequential shift and plasticity."""
-
-    MODEL = GPT
-    CONFIG = ABCDConfig
-
-    def evaluator(self) -> Evaluator[GPT]:
-        return EvaluateGPT.from_trainer(self)
 
     @classmethod
     def schedule(cls) -> optax._src.base.Schedule:
@@ -189,3 +194,19 @@ class ABCDTrainer(BaseTrainer[ABCDConfig, GPT]):
             x, y, padding_mask = self.val_dls[dl_idx].get_batch()
 
         return x, y, padding_mask
+
+
+class ABCDTrainer(ABCDBaseTrainer[ABCDConfig, GPT]):
+    MODEL = GPT
+    CONFIG = ABCDConfig
+
+    def evaluator(self) -> Evaluator[GPT]:
+        return EvaluateGPT.from_trainer(self)
+
+
+class ABCDHFTrainer(ABCDBaseTrainer[ABCDHFConfig, Llama]):
+    MODEL = Llama
+    CONFIG = ABCDHFConfig
+
+    def evaluator(self) -> HFEvaluator[Llama]:
+        return EvaluateLlama.from_trainer(self)  # type: ignore
