@@ -72,3 +72,4 @@ job: continual/train/abcd
 request:
   chip: h200
   min_chips: 4
+  n_shards: 1
