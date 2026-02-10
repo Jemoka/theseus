@@ -12,7 +12,14 @@ if [ -f ~/.bashrc ]; then
     source ~/.bashrc
 fi
 
+echo
+echo
+echo "[bootstrap] ~(‾▿‾)~ Welcome to theseus!"
+echo "=========================================================="
 echo "[bootstrap] starting on $(hostname)"
+echo "[bootstrap] Slurm Job GPUs: ${SLURM_JOB_GPUS:-NOT_SET}"
+echo "[bootstrap] Slurm Step GPUs: ${SLURM_STEP_GPUS:-NOT_SET}"
+echo "[bootstrap] CUDA Visible: ${CUDA_VISIBLE_DEVICES:-NOT_SET}"
 
 # Track JuiceFS mount point for cleanup
 JUICEFS_MOUNT_POINT=""
