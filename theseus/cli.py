@@ -553,6 +553,61 @@ def bootstrap(
     from theseus.dispatch.slurm import SlurmJob
     from theseus.dispatch.sync import snapshot
 
+    custom_header = """#
+#
+# ░▀█▀░█░█░█▀▀░█▀▀░█▀▀░█░█░█▀▀
+# ░░█░░█▀█░█▀▀░▀▀█░█▀▀░█░█░▀▀█
+# ░░▀░░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# About This Script:
+#   Theseus is a CLI + Python framework for configuring, running, and dispatching
+#   machine-learning jobs locally or on remote infrastructure (SLURM/SSH).
+#   This file is a generated bootstrap runner that executes one packed Theseus job.
+#
+#   *NOTE*: If you think "wow someone handed me a shell script that dumps a scary base64
+#   encoded string and then runs it" you should indeed be afraid and then use a sanitizer
+#   to decode the blob. And then you will find (disappointingly) that its just a tarball of a
+#   git archive of all source files required to run this program which instead of being some
+#   kind of sick zero day is just a pile of Python that trains an LLM.
+#
+# Usage:
+#   ./bootstrap.sh --root /path/to/root [--work /path/to/work] [--log /path/to/log]
+#   ./bootstrap.sh --help
+#
+# Note:
+#   If this script was generated without --root, runtime --root is required.
+
+"""
+
+    def with_custom_header(script_text: str) -> str:
+        lines = script_text.splitlines()
+        if not lines:
+            return script_text
+
+        shebang = lines[0] if lines[0].startswith("#!") else "#!/bin/bash"
+
+        body_start = 1
+        while (
+            body_start < len(lines) and lines[body_start].strip() != "set -euo pipefail"
+        ):
+            body_start += 1
+        body_lines = lines[body_start:] if body_start < len(lines) else lines[1:]
+        body_text = "\n".join(body_lines)
+        return f"{shebang}\n{custom_header}{body_text}\n"
+
     def normalize_path(path: str) -> str:
         path = path.strip()
         if path == "/":
@@ -691,6 +746,7 @@ def bootstrap(
         ref = "HEAD"
     tarball = snapshot(".", ref)
     script = slurm_job.pack(tarball).to_bootstrap_script()
+    script = with_custom_header(script)
 
     out_path = Path(out_script)
     if not out_path.parent.exists():
