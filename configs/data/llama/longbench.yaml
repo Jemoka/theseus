@@ -1,0 +1,19 @@
+data:
+  dataset: longbench
+  suffix: llama
+  val_pct: 0.05
+  seed: 2357
+  split: train
+  pad_token: 0
+  system_prompt: ''
+architecture:
+  block_size: 2000000
+system:
+  num_proc: 8
+tokenizer:
+  backend: huggingface
+  name: meta-llama/Llama-3.1-8B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+job: data/tokenize_blockwise_dataset
