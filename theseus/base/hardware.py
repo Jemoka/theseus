@@ -80,12 +80,16 @@ class HardwareRequest(BaseModel):
     """
 
     chip: Annotated[
-        Chip,
-        Field(description="chip type"),
+        Optional[Chip],
+        Field(default=None, description="chip type (None means any chip / cpu mode)"),
     ]
     min_chips: Annotated[
         int,
-        Field(ge=1, description="minimum number of chips requested"),
+        Field(
+            ge=0,
+            default=1,
+            description="minimum number of chips requested (0 means CPU mode)",
+        ),
     ]
     preferred_clusters: Annotated[
         list[str],

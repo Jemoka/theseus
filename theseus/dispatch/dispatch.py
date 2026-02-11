@@ -154,9 +154,12 @@ def dispatch(
     logger.info(
         f"DISPATCH | starting dispatch for job '{spec.name}' (project={spec.project}, group={spec.group})"
     )
-    logger.debug(
-        f"DISPATCH | hardware request: {hardware.min_chips}x {hardware.chip.name}"
+    target_desc = (
+        "cpu-only"
+        if hardware.min_chips == 0
+        else f"{hardware.min_chips}x {(hardware.chip.name if hardware.chip else 'any-gpu')}"
     )
+    logger.debug(f"DISPATCH | hardware request: {target_desc}")
 
     # 1. Validate job exists
     job_key = cfg.job
@@ -258,9 +261,11 @@ def _dispatch_slurm(
     assert solve_result.result is not None
 
     host_config = solve_result.host_config
-    gpus_per_node = solve_result.result.total_chips // max(
-        len(solve_result.result.hosts), 1
-    )
+    gpus_per_node = None
+    if solve_result.result.total_chips > 0:
+        gpus_per_node = solve_result.result.total_chips // max(
+            len(solve_result.result.hosts), 1
+        )
 
     # Look up GPU type from gres_mapping using chip name
     chip_name = solve_result.result.chip.name if solve_result.result.chip else None

@@ -50,6 +50,42 @@ def setup_logging(verbose: bool) -> None:
     )
 
 
+def _resolve_request_hardware(
+    cfg: Any, chip: str | None, n_chips: int | None
+) -> tuple[str | None, int]:
+    """Resolve effective chip/min_chips from CLI + config with submit semantics."""
+    request_chip = chip
+    request_chips = n_chips
+
+    # Fall back to config.request if CLI flags not specified
+    if request_chip is None and "request" in cfg and "chip" in cfg.request:
+        request_chip = cfg.request.chip
+    if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
+        request_chips = cfg.request.min_chips
+
+    # Default missing chip count to 1 for generic-GPU dispatch/bootstrap
+    if request_chips is None:
+        request_chips = 1
+
+    if request_chips < 0:
+        console.print("\n[red]Error: --n_chips must be >= 0[/red]\n")
+        sys.exit(1)
+
+    # Validate chip when provided
+    if request_chip is not None and request_chip not in SUPPORTED_CHIPS:
+        console.print(f"\n[red]Error: Unknown chip '{request_chip}'[/red]")
+        console.print(
+            f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
+        )
+        sys.exit(1)
+
+    # n_chips=0 means CPU job; ignore chip selector.
+    if request_chips == 0:
+        request_chip = None
+
+    return request_chip, request_chips
+
+
 @click.group()  # type: ignore[misc]
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")  # type: ignore[misc]
 def theseus(verbose: bool) -> None:
@@ -169,14 +205,22 @@ def configure(
     OmegaConf.set_struct(config, False)
     config.job = job
 
+    if n_chips is not None and n_chips < 0:
+        console.print("\n[red]Error: --n_chips must be >= 0[/red]\n")
+        sys.exit(1)
+
+    # n_chips=0 means CPU request; chip selector is ignored.
+    if n_chips == 0:
+        chip = None
+
     # Add hardware request if specified
-    if chip or n_chips or n_shards:
+    if chip is not None or n_chips is not None or n_shards is not None:
         config.request = OmegaConf.create({})
         if chip:
             config.request.chip = chip
-        if n_chips:
+        if n_chips is not None:
             config.request.min_chips = n_chips
-        if n_shards:
+        if n_shards is not None:
             config.request.n_shards = n_shards
 
     OmegaConf.set_struct(config, True)
@@ -406,38 +450,12 @@ def submit(
         sys.exit(1)
 
     # Get hardware request from CLI flags or config
-    request_chip = chip
-    request_chips = n_chips
+    request_chip, request_chips = _resolve_request_hardware(cfg, chip, n_chips)
     request_n_shards = n_shards
 
-    # Fall back to config.request if CLI flags not specified
-    if request_chip is None and "request" in cfg and "chip" in cfg.request:
-        request_chip = cfg.request.chip
-    if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
-        request_chips = cfg.request.min_chips
+    # Fall back to config.request for shards if CLI flag not specified
     if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
         request_n_shards = cfg.request.n_shards
-
-    # Validate we have hardware request
-    if request_chip is None:
-        console.print("\n[red]Error: No chip specified[/red]")
-        console.print(
-            "[yellow]Use --chip option or add 'request.chip' to your YAML[/yellow]\n"
-        )
-        sys.exit(1)
-    if request_chips is None:
-        console.print("\n[red]Error: No chip count specified[/red]")
-        console.print(
-            "[yellow]Use -n/--n_chips option or add 'request.min_chips' to your YAML[/yellow]\n"
-        )
-        sys.exit(1)
-    # Validate chip
-    if request_chip not in SUPPORTED_CHIPS:
-        console.print(f"\n[red]Error: Unknown chip '{request_chip}'[/red]")
-        console.print(
-            f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
-        )
-        sys.exit(1)
 
     if request_n_shards is not None:
         OmegaConf.set_struct(cfg, False)
@@ -465,7 +483,7 @@ def submit(
 
     # Build hardware request
     hardware_request = HardwareRequest(
-        chip=SUPPORTED_CHIPS[request_chip],
+        chip=SUPPORTED_CHIPS[request_chip] if request_chip is not None else None,
         min_chips=request_chips,
         preferred_clusters=preferred_clusters,
         forbidden_clusters=forbidden_clusters,
@@ -482,7 +500,12 @@ def submit(
     console.print()
     console.print(f"[blue]Submitting job '{job}':[/blue]")
     console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
-    console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
+    if request_chips == 0:
+        console.print("[blue]Hardware:[/blue] cpu-only (n_chips=0)")
+    elif request_chip is None:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x any-gpu")
+    else:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
     if mem:
         console.print(f"[blue]Memory:[/blue] {mem}")
     if preferred_clusters:
@@ -675,34 +698,10 @@ def bootstrap(
         console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
         sys.exit(1)
 
-    request_chip = chip
-    request_chips = n_chips
+    request_chip, request_chips = _resolve_request_hardware(cfg, chip, n_chips)
     request_n_shards = n_shards
-    if request_chip is None and "request" in cfg and "chip" in cfg.request:
-        request_chip = cfg.request.chip
-    if request_chips is None and "request" in cfg and "min_chips" in cfg.request:
-        request_chips = cfg.request.min_chips
     if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
         request_n_shards = cfg.request.n_shards
-
-    if request_chip is None:
-        console.print("\n[red]Error: No chip specified[/red]")
-        console.print(
-            "[yellow]Use --chip option or add 'request.chip' to your YAML[/yellow]\n"
-        )
-        sys.exit(1)
-    if request_chips is None:
-        console.print("\n[red]Error: No chip count specified[/red]")
-        console.print(
-            "[yellow]Use -n/--n_chips option or add 'request.min_chips' to your YAML[/yellow]\n"
-        )
-        sys.exit(1)
-    if request_chip not in SUPPORTED_CHIPS:
-        console.print(f"\n[red]Error: Unknown chip '{request_chip}'[/red]")
-        console.print(
-            f"[yellow]Available chips: {', '.join(SUPPORTED_CHIPS.keys())}[/yellow]\n"
-        )
-        sys.exit(1)
 
     if request_n_shards is not None:
         OmegaConf.set_struct(cfg, False)
@@ -739,14 +738,15 @@ def bootstrap(
     work_dir = f"{work_path}/{project_name}/{group_name}/{name}"
 
     cluster = Cluster(name="bootstrap", root=root_path, work=work_path, log=log_path)
-    chip_obj = SUPPORTED_CHIPS[request_chip]
+    chip_obj = SUPPORTED_CHIPS[request_chip] if request_chip is not None else None
+    resources = {chip_obj: request_chips} if chip_obj is not None else {}
     hardware = HardwareResult(
         chip=chip_obj,
         hosts=[
             ClusterMachine(
                 name="bootstrap",
                 cluster=cluster,
-                resources={chip_obj: request_chips},
+                resources=resources,
             )
         ],
         total_chips=request_chips,
@@ -801,7 +801,12 @@ def bootstrap(
     console.print()
     console.print(f"[green]Bootstrap script generated:[/green] {out_script}")
     console.print(f"[blue]Job:[/blue] {job}")
-    console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
+    if request_chips == 0:
+        console.print("[blue]Hardware:[/blue] cpu-only (n_chips=0)")
+    elif request_chip is None:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x any-gpu")
+    else:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
     root_display = (
         root_path if not require_root_at_runtime else "<runtime --root required>"
     )

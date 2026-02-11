@@ -59,6 +59,7 @@ Plain host specifics:
 SLURM host specifics:
 
 - `partitions`
+- `cpu_partitions` (optional CPU-mode partition order; fallback to `partitions` if empty)
 - `account`
 - `qos`
 - `mem` (default memory override)
@@ -70,19 +71,56 @@ SLURM host specifics:
 ```bash
 theseus submit my-run train.yaml \
   --chip h100 \
-  --chips 8 \
+  --n_chips 8 \
   --mem 128G \
-  --cluster hpc-login \
+  --cluster hpc \
   --dirty
 ```
 
 ### Important Submit Flags
 
-- `--chip`, `--chips`: hardware request intent.
+- `--chip`, `--n_chips`: hardware request intent.
 - `--cluster`: preferred cluster list.
 - `--exclude-cluster`: forbidden cluster list.
 - `--dirty`: include local uncommitted changes in shipped payload.
 - `-d/--dispatch-config`: explicit path to dispatch YAML.
+
+### Hardware Resolution Rules
+
+- `chip` resolution: CLI `--chip` overrides YAML `request.chip`; otherwise YAML; otherwise `None`.
+- `n_chips` resolution: CLI `--n_chips` overrides YAML `request.min_chips`; otherwise YAML; otherwise `1`.
+- `n_chips == 0` forces CPU mode and clears chip selection (`chip=None`).
+- `n_chips < 0` is rejected.
+- If `chip` is set, it must be a supported chip key.
+
+Modes:
+
+- typed GPU: `chip` set and `n_chips > 0`
+- generic GPU: `chip=None` and `n_chips > 0`
+- CPU: `n_chips == 0`
+
+### Solver Selection Rules
+
+- Hosts are scanned in configured priority order (then unlisted hosts).
+- Cluster allow/deny filters are applied before selection.
+- First immediately satisfiable host wins.
+- If no immediate match, SLURM fallback candidates are ranked by availability.
+
+CPU mode details:
+
+- Plain hosts are eligible (no GPU requirement).
+- SLURM uses `cpu_partitions` when provided; otherwise `partitions`.
+- CPU SLURM submissions omit GPU `--gres` requests.
+
+### Runtime Hardware Finalization
+
+For requests that serialize with `chip=None` (generic GPU and CPU mode), bootstrap now performs runtime hardware detection (same idea as `local()`), and replaces `spec.hardware` with detected chip/count/hosts while preserving dispatch cluster paths.
+
+That means these cases can still end up with a concrete `spec.hardware.chip` and therefore a concrete `spec.topology`.
+
+Full ASCII flowchart:
+
+- `doc/dispatch-flow-ascii.txt`
 
 ## What Happens During Submit
 

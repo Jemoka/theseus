@@ -51,9 +51,13 @@ def solve(
     Returns:
         SolveResult with allocation details, or None if unsatisfiable
     """
-    logger.info(f"SOLVE | solving for {request.min_chips}x {request.chip.name}")
+    chip_name = request.chip.name if request.chip else None
+    cpu_mode = request.min_chips == 0
+    target_desc = (
+        "cpu-only" if cpu_mode else f"{request.min_chips}x {chip_name or 'any-gpu'}"
+    )
+    logger.info(f"SOLVE | solving for {target_desc}")
     inventory = RemoteInventory(config)
-    chip_name = request.chip.name
 
     # Build host ordering: priority list first, then remaining hosts
     ordered_hosts = list(config.priority)
@@ -106,10 +110,30 @@ def solve(
         host_cfg = config.hosts[host_name]
 
         if isinstance(host_cfg, PlainHostConfig):
-            configured = host_cfg.chips.get(chip_name, 0)
+            if cpu_mode:
+                logger.info(
+                    f"SOLVE | selected plain host '{host_name}' for cpu-only request"
+                )
+                cluster = inventory.get_cluster(host_cfg.cluster)
+                machine = ClusterMachine(name=host_name, cluster=cluster, resources={})
+                return SolveResult(
+                    result=HardwareResult(chip=None, hosts=[machine], total_chips=0),
+                    host_name=host_name,
+                    host_config=host_cfg,
+                    is_slurm=False,
+                    partition=None,
+                )
+
+            if chip_name is None:
+                configured = sum(max(v, 0) for v in host_cfg.chips.values())
+                configured_label = "any-gpu"
+            else:
+                configured = host_cfg.chips.get(chip_name, 0)
+                configured_label = chip_name
+
             if configured == 0:
                 logger.debug(
-                    f"SOLVE | plain host '{host_name}': no {chip_name} configured"
+                    f"SOLVE | plain host '{host_name}': no {configured_label} configured"
                 )
                 continue
 
@@ -123,23 +147,26 @@ def solve(
                 available = configured
 
             logger.debug(
-                f"SOLVE | plain host '{host_name}': {available}/{configured} {chip_name} available"
+                f"SOLVE | plain host '{host_name}': {available}/{configured} {configured_label} available"
             )
             if available >= request.min_chips:
                 logger.info(
                     f"SOLVE | selected plain host '{host_name}' with {available} chips"
                 )
                 cluster = inventory.get_cluster(host_cfg.cluster)
+                machine_resources = (
+                    {request.chip: available} if request.chip is not None else {}
+                )
                 machine = ClusterMachine(
                     name=host_name,
                     cluster=cluster,
-                    resources={request.chip: available},
+                    resources=machine_resources,
                 )
                 return SolveResult(
                     result=HardwareResult(
                         chip=request.chip,
                         hosts=[machine],
-                        total_chips=available,
+                        total_chips=request.min_chips,
                     ),
                     host_name=host_name,
                     host_config=host_cfg,
@@ -150,62 +177,112 @@ def solve(
         elif isinstance(host_cfg, SlurmHostConfig):
             # Check if this host has an explicit chip limit
             chip_limit = None
-            if host_cfg.chips is not None:
-                chip_limit = host_cfg.chips.get(chip_name, 0)
-                if chip_limit == 0:
+            if not cpu_mode and host_cfg.chips is not None:
+                if chip_name is None:
+                    chip_limit = sum(max(v, 0) for v in host_cfg.chips.values())
+                    if chip_limit == 0:
+                        logger.debug(
+                            f"SOLVE | SLURM host '{host_name}': no allowed GPU chips"
+                        )
+                        continue
                     logger.debug(
-                        f"SOLVE | SLURM host '{host_name}': chip '{chip_name}' not in allowed chips list"
+                        f"SOLVE | SLURM host '{host_name}': total chip limit = {chip_limit}"
                     )
-                    continue
-                logger.debug(
-                    f"SOLVE | SLURM host '{host_name}': chip limit for {chip_name} = {chip_limit}"
-                )
+                else:
+                    chip_limit = host_cfg.chips.get(chip_name, 0)
+                    if chip_limit == 0:
+                        logger.debug(
+                            f"SOLVE | SLURM host '{host_name}': chip '{chip_name}' not in allowed chips list"
+                        )
+                        continue
+                    logger.debug(
+                        f"SOLVE | SLURM host '{host_name}': chip limit for {chip_name} = {chip_limit}"
+                    )
 
             # Check all partitions and pick the one with most availability
             best_partition = None
             best_available = 0
 
-            # Get the GRES type name for this chip
-            gres_type = config.gres_mapping.get(chip_name)
-
-            # Query GPU types for all partitions on this host (single SSH call)
-            from theseus.dispatch.slurm import partition_gpu_types
-
-            partition_names_to_check = [p.name for p in host_cfg.partitions]
-            gpu_types_by_partition = partition_gpu_types(
-                host_cfg.ssh, partition_names_to_check, timeout=timeout
-            )
-
-            # Build partition list: filter by chip type, default first
-            # Only consider partitions that have the requested GPU type
             eligible_partitions: list[PartitionConfig] = []
-            for p in host_cfg.partitions:
-                partition_types = gpu_types_by_partition.get(p.name, set())
-                if gres_type and gres_type not in partition_types:
+            cpu_partition_names: list[str] = []
+            if cpu_mode:
+                # CPU mode uses explicit cpu_partitions when provided.
+                # If omitted/empty, fall back to regular partitions order.
+                candidate_names = (
+                    list(host_cfg.cpu_partitions)
+                    if host_cfg.cpu_partitions
+                    else [p.name for p in host_cfg.partitions]
+                )
+                # De-duplicate while preserving order
+                seen: set[str] = set()
+                cpu_partition_names = []
+                for name in candidate_names:
+                    if not name or name in seen:
+                        continue
+                    seen.add(name)
+                    cpu_partition_names.append(name)
+                if not cpu_partition_names:
                     logger.debug(
-                        f"SOLVE | skipping partition '{p.name}': doesn't have {gres_type} (has: {partition_types})"
+                        f"SOLVE | SLURM host '{host_name}': no cpu_partitions/partitions configured"
                     )
                     continue
-                if p.default:
-                    eligible_partitions.insert(0, p)
-                else:
-                    eligible_partitions.append(p)
+            else:
+                # Get the GRES type name for this chip (None => any GPU type)
+                gres_type = config.gres_mapping.get(chip_name) if chip_name else None
 
-            if not eligible_partitions:
-                logger.debug(
-                    f"SOLVE | SLURM host '{host_name}': no partitions have {gres_type or chip_name}"
+                # Query GPU types for all partitions on this host (single SSH call)
+                from theseus.dispatch.slurm import partition_gpu_types
+
+                partition_names_to_check = [p.name for p in host_cfg.partitions]
+                gpu_types_by_partition = partition_gpu_types(
+                    host_cfg.ssh, partition_names_to_check, timeout=timeout
                 )
-                continue
 
-            partition_names = [p.name for p in eligible_partitions]
+                # Build partition list: filter by requested/available GPU type, default first
+                for p in host_cfg.partitions:
+                    partition_types = gpu_types_by_partition.get(p.name, set())
+                    if gres_type and gres_type not in partition_types:
+                        logger.debug(
+                            f"SOLVE | skipping partition '{p.name}': doesn't have {gres_type} (has: {partition_types})"
+                        )
+                        continue
+                    if chip_name is None and not partition_types:
+                        logger.debug(
+                            f"SOLVE | skipping partition '{p.name}': no GPUs detected for generic GPU request"
+                        )
+                        continue
+                    if p.default:
+                        eligible_partitions.insert(0, p)
+                    else:
+                        eligible_partitions.append(p)
 
-            if check_availability:
+                if not eligible_partitions:
+                    target = gres_type or chip_name or "any-gpu"
+                    logger.debug(
+                        f"SOLVE | SLURM host '{host_name}': no partitions have {target}"
+                    )
+                    continue
+
+            partition_names = (
+                cpu_partition_names
+                if cpu_mode
+                else [p.name for p in eligible_partitions]
+            )
+
+            if cpu_mode:
+                available = 0
+                partition = partition_names[0] if partition_names else None
+            elif check_availability:
                 for part_name in partition_names:
                     logger.debug(
                         f"SOLVE | checking SLURM availability on '{host_name}' partition='{part_name}'"
                     )
                     avail = _check_slurm_availability(
-                        host_cfg.ssh, part_name, chip_name, config.gres_mapping, timeout
+                        host_cfg.ssh,
+                        part_name,
+                        chip_name,
+                        config.gres_mapping,
+                        timeout,
                     )
                     # Apply chip limit if specified
                     if chip_limit is not None:
@@ -237,21 +314,26 @@ def solve(
             # Track for fallback - partition is known to have this chip type
             slurm_fallback.append((host_name, host_cfg, available, partition))
 
-            if available >= request.min_chips:
+            if cpu_mode or available >= request.min_chips:
                 logger.info(
                     f"SOLVE | selected SLURM host '{host_name}' partition='{partition}'"
                 )
                 cluster = inventory.get_cluster(host_cfg.cluster)
+                machine_resources = (
+                    {request.chip: available}
+                    if request.chip is not None and available > 0
+                    else {}
+                )
                 machine = ClusterMachine(
                     name=host_name,
                     cluster=cluster,
-                    resources={request.chip: available},
+                    resources=machine_resources,
                 )
                 return SolveResult(
                     result=HardwareResult(
                         chip=request.chip,
                         hosts=[machine],
-                        total_chips=min(available, request.min_chips),
+                        total_chips=request.min_chips,
                     ),
                     host_name=host_name,
                     host_config=host_cfg,
@@ -268,8 +350,11 @@ def solve(
 
         # Determine request amount: cap at chip limit if specified
         fallback_chip_limit = None
-        if host_cfg.chips is not None:
-            fallback_chip_limit = host_cfg.chips.get(chip_name, 0)
+        if host_cfg.chips is not None and not cpu_mode:
+            if chip_name is None:
+                fallback_chip_limit = sum(max(v, 0) for v in host_cfg.chips.values())
+            else:
+                fallback_chip_limit = host_cfg.chips.get(chip_name, 0)
         chips_to_request = request.min_chips
         if fallback_chip_limit is not None:
             chips_to_request = min(chips_to_request, fallback_chip_limit)
@@ -282,7 +367,9 @@ def solve(
         machine = ClusterMachine(
             name=host_name,
             cluster=cluster,
-            resources={request.chip: chips_to_request},
+            resources={request.chip: chips_to_request}
+            if request.chip is not None and chips_to_request > 0
+            else {},
         )
         return SolveResult(
             result=HardwareResult(
@@ -297,7 +384,7 @@ def solve(
         )
 
     # No solution found
-    logger.error(f"SOLVE | no hosts available for {request.min_chips}x {chip_name}")
+    logger.error(f"SOLVE | no hosts available for {target_desc}")
     return SolveResult(
         result=None,
         host_name=None,
@@ -363,7 +450,7 @@ def _check_plain_host_availability(
 def _check_slurm_availability(
     ssh_alias: str,
     partition: str | None,
-    chip_name: str,
+    chip_name: str | None,
     gres_mapping: dict[str, str],
     timeout: float,
 ) -> int:
@@ -379,7 +466,7 @@ def _check_slurm_availability(
 
     try:
         # Only use user-specified gres mapping
-        gpu_type = gres_mapping.get(chip_name)
+        gpu_type = gres_mapping.get(chip_name) if chip_name else None
         logger.debug(
             f"SOLVE | querying SLURM availability: partition={partition}, gpu_type={gpu_type}"
         )
@@ -404,11 +491,14 @@ def solve_or_raise(
     """Like solve(), but raises if no solution found."""
     result = solve(request, config, check_availability, timeout)
     if result.result is None:
-        logger.error(
-            f"SOLVE | cannot satisfy request: {request.min_chips}x {request.chip.name}"
+        target_desc = (
+            "cpu-only"
+            if request.min_chips == 0
+            else f"{request.min_chips}x {(request.chip.name if request.chip else 'any-gpu')}"
         )
+        logger.error(f"SOLVE | cannot satisfy request: {target_desc}")
         raise RuntimeError(
-            f"Cannot satisfy hardware request: {request.min_chips}x {request.chip.name}. "
+            f"Cannot satisfy hardware request: {target_desc}. "
             f"No hosts available in config."
         )
     return result

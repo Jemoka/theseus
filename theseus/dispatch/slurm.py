@@ -1195,10 +1195,15 @@ def partition_gpu_types(
         if part_name not in partition_types:
             partition_types[part_name] = set()
 
-        # Parse GRES: gpu:type:count
+        # Parse typed GRES: gpu:type:count
         match = re.search(r"gpu:(\w+):\d+", gres_str)
         if match:
             partition_types[part_name].add(match.group(1))
+            continue
+
+        # Parse untyped GRES: gpu:count
+        if re.search(r"gpu:\d+", gres_str):
+            partition_types[part_name].add("__generic__")
 
     logger.debug(f"SLURM | partition GPU types: {partition_types}")
     return partition_types

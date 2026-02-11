@@ -76,6 +76,10 @@ class SlurmHostConfig:
     chips: dict[str, int] | None = (
         None  # optional chip_name -> count (limits allocation)
     )
+    cpu_partitions: list[str] = field(
+        default_factory=list
+    )  # optional CPU-only partition preference order
+    annotations: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -158,6 +162,10 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                     )
             exclude = list(host_cfg.get("exclude", []))
             chips = dict(host_cfg.get("chips", {})) if host_cfg.get("chips") else None  # type: ignore
+            cpu_partitions = list(
+                host_cfg.get("cpu_partitions", host_cfg.get("partitions_cpu", []))
+            )
+            annotations = dict(host_cfg.get("annotations", {}))
             hosts[name] = SlurmHostConfig(
                 ssh=host_cfg.ssh,
                 cluster=host_cfg.cluster,
@@ -169,6 +177,8 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 exclude=exclude,
                 uv_groups=uv_groups,
                 chips=chips,
+                cpu_partitions=cpu_partitions,
+                annotations=annotations,
             )
 
     plain_count = sum(1 for h in hosts.values() if isinstance(h, PlainHostConfig))

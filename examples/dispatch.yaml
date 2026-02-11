@@ -1,7 +1,9 @@
 # Host priority order for solver (first match wins)
 priority:
   - workstation       # prefer local workstation
+  - cpu-box           # dedicated plain CPU host
   - devbox            # then devbox
+  - hpc-cpu           # dedicated SLURM CPU login
   - hpc-login         # then HPC cluster
   - cloud             # cloud as last resort
 
@@ -44,12 +46,34 @@ hosts:
       a100-sxm4-80gb: 8
     uv_groups: [cuda12, dev]
 
+  # Plain SSH host - CPU-only host.
+  # Leave chips empty/omitted to mark this as non-GPU.
+  cpu-box:
+    ssh: cpu-box
+    cluster: local
+    type: plain
+    chips: {}
+    uv_groups: [cpu]
+
+  # SLURM CPU-focused login host.
+  # For CPU jobs (n_chips: 0), solver uses cpu_partitions when provided.
+  hpc-cpu:
+    ssh: hpc
+    cluster: hpc
+    type: slurm
+    partitions: [gpu]
+    cpu_partitions: [cpu]
+    account: myproject
+    qos: normal
+    uv_groups: [cpu]
+
   # SLURM cluster - jobs submitted via sbatch
   hpc-login:
     ssh: hpc
     cluster: hpc
     type: slurm
     partitions: [gpu, cpu]
+    cpu_partitions: [cpu]
     account: myproject
     qos: normal
     mem: 64G                     # default memory per job (default: 64G if not set)

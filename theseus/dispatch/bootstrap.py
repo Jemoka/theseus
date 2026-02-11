@@ -18,7 +18,7 @@ from theseus.config import configuration
 from theseus.registry import JOBS
 from theseus.job import RestoreableJob
 from theseus.base.job import ExecutionSpec
-from theseus.base.hardware import HardwareResult, Cluster, ClusterMachine
+from theseus.base.hardware import HardwareResult, Cluster, ClusterMachine, local
 from theseus.base.chip import SUPPORTED_CHIPS
 from theseus.base.topology import Topology
 
@@ -116,7 +116,37 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
         hosts.append(
             ClusterMachine(name=h["name"], cluster=cluster, resources=resources)
         )
-    return HardwareResult(chip=chip, hosts=hosts, total_chips=data["total_chips"])
+
+    reconstructed = HardwareResult(
+        chip=chip, hosts=hosts, total_chips=data["total_chips"]
+    )
+
+    # Generic requests serialize chip=None. In that case, detect runtime hardware
+    # (like HardwareResult.local()) so topology/mesh can be built from actual devices.
+    if reconstructed.chip is None and reconstructed.hosts:
+        cluster = reconstructed.hosts[0].cluster
+        detected = local(cluster.root, cluster.work)
+        runtime_cluster = Cluster(
+            name=cluster.name,
+            root=cluster.root,
+            work=cluster.work,
+            log=cluster.log,
+        )
+        detected_hosts = [
+            ClusterMachine(
+                name=h.name,
+                cluster=runtime_cluster,
+                resources=h.resources,
+            )
+            for h in detected.hosts
+        ]
+        return HardwareResult(
+            chip=detected.chip,
+            hosts=detected_hosts,
+            total_chips=detected.total_chips,
+        )
+
+    return reconstructed
 
 
 def _get_status_dir(cluster: Cluster) -> Path:
