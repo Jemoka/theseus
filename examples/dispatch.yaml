@@ -1,4 +1,5 @@
 mount: /mnt/juicefs-local  # local JuiceFS mount point used by `theseus repl --sync/--update`
+# proxy: houjun@mailbox-host:/srv/theseus-root  # alternative mailbox transport via SCP (mutually exclusive with top-level mount)
 
 # Host priority order for solver (first match wins)
 priority:

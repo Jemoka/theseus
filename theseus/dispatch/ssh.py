@@ -8,6 +8,7 @@ import re
 import time
 import threading
 import socket
+import os
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -454,7 +455,10 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
         )
 
     # Validate tunnel is actually established locally, not just spawned.
-    deadline = time.time() + 3.0
+    wait_seconds = float(os.environ.get("THESEUS_SSH_TUNNEL_WAIT_SECONDS", "12.0"))
+    wait_seconds = max(3.0, wait_seconds)
+    deadline = time.time() + wait_seconds
+    sleep_s = 0.05
     while time.time() < deadline:
         rc = proc.poll()
         if rc is not None:
@@ -472,7 +476,8 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
         listeners = _listener_pids(local_port)
         if proc.pid in listeners:
             return TunnelResult(returncode=0, pid=proc.pid, command=cmd, stderr="")
-        time.sleep(0.1)
+        time.sleep(sleep_s)
+        sleep_s = min(sleep_s * 1.5, 0.75)
 
     # Tunnel process is alive but local listener did not appear.
     try:
@@ -489,5 +494,6 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
         returncode=-1,
         pid=None,
         command=cmd,
-        stderr=stderr.strip() or "ssh tunnel did not open local listener in time",
+        stderr=stderr.strip()
+        or f"ssh tunnel did not open local listener in time ({wait_seconds:.1f}s)",
     )

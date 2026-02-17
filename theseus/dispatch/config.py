@@ -87,6 +87,7 @@ class DispatchConfig:
     """Top-level dispatch configuration."""
 
     mount: str | None = None  # Local JuiceFS mount point for mailbox sync workflows
+    proxy: str | None = None  # SCP proxy root for mailbox sync workflows
     clusters: dict[str, ClusterConfig] = field(default_factory=dict)
     hosts: dict[str, PlainHostConfig | SlurmHostConfig] = field(default_factory=dict)
     priority: list[str] = field(default_factory=list)  # host names in priority order
@@ -194,8 +195,16 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
     logger.debug(
         f"CONFIG | loaded config with {len(clusters)} clusters, {len(hosts)} hosts"
     )
+    top_mount = cfg.get("mount")
+    top_proxy = cfg.get("proxy")
+    if top_mount and top_proxy:
+        raise ValueError(
+            "dispatch config top-level keys 'mount' and 'proxy' are mutually exclusive"
+        )
+
     return DispatchConfig(
-        mount=cfg.get("mount"),
+        mount=top_mount,
+        proxy=top_proxy,
         clusters=clusters,
         hosts=hosts,
         priority=priority,

@@ -78,17 +78,20 @@ No sidecar is started for normal `repl` / `submit` / `bootstrap` command paths.
 After REPL launches successfully, CLI tries to register sync state:
 
 1. Requires top-level `dispatch.yaml` field:
-   - `mount: /local/mountpoint`
+   - `mount: /local/mountpoint` or `proxy: [user@]host:/abs/path` (or `~/path`)
+   - top-level `mount` and top-level `proxy` are mutually exclusive
 2. Requires local git repo (`git rev-parse --show-toplevel`).
-3. Ensures local `mount` is JuiceFS:
+3. In `mount` mode, ensures local `mount` is JuiceFS:
    - if mounted and type contains `juicefs`, use as-is
    - if not mounted, mounts via target cluster backend (`clusters.<name>.mount`) using `juicefs mount -d`
    - if `juicefs` binary missing, fails registration
-4. Writes mailbox metadata under local mounted path:
+4. In `proxy` mode, mailbox files are accessed via existing SSH/SCP helpers (`run`, `copy_to`, `copy_from`).
+5. Writes mailbox metadata under mailbox root:
    - `<mount>/mailbox`
-5. Registers active job in `.active`.
-6. Registers sync state quickly (records `base_rev` via `git stash create`).
-7. No full baseline file-tree copy is done during launch.
+   - or `<proxy_root>/mailbox` in proxy mode
+6. Registers active job in `.active`.
+7. Registers sync state quickly (records `base_rev` via `git stash create`).
+8. No full baseline file-tree copy is done during launch.
 
 If registration fails, REPL stays running; CLI prints warning.
 
@@ -97,6 +100,7 @@ If registration fails, REPL stays running; CLI prints warning.
 Mailbox root:
 
 - `<mount>/mailbox`
+- or `<proxy_root>/mailbox` when top-level `proxy` is configured
 
 Files/directories:
 
@@ -118,15 +122,16 @@ Message files per mail id:
 ## Update Flow (`theseus repl --update`)
 
 1. Requires local git repo.
-2. Requires top-level `dispatch.yaml mount`.
+2. Requires top-level `dispatch.yaml mount` or `proxy`.
 3. Scans a single mailbox (`<mount>/mailbox/.active`) for active synced entries.
 4. Applies optional `--cluster` / `--exclude-cluster` filters to those entries.
 5. Prunes stale active entries before publish using sidecar heartbeat.
 6. Collects backend IDs from active entries.
 7. If active entries span multiple backends, aborts.
-8. Ensures local mount is active JuiceFS (auto-mount if needed).
-9. Builds current patch from git refs (`base_rev -> current stash ref`).
-10. For each active job:
+8. In mount mode, ensures local mount is active JuiceFS (auto-mount if needed).
+9. In proxy mode, reads/writes mailbox via SSH/SCP to proxy root.
+10. Builds current patch from git refs (`base_rev -> current stash ref`).
+11. For each active job:
    - read per-job `base_rev` from `state.json` (fallback `HEAD` if invalid/missing)
    - build patch with `git diff --binary <base_rev> -- .`
    - write patch + metadata + ready sentinel to `inbox/`
@@ -182,8 +187,9 @@ Message files per mail id:
 ## Failure Cases
 
 1. Not in git repo: sync/update fails.
-2. Top-level `mount` missing: update fails; sync launch registration warns.
-3. Local mount exists but non-JuiceFS: fails (defensive).
-4. Multiple backend active entries: update fails with backend list.
-5. Missing `patch` on remote host: sidecar writes failure records.
-6. Dead sidecar entries are removed from `.active` during `repl --update`.
+2. Top-level `mount`/`proxy` missing: update fails; sync launch registration warns.
+3. Mount mode: local mount exists but non-JuiceFS: fails (defensive).
+4. Proxy mode: invalid proxy syntax or unreachable host/path fails with SSH/SCP error.
+5. Multiple backend active entries: update fails with backend list.
+6. Missing `patch` on remote host: sidecar writes failure records.
+7. Dead sidecar entries are removed from `.active` during `repl --update`.

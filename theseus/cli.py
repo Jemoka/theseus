@@ -646,12 +646,11 @@ def repl(
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
     from theseus.dispatch.mailbox import (
-        prune_stale_active_entries,
         ensure_local_mount,
         is_local_juicefs_mounted,
-        mailbox_root_for,
+        list_active_entries,
+        mailbox_display_root,
         publish_updates,
-        read_active,
         register_synced_repl,
         require_git_repo,
     )
@@ -690,6 +689,7 @@ def repl(
 
     dispatch_cfg = load_dispatch_config(dispatch_config)
     local_mount = Path(dispatch_cfg.mount).expanduser() if dispatch_cfg.mount else None
+    proxy = dispatch_cfg.proxy
 
     preferred_clusters = [c.strip() for c in cluster.split(",")] if cluster else []
     forbidden_clusters = (
@@ -697,9 +697,9 @@ def repl(
     )
 
     if update_mode:
-        if local_mount is None:
+        if local_mount is None and proxy is None:
             console.print(
-                "\n[red]Error: dispatch config top-level 'mount' is required for --update[/red]\n"
+                "\n[red]Error: dispatch config top-level 'mount' or 'proxy' is required for --update[/red]\n"
             )
             sys.exit(1)
         try:
@@ -708,26 +708,12 @@ def repl(
             console.print(f"\n[red]Error: {exc}[/red]\n")
             sys.exit(1)
 
-        mailbox_root = mailbox_root_for(local_mount, "")
-        pruned = prune_stale_active_entries(mailbox_root=mailbox_root)
-        if pruned > 0:
-            logger.info(f"REPL UPDATE | pruned stale active entries: {pruned}")
-
-        entries = [
-            e
-            for e in read_active(mailbox_root)
-            if e.get("mode") == "repl-sync" and e.get("status", "active") == "active"
-        ]
-        if preferred_clusters:
-            allowed = set(preferred_clusters)
-            entries = [
-                e for e in entries if str(e.get("cluster", "")).strip() in allowed
-            ]
-        if forbidden_clusters:
-            denied = set(forbidden_clusters)
-            entries = [
-                e for e in entries if str(e.get("cluster", "")).strip() not in denied
-            ]
+        entries, _ = list_active_entries(
+            local_mount=local_mount,
+            proxy=proxy,
+            include_clusters=set(preferred_clusters) if preferred_clusters else None,
+            exclude_clusters=set(forbidden_clusters) if forbidden_clusters else None,
+        )
 
         logger.debug(
             f"REPL UPDATE | active synced entries after filter: {len(entries)}"
@@ -757,11 +743,13 @@ def repl(
                 "\n[red]Error: missing cluster.mount backend for active synced REPLs[/red]\n"
             )
             sys.exit(1)
-        try:
-            ensure_local_mount(local_mount, backend)
-        except RuntimeError as exc:
-            console.print(f"\n[red]Error: {exc}[/red]\n")
-            sys.exit(1)
+        if proxy is None:
+            assert local_mount is not None
+            try:
+                ensure_local_mount(local_mount, backend)
+            except RuntimeError as exc:
+                console.print(f"\n[red]Error: {exc}[/red]\n")
+                sys.exit(1)
 
         sender_host = Path.cwd().name
         any_sent = False
@@ -770,13 +758,16 @@ def repl(
         logger.debug("REPL UPDATE | publishing active mailbox entries")
         summaries, mailbox_root = publish_updates(
             local_mount=local_mount,
+            proxy=proxy,
             repo_root=repo_root,
             sender_host=sender_host,
             include_clusters=set(preferred_clusters) if preferred_clusters else None,
             exclude_clusters=set(forbidden_clusters) if forbidden_clusters else None,
         )
         if summaries:
-            console.print(f"[blue]Mailbox:[/blue] {mailbox_root}")
+            console.print(
+                f"[blue]Mailbox:[/blue] {mailbox_display_root(local_mount=local_mount, proxy=proxy)}"
+            )
             for item in summaries:
                 console.print(f"  {item.job_id}: {item.status} ({item.detail})")
                 if item.status == "sent":
@@ -855,12 +846,12 @@ def repl(
         sys.exit(1)
 
     if sync_mode:
-        if local_mount is None:
+        if local_mount is None and proxy is None:
             console.print(
-                "\n[yellow]REPL is running, but sync registration failed: dispatch config top-level 'mount' is missing.[/yellow]"
+                "\n[yellow]REPL is running, but sync registration failed: dispatch config top-level 'mount' or 'proxy' is missing.[/yellow]"
             )
             console.print(
-                "[yellow]Run --update only after adding top-level mount.[/yellow]\n"
+                "[yellow]Run --update only after adding top-level mount/proxy.[/yellow]\n"
             )
         elif not result.cluster_root or not result.mailbox_job_id:
             console.print(
@@ -884,7 +875,10 @@ def repl(
                 )
             else:
                 try:
-                    if not is_local_juicefs_mounted(local_mount):
+                    if proxy is None:
+                        assert local_mount is not None
+                        local_mount_path = local_mount
+                    if proxy is None and not is_local_juicefs_mounted(local_mount_path):
                         console.print(
                             "\n[yellow]REPL is running, but sync registration skipped: local top-level mount is not currently mounted as JuiceFS. Use --update to mount/send.[/yellow]\n"
                         )
@@ -892,8 +886,9 @@ def repl(
                         console.print(
                             "[dim]Registering synced REPL mailbox state...[/dim]"
                         )
-                        mailbox_root = register_synced_repl(
+                        register_synced_repl(
                             local_mount=local_mount,
+                            proxy=proxy,
                             cluster_root=result.cluster_root,
                             cluster_name=result.cluster_name or result.selected_host,
                             job_id=result.mailbox_job_id,
@@ -909,9 +904,17 @@ def repl(
                         f"\n[yellow]REPL is running, but sync registration failed: {exc}[/yellow]\n"
                     )
                 else:
-                    if is_local_juicefs_mounted(local_mount):
+                    if proxy is not None:
+                        ready = True
+                    else:
+                        assert local_mount is not None
+                        local_mount_path = local_mount
+                        ready = is_local_juicefs_mounted(local_mount_path)
+                    if ready:
                         console.print("[dim]Sync registration complete.[/dim]")
-                        console.print(f"[blue]Mailbox root:[/blue] {mailbox_root}")
+                        console.print(
+                            f"[blue]Mailbox root:[/blue] {mailbox_display_root(local_mount=local_mount, proxy=proxy)}"
+                        )
                         console.print(
                             f"[blue]Mailbox job id:[/blue] {result.mailbox_job_id} (registered for --update)"
                         )
