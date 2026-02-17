@@ -101,7 +101,7 @@ class ForkingAttention(RopeAttention):
         v = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
 
         if mask is not None:
-            y = jax.nn.dot_product_attention(q, k, v, mask=mask, is_causal=True)
+            y = jax.nn.dot_product_attention(q, k, v, bias=mask, is_causal=True)
         else:
             y = jax.nn.dot_product_attention(q, k, v, is_causal=True)
 
