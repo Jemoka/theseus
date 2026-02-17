@@ -444,7 +444,49 @@ class ReplResult:
     local_port: int | None = None
     local_url: str | None = None
     tunnel_pid: int | None = None
+    cluster_name: str | None = None
+    cluster_root: str | None = None
+    cluster_mount: str | None = None
+    work_dir: str | None = None
+    mailbox_job_id: str | None = None
     stderr: str = ""
+
+
+def _repl_command(sync_enabled: bool) -> str:
+    base = "--with jupyter jupyter lab --ip 0.0.0.0 --no-browser --port 8888 --ServerApp.port_retries=50"
+    if not sync_enabled:
+        return base
+
+    # Keep payload free of double quotes for safe embedding in:
+    # MAIN_COMMAND="__COMMAND__" within bootstrap.sh.
+    inner = (
+        "set -euo pipefail;"
+        "export THESEUS_REPL_WORKDIR=\\$PWD;"
+        "uv run --with jupyter jupyter lab --ip 0.0.0.0 --no-browser --port 8888 --ServerApp.port_retries=50 & "
+        "THESEUS_REPL_NOTEBOOK_PID=\\$!;"
+        "export THESEUS_REPL_NOTEBOOK_PID;"
+        "if [[ -z \\${THESEUS_REPL_NOTEBOOK_PID:-} ]]; then echo [repl-sync] notebook-pid-unavailable; fi;"
+        "export THESEUS_REPL_MAILBOX_JOB_ID=\\${THESEUS_REPL_MAILBOX_JOB_ID:-\\${SLURM_JOB_ID:-\\$THESEUS_REPL_NOTEBOOK_PID}};"
+        "echo \\$THESEUS_REPL_MAILBOX_JOB_ID > .theseus_repl_mailbox_job_id || true;"
+        "uv run python -m theseus.dispatch.mailbox.sidecar & "
+        "set +u; THESEUS_REPL_SIDECAR_PID=\\$!; set -u;"
+        "echo \\$THESEUS_REPL_SIDECAR_PID > .theseus_repl_sidecar.pid || true;"
+        "if [[ -z \\${THESEUS_REPL_SIDECAR_PID:-} ]]; then echo [repl-sync] sidecar-pid-unavailable; fi;"
+        "cleanup(){ "
+        "if [[ -n \\${THESEUS_REPL_NOTEBOOK_PID:-} ]]; then "
+        "kill \\$THESEUS_REPL_NOTEBOOK_PID 2>/dev/null || true; "
+        "wait \\$THESEUS_REPL_NOTEBOOK_PID 2>/dev/null || true; "
+        "fi; "
+        "if [[ -n \\${THESEUS_REPL_SIDECAR_PID:-} ]]; then "
+        "kill \\$THESEUS_REPL_SIDECAR_PID 2>/dev/null || true; "
+        "wait \\$THESEUS_REPL_SIDECAR_PID 2>/dev/null || true; "
+        "fi; "
+        "};"
+        "trap cleanup EXIT INT TERM;"
+        "set +e; wait \\$THESEUS_REPL_NOTEBOOK_PID; THESEUS_REPL_RC=\\$?; set -e; "
+        "exit \\$THESEUS_REPL_RC"
+    )
+    return f"bash -lc '{inner}'"
 
 
 def _parse_jupyter_startup(text: str) -> tuple[str | None, int | None, str | None]:
@@ -525,6 +567,35 @@ def _wait_for_jupyter_log(
     return None, None, None, None
 
 
+def _resolve_remote_notebook_pid(
+    host: str, port: int, ssh_timeout: float
+) -> int | None:
+    """Resolve the remote notebook PID bound to the selected port."""
+    pid_cmd = (
+        f"(lsof -ti :{port} 2>/dev/null | head -n 1) || "
+        f"(ss -ltnp 2>/dev/null | grep ':{port} ' | sed -n 's/.*pid=\\([0-9]\\+\\).*/\\1/p' | head -n 1)"
+    )
+    pid_result = run(pid_cmd, host, timeout=ssh_timeout)
+    if not pid_result.ok:
+        return None
+    for line in pid_result.stdout.splitlines():
+        line = line.strip()
+        if line.isdigit():
+            return int(line)
+    return None
+
+
+def _read_remote_mailbox_job_id(
+    host: str, work_dir: str, ssh_timeout: float
+) -> str | None:
+    path = f"{work_dir}/.theseus_repl_mailbox_job_id"
+    read_result = run(f"cat {path}", host, timeout=ssh_timeout)
+    if not read_result.ok:
+        return None
+    value = read_result.stdout.strip()
+    return value or None
+
+
 def dispatch_repl(
     spec: JobSpec,
     hardware: HardwareRequest,
@@ -536,6 +607,7 @@ def dispatch_repl(
     timeout: float = 60.0,
     startup_timeout: float = 180.0,
     slurm_wait_timeout: float | None = None,
+    sync_enabled: bool = False,
 ) -> ReplResult:
     """Dispatch an interactive Jupyter session on selected infrastructure."""
     solve_result = solve_or_raise(
@@ -577,6 +649,7 @@ def dispatch_repl(
             timeout=timeout,
             startup_timeout=startup_timeout,
             slurm_wait_timeout=slurm_wait_timeout,
+            sync_enabled=sync_enabled,
         )
 
     return _dispatch_repl_plain(
@@ -589,6 +662,7 @@ def dispatch_repl(
         dirty=dirty,
         timeout=timeout,
         startup_timeout=startup_timeout,
+        sync_enabled=sync_enabled,
     )
 
 
@@ -602,6 +676,7 @@ def _dispatch_repl_plain(
     dirty: bool,
     timeout: float,
     startup_timeout: float,
+    sync_enabled: bool,
 ) -> ReplResult:
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
@@ -619,10 +694,7 @@ def _dispatch_repl_plain(
 
     job = SlurmJob(
         name="theseus-repl",
-        command=(
-            "--with jupyter jupyter lab --ip 0.0.0.0 --no-browser "
-            "--port 8888 --ServerApp.port_retries=50"
-        ),
+        command=_repl_command(sync_enabled),
         root_dir=cluster.root,
         is_slurm=False,
         uv_groups=host_config.uv_groups,
@@ -642,6 +714,10 @@ def _dispatch_repl_plain(
             selected_host=host_name,
             ssh_host=ssh_alias,
             log_path=log_file,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
             stderr=ship_result.stderr,
         )
 
@@ -655,6 +731,10 @@ def _dispatch_repl_plain(
             selected_host=host_name,
             ssh_host=ssh_alias,
             log_path=log_file,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
             stderr=write_result.stderr,
         )
 
@@ -671,14 +751,18 @@ def _dispatch_repl_plain(
             selected_host=host_name,
             ssh_host=ssh_alias,
             log_path=log_file,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
             stderr=launch_result.stderr,
         )
 
-    remote_pid = None
+    launcher_pid = None
     for line in reversed(launch_result.stdout.strip().splitlines()):
         line = line.strip()
         if line.isdigit():
-            remote_pid = int(line)
+            launcher_pid = int(line)
             break
 
     remote_url, remote_port, token, log_wait_error = _wait_for_jupyter_log(
@@ -691,11 +775,23 @@ def _dispatch_repl_plain(
             selected_host=host_name,
             ssh_host=ssh_alias,
             log_path=log_file,
-            remote_pid=remote_pid,
+            remote_pid=launcher_pid,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
             stderr=log_wait_error,
         )
     if remote_port is None:
         remote_port = 8888
+    remote_pid = _resolve_remote_notebook_pid(ssh_alias, remote_port, timeout)
+    if remote_pid is None:
+        remote_pid = launcher_pid
+    mailbox_job_id = None
+    if sync_enabled:
+        mailbox_job_id = _read_remote_mailbox_job_id(ssh_alias, work_dir, timeout)
+    if mailbox_job_id is None and remote_pid is not None:
+        mailbox_job_id = str(remote_pid)
 
     tunnel_result: TunnelResult = forward_port(
         ssh_alias, local_port=local_port, remote_port=remote_port
@@ -712,6 +808,10 @@ def _dispatch_repl_plain(
             token=token,
             remote_url=remote_url,
             local_port=local_port,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
             stderr=tunnel_result.stderr or "failed to start SSH tunnel",
         )
 
@@ -732,6 +832,11 @@ def _dispatch_repl_plain(
         local_port=local_port,
         local_url=local_url,
         tunnel_pid=tunnel_result.pid,
+        cluster_name=cluster.name,
+        cluster_root=cluster.root,
+        cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+        work_dir=work_dir,
+        mailbox_job_id=mailbox_job_id,
     )
 
 
@@ -748,6 +853,7 @@ def _dispatch_repl_slurm(
     timeout: float,
     startup_timeout: float,
     slurm_wait_timeout: float | None,
+    sync_enabled: bool,
 ) -> ReplResult:
     from theseus.dispatch.slurm import wait_until_running
 
@@ -759,6 +865,7 @@ def _dispatch_repl_slurm(
     host_name = solve_result.host_name
     host_config = solve_result.host_config
     ssh_alias = host_config.ssh
+    cluster_cfg = dispatch_config.clusters[host_config.cluster]
 
     gpus_per_node = solve_result.result.total_chips // max(
         len(solve_result.result.hosts), 1
@@ -774,10 +881,7 @@ def _dispatch_repl_slurm(
 
     job = SlurmJob(
         name=job_name,
-        command=(
-            "--with jupyter jupyter lab --ip 0.0.0.0 --no-browser "
-            "--port 8888 --ServerApp.port_retries=50"
-        ),
+        command=_repl_command(sync_enabled),
         root_dir=cluster.root,
         partition=solve_result.partition,
         nodes=len(solve_result.result.hosts),
@@ -810,6 +914,10 @@ def _dispatch_repl_slurm(
             selected_host=host_name,
             ssh_host=ssh_alias,
             log_path=output_template,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=cluster_cfg.mount,
+            work_dir=work_dir,
             stderr=stderr or "SLURM submit failed",
         )
 
@@ -829,6 +937,10 @@ def _dispatch_repl_slurm(
             ssh_host=ssh_alias,
             log_path=log_file,
             job_id=job_id,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=cluster_cfg.mount,
+            work_dir=work_dir,
             stderr=f"Timed out waiting for SLURM allocation for job {job_id}",
         )
 
@@ -844,6 +956,10 @@ def _dispatch_repl_slurm(
             log_path=log_file,
             job_id=job_id,
             allocated_hostname=allocated_hostname,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=cluster_cfg.mount,
+            work_dir=work_dir,
             stderr=log_wait_error,
         )
     if remote_port is None:
@@ -860,4 +976,9 @@ def _dispatch_repl_slurm(
         remote_port=remote_port,
         token=token,
         remote_url=remote_url,
+        cluster_name=cluster.name,
+        cluster_root=cluster.root,
+        cluster_mount=cluster_cfg.mount,
+        work_dir=work_dir,
+        mailbox_job_id=str(job_id),
     )

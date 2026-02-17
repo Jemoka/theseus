@@ -1,3 +1,5 @@
+mount: /mnt/juicefs-local  # local JuiceFS mount point used by `theseus repl --sync/--update`
+
 # Host priority order for solver (first match wins)
 priority:
   - workstation       # prefer local workstation

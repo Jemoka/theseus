@@ -7,6 +7,7 @@ import shlex
 import re
 import time
 import threading
+import socket
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -389,6 +390,34 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
             stderr="local_port and remote_port must be positive integers",
         )
 
+    # Fail fast if the requested local port is already occupied.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", local_port))
+        except OSError as e:
+            return TunnelResult(
+                returncode=-1,
+                pid=None,
+                command=[],
+                stderr=f"local port {local_port} is already in use: {e}",
+            )
+
+    def _listener_pids(port: int) -> set[int]:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return set()
+        pids: set[int] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pids.add(int(line))
+        return pids
+
     cmd = [
         "ssh",
         "-N",
@@ -396,6 +425,10 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
         "BatchMode=yes",
         "-o",
         "ExitOnForwardFailure=yes",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=3",
         "-L",
         f"{local_port}:localhost:{remote_port}",
         host,
@@ -420,18 +453,41 @@ def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
             stderr=str(e),
         )
 
-    # Give SSH a brief chance to fail fast (e.g. local port busy, auth failure).
-    time.sleep(0.25)
-    rc = proc.poll()
-    if rc is not None:
-        stderr = ""
-        if proc.stderr is not None:
-            stderr = proc.stderr.read() or ""
-        return TunnelResult(
-            returncode=rc,
-            pid=None,
-            command=cmd,
-            stderr=stderr.strip(),
-        )
+    # Validate tunnel is actually established locally, not just spawned.
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        rc = proc.poll()
+        if rc is not None:
+            stderr = ""
+            if proc.stderr is not None:
+                stderr = proc.stderr.read() or ""
+            return TunnelResult(
+                returncode=rc,
+                pid=None,
+                command=cmd,
+                stderr=stderr.strip(),
+            )
 
-    return TunnelResult(returncode=0, pid=proc.pid, command=cmd, stderr="")
+        # Ensure the listener belongs to this ssh process, not a different one.
+        listeners = _listener_pids(local_port)
+        if proc.pid in listeners:
+            return TunnelResult(returncode=0, pid=proc.pid, command=cmd, stderr="")
+        time.sleep(0.1)
+
+    # Tunnel process is alive but local listener did not appear.
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    stderr = ""
+    if proc.stderr is not None:
+        try:
+            stderr = proc.stderr.read() or ""
+        except Exception:
+            stderr = ""
+    return TunnelResult(
+        returncode=-1,
+        pid=None,
+        command=cmd,
+        stderr=stderr.strip() or "ssh tunnel did not open local listener in time",
+    )

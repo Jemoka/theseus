@@ -21,20 +21,28 @@ from theseus.config import *
 from theseus.quick import quick
 
 from theseus.experiments.llama import PretrainLlama
-from theseus.experiments.continual import ABCDTrainer
+from theseus.experiments.forking import PretrainThoughtbubbles
 
-
-with quick(ABCDTrainer, "test") as j:
+with quick(PretrainThoughtbubbles, "test") as j:
+    j.config.architecture.n_layers = 8
+    j.config.architecture.n_embd = 512
     j.config.training.per_device_batch_size = 1
+    r = job.train_step(job.state, (x[None, :, :],y[None, :, :],mask[None, :, :]), job.key, 1)
+mask[None, :, :]
+
     job = j.create()
-job
+    x,y,mask = job.batch()
+
+    # job.state_sharding
+    # mask
+# job
     # j.config.training.per_device_batch_size = 1
     # j.config.training.batch_size = 2
     # j.config.logging.report_interval = 2
     # j()
-    j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
+    # j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
 
-cfg
+# cfg
     # j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
 #     j.config.architecture.n_layers = 16
 #     j.config.training.dataset = [[{
@@ -102,5 +110,3 @@ cfg
 # # # #     fb =  configure(ForkingAttention)
 
 # # # # fb.init(jax.random.PRNGKey(7), 
-
-

@@ -33,6 +33,23 @@ cleanup() {
     local exit_code=$?
     echo "[bootstrap] cleaning up on $(hostname) (exit code: $exit_code)..."
 
+    # Best-effort cleanup for synced REPL sidecar (in case wrapper trap didn't run).
+    local sidecar_pid_file=""
+    if [[ -n "$BOOTSTRAP_WORKDIR" ]]; then
+        sidecar_pid_file="$BOOTSTRAP_WORKDIR/.theseus_repl_sidecar.pid"
+    elif [[ -f ".theseus_repl_sidecar.pid" ]]; then
+        sidecar_pid_file=".theseus_repl_sidecar.pid"
+    fi
+    if [[ -n "$sidecar_pid_file" ]] && [[ -f "$sidecar_pid_file" ]]; then
+        local sidecar_pid
+        sidecar_pid="$(cat "$sidecar_pid_file" 2>/dev/null || true)"
+        if [[ -n "$sidecar_pid" ]]; then
+            echo "[bootstrap] stopping repl sidecar pid=$sidecar_pid..."
+            kill "$sidecar_pid" 2>/dev/null || true
+            wait "$sidecar_pid" 2>/dev/null || true
+        fi
+    fi
+
     # Unmount JuiceFS gracefully if mounted
     if [[ -n "$JUICEFS_MOUNT_POINT" ]] && mountpoint -q "$JUICEFS_MOUNT_POINT" 2>/dev/null; then
         echo "[bootstrap] unmounting JuiceFS at $JUICEFS_MOUNT_POINT..."

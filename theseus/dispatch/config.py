@@ -86,6 +86,7 @@ class SlurmHostConfig:
 class DispatchConfig:
     """Top-level dispatch configuration."""
 
+    mount: str | None = None  # Local JuiceFS mount point for mailbox sync workflows
     clusters: dict[str, ClusterConfig] = field(default_factory=dict)
     hosts: dict[str, PlainHostConfig | SlurmHostConfig] = field(default_factory=dict)
     priority: list[str] = field(default_factory=list)  # host names in priority order
@@ -103,7 +104,7 @@ def load_dispatch_config(path: str | Path) -> DispatchConfig:
     Returns:
         Parsed DispatchConfig
     """
-    logger.info("CONFIG | loading dispatch config")
+    logger.debug("CONFIG | loading dispatch config")
     logger.debug(f"CONFIG | config path: {path}")
     cfg = OmegaConf.load(path)
     return parse_dispatch_config(cfg)
@@ -190,11 +191,15 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
     priority = list(cfg.get("priority", []))
     gres_mapping = dict(cfg.get("gres_mapping", {}))
 
-    logger.info(
+    logger.debug(
         f"CONFIG | loaded config with {len(clusters)} clusters, {len(hosts)} hosts"
     )
     return DispatchConfig(
-        clusters=clusters, hosts=hosts, priority=priority, gres_mapping=gres_mapping
+        mount=cfg.get("mount"),
+        clusters=clusters,
+        hosts=hosts,
+        priority=priority,
+        gres_mapping=gres_mapping,
     )
 
 

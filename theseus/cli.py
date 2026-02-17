@@ -599,9 +599,21 @@ def submit(
 )  # type: ignore[misc]
 @click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
 @click.option(
+    "--sync",
+    "sync_mode",
+    is_flag=True,
+    help="Launch REPL with mailbox sync sidecar enabled",
+)  # type: ignore[misc]
+@click.option(
+    "--update",
+    "update_mode",
+    is_flag=True,
+    help="Send mailbox patches to active synced REPL jobs",
+)  # type: ignore[misc]
+@click.option(
     "--port",
     type=int,
-    required=True,
+    default=8888,
     help="Local port to use for notebook access (SSH target)",
 )  # type: ignore[misc]
 @click.option(
@@ -625,12 +637,31 @@ def repl(
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
+    sync_mode: bool,
+    update_mode: bool,
     port: int,
     startup_timeout: float,
     slurm_wait_timeout: float | None,
 ) -> None:
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
+    from theseus.dispatch.mailbox import (
+        prune_stale_active_entries,
+        ensure_local_mount,
+        is_local_juicefs_mounted,
+        mailbox_root_for,
+        publish_updates,
+        read_active,
+        register_synced_repl,
+        require_git_repo,
+    )
+
+    console.print()
+    if sync_mode and update_mode:
+        console.print(
+            "\n[red]Error: --sync and --update are mutually exclusive[/red]\n"
+        )
+        sys.exit(1)
 
     request_chip, request_chips = _resolve_request_hardware(
         OmegaConf.create({}), chip, n_chips
@@ -658,11 +689,102 @@ def repl(
         sys.exit(1)
 
     dispatch_cfg = load_dispatch_config(dispatch_config)
+    local_mount = Path(dispatch_cfg.mount).expanduser() if dispatch_cfg.mount else None
 
     preferred_clusters = [c.strip() for c in cluster.split(",")] if cluster else []
     forbidden_clusters = (
         [c.strip() for c in exclude_cluster.split(",")] if exclude_cluster else []
     )
+
+    if update_mode:
+        if local_mount is None:
+            console.print(
+                "\n[red]Error: dispatch config top-level 'mount' is required for --update[/red]\n"
+            )
+            sys.exit(1)
+        try:
+            repo_root = require_git_repo(Path.cwd())
+        except RuntimeError as exc:
+            console.print(f"\n[red]Error: {exc}[/red]\n")
+            sys.exit(1)
+
+        mailbox_root = mailbox_root_for(local_mount, "")
+        pruned = prune_stale_active_entries(mailbox_root=mailbox_root)
+        if pruned > 0:
+            logger.info(f"REPL UPDATE | pruned stale active entries: {pruned}")
+
+        entries = [
+            e
+            for e in read_active(mailbox_root)
+            if e.get("mode") == "repl-sync" and e.get("status", "active") == "active"
+        ]
+        if preferred_clusters:
+            allowed = set(preferred_clusters)
+            entries = [
+                e for e in entries if str(e.get("cluster", "")).strip() in allowed
+            ]
+        if forbidden_clusters:
+            denied = set(forbidden_clusters)
+            entries = [
+                e for e in entries if str(e.get("cluster", "")).strip() not in denied
+            ]
+
+        logger.debug(
+            f"REPL UPDATE | active synced entries after filter: {len(entries)}"
+        )
+        if not entries:
+            console.print("\n[yellow]No active synced REPL jobs found.[/yellow]\n")
+            return
+
+        backend_ids: set[str] = set()
+        for entry in entries:
+            backend = str(entry.get("backend", "")).strip()
+            if backend:
+                backend_ids.add(backend)
+
+        if len(backend_ids) > 1:
+            console.print(
+                "\n[red]Error: active synced REPLs span multiple JuiceFS backends.[/red]"
+            )
+            for backend in sorted(backend_ids):
+                console.print(f"[red]- {backend}[/red]")
+            console.print()
+            sys.exit(1)
+
+        backend = next(iter(backend_ids), "")
+        if not backend:
+            console.print(
+                "\n[red]Error: missing cluster.mount backend for active synced REPLs[/red]\n"
+            )
+            sys.exit(1)
+        try:
+            ensure_local_mount(local_mount, backend)
+        except RuntimeError as exc:
+            console.print(f"\n[red]Error: {exc}[/red]\n")
+            sys.exit(1)
+
+        sender_host = Path.cwd().name
+        any_sent = False
+        # console.print()
+        console.print("[blue]Publishing mailbox updates:[/blue]")
+        logger.debug("REPL UPDATE | publishing active mailbox entries")
+        summaries, mailbox_root = publish_updates(
+            local_mount=local_mount,
+            repo_root=repo_root,
+            sender_host=sender_host,
+            include_clusters=set(preferred_clusters) if preferred_clusters else None,
+            exclude_clusters=set(forbidden_clusters) if forbidden_clusters else None,
+        )
+        if summaries:
+            console.print(f"[blue]Mailbox:[/blue] {mailbox_root}")
+            for item in summaries:
+                console.print(f"  {item.job_id}: {item.status} ({item.detail})")
+                if item.status == "sent":
+                    any_sent = True
+        if not any_sent:
+            console.print("[yellow]No patches sent.[/yellow]")
+        console.print()
+        return
     hardware_request = HardwareRequest(
         chip=SUPPORTED_CHIPS[request_chip] if request_chip is not None else None,
         min_chips=request_chips,
@@ -707,6 +829,8 @@ def repl(
         console.print(
             f"[blue]Excluded clusters:[/blue] {', '.join(forbidden_clusters)}"
         )
+    if sync_mode:
+        console.print("[blue]Sync mode:[/blue] enabled")
 
     result = dispatch_repl(
         spec=spec,
@@ -717,6 +841,7 @@ def repl(
         mem=mem,
         startup_timeout=startup_timeout,
         slurm_wait_timeout=slurm_wait_timeout,
+        sync_enabled=sync_mode,
     )
 
     if not result.ok:
@@ -728,6 +853,72 @@ def repl(
                 f"[yellow]Log path:[/yellow] {result.ssh_host}:{result.log_path}"
             )
         sys.exit(1)
+
+    if sync_mode:
+        if local_mount is None:
+            console.print(
+                "\n[yellow]REPL is running, but sync registration failed: dispatch config top-level 'mount' is missing.[/yellow]"
+            )
+            console.print(
+                "[yellow]Run --update only after adding top-level mount.[/yellow]\n"
+            )
+        elif not result.cluster_root or not result.mailbox_job_id:
+            console.print(
+                "\n[yellow]REPL is running, but sync registration skipped due to missing cluster/job metadata.[/yellow]\n"
+            )
+        else:
+            sync_repo_root: Path | None
+            try:
+                sync_repo_root = require_git_repo(Path.cwd())
+            except RuntimeError as exc:
+                console.print(
+                    f"\n[yellow]REPL is running, but sync registration failed: {exc}[/yellow]\n"
+                )
+                sync_repo_root = None
+            backend = (result.cluster_mount or "").strip()
+            if sync_repo_root is None:
+                pass
+            elif not backend:
+                console.print(
+                    "\n[yellow]REPL is running, but sync registration failed: target cluster has no JuiceFS backend (clusters.<name>.mount).[/yellow]\n"
+                )
+            else:
+                try:
+                    if not is_local_juicefs_mounted(local_mount):
+                        console.print(
+                            "\n[yellow]REPL is running, but sync registration skipped: local top-level mount is not currently mounted as JuiceFS. Use --update to mount/send.[/yellow]\n"
+                        )
+                    else:
+                        console.print(
+                            "[dim]Registering synced REPL mailbox state...[/dim]"
+                        )
+                        mailbox_root = register_synced_repl(
+                            local_mount=local_mount,
+                            cluster_root=result.cluster_root,
+                            cluster_name=result.cluster_name or result.selected_host,
+                            job_id=result.mailbox_job_id,
+                            ssh_alias=result.ssh_host,
+                            host_key=result.selected_host,
+                            workdir=result.work_dir or "",
+                            backend=backend,
+                            repo_root=sync_repo_root,
+                            initialize_shadow=False,
+                        )
+                except RuntimeError as exc:
+                    console.print(
+                        f"\n[yellow]REPL is running, but sync registration failed: {exc}[/yellow]\n"
+                    )
+                else:
+                    if is_local_juicefs_mounted(local_mount):
+                        console.print("[dim]Sync registration complete.[/dim]")
+                        console.print(f"[blue]Mailbox root:[/blue] {mailbox_root}")
+                        console.print(
+                            f"[blue]Mailbox job id:[/blue] {result.mailbox_job_id} (registered for --update)"
+                        )
+                        if result.work_dir:
+                            console.print(
+                                f"[blue]Sidecar log:[/blue] {result.ssh_host}:{result.work_dir}/.theseus_repl_sidecar.log"
+                            )
 
     console.print()
     if result.is_slurm:
