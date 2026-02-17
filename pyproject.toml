@@ -41,18 +41,7 @@ docs = [
 cuda = [
     {include-group = "cuda13"},
 ]
-cuda13 = [
-    "jax[cuda13]>=0.4.23"
-]
-cuda12 = [
-    "jax[cuda12]>=0.4.23"
-]
-tpu = [
-    "jax[tpu]>=0.4.23"
-]
-cpu = [
-    "jax>=0.4.23",
-]
+
 fever = [
     "wikipedia>=1.4.0",
 ]
@@ -93,8 +82,24 @@ huggingface-cuda12 = [
     {include-group = "huggingface"}
 ]
 
+cuda13 = [
+    "jax[cuda13]>=0.4.23",
+    {include-group = "huggingface-cuda13"}
+]
+cuda12 = [
+    "jax[cuda12]>=0.4.23",
+    {include-group = "huggingface-cuda12"}
+]
+tpu = [
+    "jax[tpu]>=0.4.23"
+]
+cpu = [
+    "jax>=0.4.23",
+    {include-group = "huggingface-cpu"}
+]
+
 [tool.uv]
-default-groups = ["dev"]
+default-groups = ["all"]
 package = true
 
 
