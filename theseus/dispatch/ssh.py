@@ -337,10 +337,6 @@ def copy_from(
             text=True,
             timeout=timeout,
         )
-        if result.returncode == 0:
-            logger.debug("SSH | copy_from succeeded")
-        else:
-            logger.warning(f"SSH | copy_from failed: {result.stderr}")
         return RunResult(
             returncode=result.returncode,
             stdout=result.stdout,

@@ -855,7 +855,7 @@ def _dispatch_repl_slurm(
     slurm_wait_timeout: float | None,
     sync_enabled: bool,
 ) -> ReplResult:
-    from theseus.dispatch.slurm import wait_until_running
+    from theseus.dispatch.slurm import cancel, wait_until_running
 
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
@@ -922,12 +922,23 @@ def _dispatch_repl_slurm(
         )
 
     job_id = submit_result.job_id
-    allocated_hostname, _ = wait_until_running(
-        job_id,
-        ssh_alias,
-        poll_interval=5.0,
-        timeout=slurm_wait_timeout,
-    )
+    try:
+        allocated_hostname, _ = wait_until_running(
+            job_id,
+            ssh_alias,
+            poll_interval=5.0,
+            timeout=slurm_wait_timeout,
+        )
+    except KeyboardInterrupt:
+        logger.warning(
+            f"DISPATCH | interrupted while waiting for SLURM allocation; cancelling job {job_id}"
+        )
+        cancel_result = cancel(job_id, ssh_alias, timeout=timeout)
+        if not cancel_result.ok:
+            logger.warning(
+                f"DISPATCH | failed to cancel interrupted SLURM job {job_id}: {cancel_result.stderr}"
+            )
+        raise
     log_file = output_template.replace("%j", str(job_id))
     if allocated_hostname is None:
         return ReplResult(
