@@ -8,6 +8,7 @@ user-facing interactions
 import sys
 import click
 import inspect
+from datetime import datetime
 from pathlib import Path
 from omegaconf import OmegaConf
 from dotenv import load_dotenv
@@ -20,9 +21,6 @@ import numpy as np
 
 from typing import Any, List, Type
 
-from theseus.registry import JOBS
-from theseus.config import build, configuration
-from theseus.job import RestoreableJob
 from theseus.base.job import ExecutionSpec, JobSpec
 from theseus.base.chip import SUPPORTED_CHIPS
 from theseus.base.hardware import HardwareRequest
@@ -86,6 +84,27 @@ def _resolve_request_hardware(
     return request_chip, request_chips
 
 
+def _jobs_registry() -> Any:
+    """Lazy-load job registry to avoid heavy imports at CLI import time."""
+    from theseus.registry import JOBS
+
+    return JOBS
+
+
+def _build_and_configuration() -> tuple[Any, Any]:
+    """Lazy-load config helpers to avoid importing JAX-linked modules eagerly."""
+    from theseus.config import build, configuration
+
+    return build, configuration
+
+
+def _restoreable_job() -> Any:
+    """Lazy-load RestoreableJob to avoid heavy imports at CLI import time."""
+    from theseus.job import RestoreableJob
+
+    return RestoreableJob
+
+
 @click.group()  # type: ignore[misc]
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")  # type: ignore[misc]
 def theseus(verbose: bool) -> None:
@@ -96,7 +115,8 @@ def theseus(verbose: bool) -> None:
 @theseus.command()  # type: ignore[misc]
 def jobs() -> None:
     """List all available jobs in the registry."""
-    if not JOBS:
+    jobs = _jobs_registry()
+    if not jobs:
         console.print("\n[yellow]No jobs registered[/yellow]\n")
         return
 
@@ -104,8 +124,8 @@ def jobs() -> None:
     table.add_column("Job Name", style="cyan", no_wrap=True)
     table.add_column("Description", style="white")
 
-    for job_name in sorted(JOBS.keys()):
-        job_class = JOBS[job_name]
+    for job_name in sorted(jobs.keys()):
+        job_class = jobs[job_name]
         docstring = inspect.getdoc(job_class)
 
         # Get first line of docstring as description
@@ -161,10 +181,13 @@ def configure(
     OUT_YAML: Output path for the generated YAML config
     OVERRIDES: Optional config overrides in key=value format
     """
+    jobs = _jobs_registry()
+    build, _ = _build_and_configuration()
+
     # Validate job exists
-    if job not in JOBS:
+    if job not in jobs:
         console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
-        console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
+        console.print(f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n")
         sys.exit(1)
 
     # Validate chip if specified
@@ -175,11 +198,11 @@ def configure(
         )
         sys.exit(1)
 
-    job_obj = JOBS[job]
+    job_obj = jobs[job]
 
     # if job obj is iterable, spread it into build, otherwise just pass directly
     if isinstance(job_obj.config(), (list, tuple)):
-        cfgs: List[Type[Any]] = job_obj.config()  # type: ignore
+        cfgs: List[Type[Any]] = job_obj.config()
         config = build(*cfgs)
     else:
         config = build(job_obj.config())
@@ -280,6 +303,9 @@ def run(
     OUT_PATH: Output path for job results
     OVERRIDES: Optional config overrides in key=value format
     """
+    jobs = _jobs_registry()
+    _, configuration = _build_and_configuration()
+
     # Load config file
     if not Path(yaml_path).exists():
         console.print(f"\n[red]Error: Config file '{yaml_path}' not found[/red]\n")
@@ -304,12 +330,12 @@ def run(
         OmegaConf.set_struct(cfg, True)
 
     # Validate job exists
-    if job not in JOBS:
+    if job not in jobs:
         console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
-        console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
+        console.print(f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n")
         sys.exit(1)
 
-    job_obj = JOBS[job]
+    job_obj = jobs[job]
 
     # Apply CLI overrides
     if overrides:
@@ -399,6 +425,8 @@ def submit(
     """
     from theseus.dispatch import dispatch, load_dispatch_config
 
+    jobs = _jobs_registry()
+
     # Load config file
     if not Path(yaml_path).exists():
         console.print(f"\n[red]Error: Config file '{yaml_path}' not found[/red]\n")
@@ -444,9 +472,9 @@ def submit(
         OmegaConf.set_struct(cfg, True)
 
     # Validate job exists
-    if job not in JOBS:
+    if job not in jobs:
         console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
-        console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
+        console.print(f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n")
         sys.exit(1)
 
     # Get hardware request from CLI flags or config
@@ -538,6 +566,233 @@ def submit(
 
 
 @theseus.command()  # type: ignore[misc]
+@click.option(
+    "-d",
+    "--dispatch-config",
+    default=None,
+    help="Path to dispatch.yaml (default: ~/.theseus.yaml)",
+)  # type: ignore[misc]
+@click.option(
+    "--chip",
+    default=None,
+    help=f"Chip type ({', '.join(SUPPORTED_CHIPS.keys())})",
+)  # type: ignore[misc]
+@click.option(
+    "-n",
+    "--n_chips",
+    type=int,
+    default=None,
+    help="Minimum number of chips",
+)  # type: ignore[misc]
+@click.option(
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model (accepted for parity)",
+)  # type: ignore[misc]
+@click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option(
+    "--cluster", default=None, help="Only use these clusters (comma-separated)"
+)  # type: ignore[misc]
+@click.option(
+    "--exclude-cluster", default=None, help="Exclude these clusters (comma-separated)"
+)  # type: ignore[misc]
+@click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
+@click.option(
+    "--port",
+    type=int,
+    required=True,
+    help="Local port to use for notebook access (SSH target)",
+)  # type: ignore[misc]
+@click.option(
+    "--startup-timeout",
+    type=float,
+    default=180.0,
+    help="Seconds to wait for Jupyter token/URL in logs",
+)  # type: ignore[misc]
+@click.option(
+    "--slurm-wait-timeout",
+    type=float,
+    default=None,
+    help="Optional timeout (seconds) while waiting for SLURM allocation",
+)  # type: ignore[misc]
+def repl(
+    dispatch_config: str | None,
+    chip: str | None,
+    n_chips: int | None,
+    n_shards: int | None,
+    mem: str | None,
+    cluster: str | None,
+    exclude_cluster: str | None,
+    dirty: bool,
+    port: int,
+    startup_timeout: float,
+    slurm_wait_timeout: float | None,
+) -> None:
+    """Start a remote Jupyter REPL on selected dispatch infrastructure."""
+    from theseus.dispatch import dispatch_repl, load_dispatch_config
+
+    request_chip, request_chips = _resolve_request_hardware(
+        OmegaConf.create({}), chip, n_chips
+    )
+    if port <= 0:
+        console.print("\n[red]Error: --port must be > 0[/red]\n")
+        sys.exit(1)
+
+    if dispatch_config is None:
+        default_config = Path.home() / ".theseus.yaml"
+        if default_config.exists():
+            dispatch_config = str(default_config)
+            console.print(f"[dim]Using dispatch config: {dispatch_config}[/dim]")
+        else:
+            console.print("\n[red]Error: No dispatch config specified[/red]")
+            console.print(
+                "[yellow]Use -d/--dispatch-config or create ~/.theseus.yaml[/yellow]\n"
+            )
+            sys.exit(1)
+
+    if not Path(dispatch_config).exists():
+        console.print(
+            f"\n[red]Error: Dispatch config '{dispatch_config}' not found[/red]\n"
+        )
+        sys.exit(1)
+
+    dispatch_cfg = load_dispatch_config(dispatch_config)
+
+    preferred_clusters = [c.strip() for c in cluster.split(",")] if cluster else []
+    forbidden_clusters = (
+        [c.strip() for c in exclude_cluster.split(",")] if exclude_cluster else []
+    )
+    hardware_request = HardwareRequest(
+        chip=SUPPORTED_CHIPS[request_chip] if request_chip is not None else None,
+        min_chips=request_chips,
+        preferred_clusters=preferred_clusters,
+        forbidden_clusters=forbidden_clusters,
+    )
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    chip_label = (
+        request_chip
+        if request_chip is not None
+        else "cpu"
+        if request_chips == 0
+        else "any"
+    )
+    spec = JobSpec(
+        name=f"repl-{chip_label}-{timestamp}",
+        project="repl",
+        group="interactive",
+    )
+
+    console.print()
+    console.print("[blue]Starting remote Jupyter REPL:[/blue]")
+    if request_chips == 0:
+        console.print("[blue]Hardware:[/blue] cpu-only (n_chips=0)")
+    elif request_chip is None:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x any-gpu")
+    else:
+        console.print(f"[blue]Hardware:[/blue] {request_chips}x {request_chip}")
+    console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
+    console.print(f"[blue]Dirty:[/blue] {dirty}")
+    console.print(f"[blue]Local port:[/blue] {port}")
+    if n_shards is not None:
+        console.print(
+            "[dim]--n_shards is accepted for parity and ignored in repl[/dim]"
+        )
+    if mem:
+        console.print(f"[blue]Memory:[/blue] {mem}")
+    if preferred_clusters:
+        console.print(f"[blue]Clusters:[/blue] {', '.join(preferred_clusters)}")
+    if forbidden_clusters:
+        console.print(
+            f"[blue]Excluded clusters:[/blue] {', '.join(forbidden_clusters)}"
+        )
+
+    result = dispatch_repl(
+        spec=spec,
+        hardware=hardware_request,
+        dispatch_config=dispatch_cfg,
+        local_port=port,
+        dirty=dirty,
+        mem=mem,
+        startup_timeout=startup_timeout,
+        slurm_wait_timeout=slurm_wait_timeout,
+    )
+
+    if not result.ok:
+        console.print("\n[red]REPL launch failed[/red]")
+        if result.stderr:
+            console.print(f"[red]{result.stderr}[/red]")
+        if result.log_path:
+            console.print(
+                f"[yellow]Log path:[/yellow] {result.ssh_host}:{result.log_path}"
+            )
+        sys.exit(1)
+
+    console.print()
+    if result.is_slurm:
+        console.print("[green]REPL started on SLURM[/green]")
+        console.print(f"[blue]SLURM login host:[/blue] {result.ssh_host}")
+        console.print(f"[blue]SLURM host key:[/blue] {result.selected_host}")
+        if result.job_id is not None:
+            console.print(f"[blue]SLURM job id:[/blue] {result.job_id}")
+        if result.allocated_hostname:
+            console.print(
+                f"[blue]Allocated hostname:[/blue] {result.allocated_hostname}"
+            )
+        if result.remote_port:
+            console.print(f"[blue]Remote notebook port:[/blue] {result.remote_port}")
+        if result.token:
+            console.print(f"[blue]Notebook token:[/blue] {result.token}")
+        if result.allocated_hostname and result.remote_port:
+            url = f"http://{result.allocated_hostname}:{result.remote_port}/lab"
+            if result.token:
+                url = f"{url}?token={result.token}"
+            console.print(f"[blue]Notebook URL:[/blue] {url}")
+        if not result.token:
+            console.print(
+                "[dim]No token detected in logs; authenticate with password if prompted.[/dim]"
+            )
+        console.print(f"[blue]Log path:[/blue] {result.ssh_host}:{result.log_path}")
+        console.print()
+        console.print("[yellow]Stop this notebook:[/yellow]")
+        if result.job_id is not None:
+            console.print(f"  ssh {result.ssh_host} 'scancel {result.job_id}'")
+            console.print(f"  ssh {result.ssh_host} 'squeue -j {result.job_id}'")
+    else:
+        console.print("[green]REPL started on SSH target[/green]")
+        console.print(f"[blue]SSH host key:[/blue] {result.selected_host}")
+        console.print(f"[blue]SSH alias:[/blue] {result.ssh_host}")
+        if result.remote_port:
+            console.print(f"[blue]Remote notebook port:[/blue] {result.remote_port}")
+        if result.token:
+            console.print(f"[blue]Notebook token:[/blue] {result.token}")
+        else:
+            console.print(
+                "[dim]No token detected in logs; authenticate with password if prompted.[/dim]"
+            )
+        if result.local_url:
+            console.print(f"[blue]Open locally:[/blue] {result.local_url}")
+        if result.remote_pid:
+            console.print(f"[blue]Remote notebook PID:[/blue] {result.remote_pid}")
+        if result.tunnel_pid:
+            console.print(f"[blue]Local tunnel PID:[/blue] {result.tunnel_pid}")
+        console.print(f"[blue]Log path:[/blue] {result.ssh_host}:{result.log_path}")
+        console.print()
+        console.print("[yellow]Stop this notebook:[/yellow]")
+        if result.tunnel_pid:
+            console.print(f"  kill {result.tunnel_pid}")
+        if result.remote_pid:
+            console.print(f"  ssh {result.ssh_host} 'kill {result.remote_pid}'")
+        if result.remote_port:
+            console.print(
+                f"  ssh {result.ssh_host} 'lsof -ti :{result.remote_port} | xargs -r kill'"
+            )
+
+    console.print()
+
+
+@theseus.command()  # type: ignore[misc]
 @click.argument("name")  # type: ignore[misc]
 @click.argument("yaml_path")  # type: ignore[misc]
 @click.argument("out_script")  # type: ignore[misc]
@@ -607,6 +862,8 @@ def bootstrap(
     from theseus.dispatch.dispatch import _generate_bootstrap
     from theseus.dispatch.slurm import SlurmJob
     from theseus.dispatch.sync import snapshot
+
+    jobs = _jobs_registry()
 
     custom_header = """#
 #
@@ -693,9 +950,9 @@ def bootstrap(
         cfg.job = job
         OmegaConf.set_struct(cfg, True)
 
-    if job not in JOBS:
+    if job not in jobs:
         console.print(f"\n[red]Error: Job '{job}' not found in registry[/red]")
-        console.print(f"[yellow]Available jobs: {', '.join(JOBS.keys())}[/yellow]\n")
+        console.print(f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n")
         sys.exit(1)
 
     request_chip, request_chips = _resolve_request_hardware(cfg, chip, n_chips)
@@ -766,11 +1023,15 @@ def bootstrap(
         else None
     )
     job_name = f"{project_name}-{group_name}-{name}"
+    slurm_env: dict[str, str] = {}
+    if require_root_at_runtime:
+        slurm_env["THESEUS_DISPATCH_REQUIRE_ROOT"] = "1"
     slurm_job = SlurmJob(
         name=job_name,
         command="python _bootstrap_dispatch.py",
         is_slurm=False,
-        env={"THESEUS_DISPATCH_REQUIRE_ROOT": "1"} if require_root_at_runtime else {},
+        env=slurm_env,
+        root_dir=root_path,
         payload_extract_to=work_dir,
         juicefs_mount=juicefs_mount,
         bootstrap_py=bootstrap_py_content,
@@ -831,6 +1092,7 @@ def checkpoints(
     NAME: Name of the job
     OUT_PATH: Output path where checkpoints are stored
     """
+    RestoreableJob = _restoreable_job()
     spec = ExecutionSpec.local(out_path, name=name, project=project, group=group)
     ckpts = RestoreableJob.checkpoints(spec)
 
@@ -860,6 +1122,8 @@ def restore(
     CHECKPOINT: Checkpoint to restore from
     OUT_PATH: Output path where checkpoints are stored
     """
+    RestoreableJob = _restoreable_job()
+    _, configuration = _build_and_configuration()
     spec = ExecutionSpec.local(out_path, name=name, project=project, group=group)
 
     console.print()

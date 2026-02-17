@@ -23,8 +23,11 @@ from theseus.quick import quick
 from theseus.experiments.llama import PretrainLlama
 from theseus.experiments.continual import ABCDTrainer
 
-with quick(ABCDTrainer, "test", "/Users/houjun/theseus/") as j:
-    cfg = j.config
+
+with quick(ABCDTrainer, "test") as j:
+    j.config.training.per_device_batch_size = 1
+    job = j.create()
+job
     # j.config.training.per_device_batch_size = 1
     # j.config.training.batch_size = 2
     # j.config.logging.report_interval = 2

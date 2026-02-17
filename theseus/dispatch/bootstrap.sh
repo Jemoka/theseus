@@ -14,9 +14,12 @@ fi
 
 echo
 echo
-echo "[bootstrap] ~(‾▿‾)~ Welcome to theseus!"
-echo "=========================================================="
-echo "[bootstrap] starting on $(hostname)"
+echo " ░▀█▀░█░█░█▀▀░█▀▀░█▀▀░█░█░█▀▀ "
+echo " ░░█░░█▀█░█▀▀░▀▀█░█▀▀░█░█░▀▀█ "
+echo " ░░▀░░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀ "
+echo
+echo "[bootstrap] Welcome to theseus!"
+echo "[bootstrap] Starting on $(hostname)..."
 echo "[bootstrap] Slurm Job GPUs: ${SLURM_JOB_GPUS:-NOT_SET}"
 echo "[bootstrap] Slurm Step GPUs: ${SLURM_STEP_GPUS:-NOT_SET}"
 echo "[bootstrap] CUDA Visible: ${CUDA_VISIBLE_DEVICES:-NOT_SET}"
@@ -217,6 +220,12 @@ if [[ "${THESEUS_DISPATCH_REQUIRE_ROOT:-0}" == "1" ]] && [[ -z "${THESEUS_DISPAT
     echo "[bootstrap] ERROR: root path is required; pass --root PATH"
     exit 2
 fi
+
+# Canonical root variable for downstream processes (e.g. notebooks).
+# Default comes from template replacement; users may still override via env.
+THESEUS_ROOT="${THESEUS_ROOT:-__THESEUS_ROOT__}"
+THESEUS_ROOT="$(resolve_runtime_root_tokens "$THESEUS_ROOT")"
+export THESEUS_ROOT
 
 # ============================================================================
 # JuiceFS Mount (if configured)

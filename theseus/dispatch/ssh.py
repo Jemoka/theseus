@@ -87,6 +87,20 @@ class RunResult:
         return self.returncode == 0
 
 
+@dataclass
+class TunnelResult:
+    """Result of starting an SSH local port forward."""
+
+    returncode: int
+    pid: int | None
+    command: list[str]
+    stderr: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.returncode == 0 and self.pid is not None
+
+
 def hosts() -> list[str]:
     """Parse ~/.ssh/config to list accessible hosts.
 
@@ -354,3 +368,70 @@ def is_reachable(host: str, timeout: float = 5.0) -> bool:
     reachable = result.ok and "ok" in result.stdout
     logger.debug(f"SSH | {host} reachable={reachable}")
     return reachable
+
+
+def forward_port(host: str, local_port: int, remote_port: int) -> TunnelResult:
+    """Start a background SSH tunnel forwarding local_port -> remote localhost:remote_port.
+
+    Args:
+        host: SSH host (name, alias, or user@host)
+        local_port: Local port to bind
+        remote_port: Remote port on localhost to forward to
+
+    Returns:
+        TunnelResult with PID on success
+    """
+    if local_port <= 0 or remote_port <= 0:
+        return TunnelResult(
+            returncode=-1,
+            pid=None,
+            command=[],
+            stderr="local_port and remote_port must be positive integers",
+        )
+
+    cmd = [
+        "ssh",
+        "-N",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ExitOnForwardFailure=yes",
+        "-L",
+        f"{local_port}:localhost:{remote_port}",
+        host,
+    ]
+    logger.debug(
+        f"SSH | forwarding local port {local_port} -> {host}:localhost:{remote_port}"
+    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return TunnelResult(
+            returncode=-1,
+            pid=None,
+            command=cmd,
+            stderr=str(e),
+        )
+
+    # Give SSH a brief chance to fail fast (e.g. local port busy, auth failure).
+    time.sleep(0.25)
+    rc = proc.poll()
+    if rc is not None:
+        stderr = ""
+        if proc.stderr is not None:
+            stderr = proc.stderr.read() or ""
+        return TunnelResult(
+            returncode=rc,
+            pid=None,
+            command=cmd,
+            stderr=stderr.strip(),
+        )
+
+    return TunnelResult(returncode=0, pid=proc.pid, command=cmd, stderr="")

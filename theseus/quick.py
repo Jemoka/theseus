@@ -22,6 +22,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator, Type, Dict, Tuple, TYPE_CHECKING
@@ -45,7 +46,7 @@ class QuickJob:
         self,
         job_cls: Any,
         job_name: str,
-        out_path: str,
+        out_path: str | None,
         name: str,
         project: str | None = None,
         group: str | None = None,
@@ -68,8 +69,9 @@ class QuickJob:
     def create(self) -> Any:
         """Create and return the job instance without running it."""
         if self._instance is None:
+            out_path = self._out_path or os.environ.get("THESEUS_ROOT", ".")
             self._instance = self._job_cls.local(
-                self._out_path,
+                out_path,
                 name=self._name,
                 project=self._project,
                 group=self._group,
@@ -138,7 +140,7 @@ class QuickJob:
 def quick(
     job: Any | str,
     name: str,
-    out_path: str,
+    out_path: str | None = None,
     project: str | None = None,
     group: str | None = None,
 ) -> Generator[QuickJob, None, None]:
@@ -147,7 +149,7 @@ def quick(
     Args:
         job: Job class or job name string (e.g., "continual/train/abcd")
         name: Name of the job run
-        out_path: Output path for job results
+        out_path: Output path for job results. If None, uses $THESEUS_ROOT or "."
         project: Optional project name
         group: Optional group name
 

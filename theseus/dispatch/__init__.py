@@ -4,12 +4,14 @@ Remote dispatch utilities for SSH and SLURM.
 
 from theseus.dispatch.ssh import (
     RunResult,
+    TunnelResult,
     hosts,
     run,
     run_many,
     copy_to,
     copy_from,
     is_reachable,
+    forward_port,
 )
 
 from theseus.dispatch.slurm import (
@@ -35,6 +37,8 @@ from theseus.dispatch.slurm import (
     node_info,
     nodes_info,
     available_gpus,
+    first_node_from_nodelist,
+    wait_until_running,
 )
 
 from theseus.dispatch.config import (
@@ -64,17 +68,19 @@ from theseus.dispatch.solve import (
     solve_or_raise,
 )
 
-from theseus.dispatch.dispatch import dispatch
+from theseus.dispatch.dispatch import dispatch, dispatch_repl, ReplResult
 
 __all__ = [
     # SSH
     "RunResult",
+    "TunnelResult",
     "hosts",
     "run",
     "run_many",
     "copy_to",
     "copy_from",
     "is_reachable",
+    "forward_port",
     # SLURM
     "SlurmJob",
     "SlurmResult",
@@ -98,6 +104,8 @@ __all__ = [
     "node_info",
     "nodes_info",
     "available_gpus",
+    "first_node_from_nodelist",
+    "wait_until_running",
     # Config
     "ClusterConfig",
     "PartitionConfig",
@@ -121,4 +129,6 @@ __all__ = [
     "solve_or_raise",
     # Dispatch
     "dispatch",
+    "dispatch_repl",
+    "ReplResult",
 ]

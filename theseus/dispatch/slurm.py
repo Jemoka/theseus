@@ -135,6 +135,7 @@ class SlurmJob:
     output: str | None = None  # stdout log path
     error: str | None = None  # stderr log path (defaults to output if not set)
     workdir: str | None = None
+    root_dir: str | None = None  # canonical root path for runtime env export
 
     # Environment
     env: dict[str, str] = field(default_factory=dict)
@@ -254,6 +255,11 @@ class SlurmJob:
         """Generate the bootstrap.sh script that runs on each node."""
         template = BOOTSTRAP_TEMPLATE.read_text()
         script = template
+
+        # Canonical runtime root available to user code and notebooks.
+        script = script.replace(
+            "__THESEUS_ROOT__", self.root_dir or "__THESEUS_RUNTIME_ROOT__"
+        )
 
         # JuiceFS mount
         if self.juicefs_mount:
@@ -919,6 +925,12 @@ def _expand_nodelist(nodelist: str) -> list[str]:
     return nodes
 
 
+def first_node_from_nodelist(nodelist: str) -> str | None:
+    """Get first hostname from a SLURM nodelist expression."""
+    nodes = _expand_nodelist(nodelist)
+    return nodes[0] if nodes else None
+
+
 def _parse_gres(cfg_tres: str, alloc_tres: str) -> list[NodeGres]:
     """Parse GRES from CfgTRES and AllocTRES strings."""
     import re
@@ -1255,4 +1267,23 @@ def wait(
         logger.debug(
             f"SLURM | job {job_id} state={st.job.state}, waiting {poll_interval}s..."
         )
+        time.sleep(poll_interval)
+
+
+def wait_until_running(
+    job_id: int,
+    host: str,
+    poll_interval: float = 10.0,
+    timeout: float | None = None,
+) -> tuple[str | None, StatusResult]:
+    """Wait until a job is running and return the first allocated hostname."""
+    import time
+
+    start = time.time()
+    while True:
+        st = status(job_id, host)
+        if st.job is not None and st.job.is_running:
+            return first_node_from_nodelist(st.job.nodelist), st
+        if timeout is not None and (time.time() - start) > timeout:
+            return None, st
         time.sleep(poll_interval)

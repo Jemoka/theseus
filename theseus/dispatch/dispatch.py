@@ -43,6 +43,10 @@ Usage:
 """
 
 import json
+import re
+import time
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
@@ -57,7 +61,7 @@ from theseus.dispatch.config import (
     RemoteInventory,
 )
 from theseus.dispatch.slurm import SlurmJob, SlurmResult, submit_packed
-from theseus.dispatch.ssh import RunResult, run
+from theseus.dispatch.ssh import RunResult, TunnelResult, forward_port, run
 from theseus.dispatch.solve import solve_or_raise, SolveResult
 from theseus.dispatch.sync import ship, ship_dirty
 from theseus.registry import JOBS
@@ -287,6 +291,7 @@ def _dispatch_slurm(
     job = SlurmJob(
         name=job_name,
         command="python _bootstrap_dispatch.py",
+        root_dir=cluster.root,
         partition=solve_result.partition,
         nodes=len(solve_result.result.hosts),
         gpus_per_node=gpus_per_node,
@@ -333,8 +338,6 @@ def _dispatch_plain(
     timeout: float,
 ) -> RunResult:
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
-    from datetime import datetime
-
     assert solve_result.host_config is not None
     assert not isinstance(solve_result.host_config, SlurmHostConfig)
 
@@ -354,6 +357,7 @@ def _dispatch_plain(
     job = SlurmJob(
         name="theseus-dispatch",
         command="python _bootstrap_dispatch.py",
+        root_dir=cluster.root,
         is_slurm=False,  # SSH mode - no SBATCH directives
         uv_groups=host_config.uv_groups,
         juicefs_mount=juicefs_mount,
@@ -420,3 +424,440 @@ def _dispatch_plain(
     else:
         logger.error(f"DISPATCH | failed to launch job: {result.stderr}")
     return result
+
+
+@dataclass
+class ReplResult:
+    """Result of launching an interactive Jupyter REPL session."""
+
+    ok: bool
+    is_slurm: bool
+    selected_host: str
+    ssh_host: str
+    log_path: str
+    job_id: int | None = None
+    allocated_hostname: str | None = None
+    remote_pid: int | None = None
+    remote_port: int | None = None
+    token: str | None = None
+    remote_url: str | None = None
+    local_port: int | None = None
+    local_url: str | None = None
+    tunnel_pid: int | None = None
+    stderr: str = ""
+
+
+def _parse_jupyter_startup(text: str) -> tuple[str | None, int | None, str | None]:
+    """Extract URL, port, and token from Jupyter startup logs."""
+    urls = [u.rstrip(".,);]") for u in re.findall(r"https?://[^\s]+", text)]
+    remote_url = None
+    token = None
+
+    # Prefer a lab URL that explicitly carries token query params.
+    for candidate in urls:
+        if "/lab" in candidate and "token=" in candidate:
+            remote_url = candidate
+            token_match = re.search(r"[?&]token=([^&\s]+)", candidate)
+            if token_match:
+                token = token_match.group(1)
+            break
+
+    # Fall back to first non-localhost lab URL, then any lab URL.
+    if remote_url is None:
+        for candidate in urls:
+            if "/lab" in candidate and "127.0.0.1" not in candidate:
+                remote_url = candidate
+                break
+    if remote_url is None:
+        for candidate in urls:
+            if "/lab" in candidate:
+                remote_url = candidate
+                break
+
+    port_match = re.search(r":(\d+)", remote_url or "")
+    remote_port = int(port_match.group(1)) if port_match else None
+
+    return remote_url, remote_port, token
+
+
+def _wait_for_jupyter_log(
+    host: str,
+    log_path: str,
+    timeout: float,
+    ssh_timeout: float,
+) -> tuple[str | None, int | None, str | None, str | None]:
+    """Poll a remote log file until Jupyter startup metadata appears."""
+    start = time.time()
+    missing_file_grace_until = start + min(timeout, 20.0)
+    while (time.time() - start) < timeout:
+        read_result = run(f"tail -n 200 {log_path}", host, timeout=ssh_timeout)
+        if not read_result.ok:
+            stderr = (read_result.stderr or "").strip()
+            if (
+                "No such file or directory" in stderr
+                and time.time() < missing_file_grace_until
+            ):
+                time.sleep(1.0)
+                continue
+            return (
+                None,
+                None,
+                None,
+                f"failed reading remote log '{log_path}' on {host}: {stderr or 'unknown error'}",
+            )
+
+        if read_result.stdout.strip():
+            text = read_result.stdout
+            remote_url, remote_port, token = _parse_jupyter_startup(text)
+            if remote_url or token:
+                return remote_url, remote_port, token, None
+
+            # bootstrap script emits this on termination; if seen before Jupyter URL,
+            # fail fast instead of waiting for timeout.
+            if "[bootstrap] cleaning up on" in text:
+                return (
+                    None,
+                    None,
+                    None,
+                    f"bootstrap exited before Jupyter became ready; check log {host}:{log_path}",
+                )
+        time.sleep(2.0)
+    return None, None, None, None
+
+
+def dispatch_repl(
+    spec: JobSpec,
+    hardware: HardwareRequest,
+    dispatch_config: DispatchConfig,
+    local_port: int,
+    dirty: bool = False,
+    check_availability: bool = True,
+    mem: str | None = None,
+    timeout: float = 60.0,
+    startup_timeout: float = 180.0,
+    slurm_wait_timeout: float | None = None,
+) -> ReplResult:
+    """Dispatch an interactive Jupyter session on selected infrastructure."""
+    solve_result = solve_or_raise(
+        hardware,
+        dispatch_config,
+        check_availability=check_availability,
+        timeout=timeout,
+    )
+    assert solve_result.result is not None
+    assert solve_result.host_name is not None
+    assert solve_result.host_config is not None
+
+    inventory = RemoteInventory(dispatch_config)
+    cluster_config = dispatch_config.clusters[solve_result.host_config.cluster]
+    cluster = inventory.get_cluster(solve_result.host_config.cluster)
+    work_dir = _get_work_dir(cluster.work, spec)
+    share_dir = cluster_config.share or f"{cluster.work}/.dispatch"
+
+    juicefs_mount: JuiceFSMount | None = None
+    if cluster_config.mount:
+        juicefs_mount = JuiceFSMount(
+            redis_url=cluster_config.mount,
+            mount_point=cluster.root,
+            cache_size=cluster_config.cache_size,
+            cache_dir=cluster_config.cache_dir,
+        )
+
+    if solve_result.is_slurm:
+        return _dispatch_repl_slurm(
+            solve_result=solve_result,
+            spec=spec,
+            dispatch_config=dispatch_config,
+            work_dir=work_dir,
+            share_dir=share_dir,
+            cluster=cluster,
+            juicefs_mount=juicefs_mount,
+            mem=mem,
+            dirty=dirty,
+            timeout=timeout,
+            startup_timeout=startup_timeout,
+            slurm_wait_timeout=slurm_wait_timeout,
+        )
+
+    return _dispatch_repl_plain(
+        solve_result=solve_result,
+        spec=spec,
+        work_dir=work_dir,
+        cluster=cluster,
+        juicefs_mount=juicefs_mount,
+        local_port=local_port,
+        dirty=dirty,
+        timeout=timeout,
+        startup_timeout=startup_timeout,
+    )
+
+
+def _dispatch_repl_plain(
+    solve_result: SolveResult,
+    spec: JobSpec,
+    work_dir: str,
+    cluster: Cluster,
+    juicefs_mount: JuiceFSMount | None,
+    local_port: int,
+    dirty: bool,
+    timeout: float,
+    startup_timeout: float,
+) -> ReplResult:
+    assert solve_result.host_name is not None
+    assert solve_result.host_config is not None
+    assert not isinstance(solve_result.host_config, SlurmHostConfig)
+
+    host_name = solve_result.host_name
+    host_config = solve_result.host_config
+    ssh_alias = host_config.ssh
+    log_dir = cluster.log_dir
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project = spec.project or "general"
+    group = spec.group or "default"
+    log_file = f"{log_dir}/{project}_{group}_{spec.name}_{timestamp}.log"
+
+    job = SlurmJob(
+        name="theseus-repl",
+        command=(
+            "--with jupyter jupyter lab --ip 0.0.0.0 --no-browser "
+            "--port 8888 --ServerApp.port_retries=50"
+        ),
+        root_dir=cluster.root,
+        is_slurm=False,
+        uv_groups=host_config.uv_groups,
+        juicefs_mount=juicefs_mount,
+        workdir=work_dir,
+    )
+    script = job.to_script()
+
+    if dirty:
+        ship_result = ship_dirty(ssh_alias, work_dir, timeout=timeout)
+    else:
+        ship_result = ship(ssh_alias, work_dir, timeout=timeout)
+    if not ship_result.ok:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            stderr=ship_result.stderr,
+        )
+
+    bootstrap_remote = f"{work_dir}/_bootstrap_repl.sh"
+    write_cmd = f"cat > {bootstrap_remote} << 'BOOTSTRAP_EOF'\n{script}BOOTSTRAP_EOF"
+    write_result = run(write_cmd, ssh_alias, timeout=timeout)
+    if not write_result.ok:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            stderr=write_result.stderr,
+        )
+
+    run_cmd = (
+        f"mkdir -p {log_dir} && "
+        f"chmod +x {bootstrap_remote} && "
+        f"nohup {bootstrap_remote} > {log_file} 2>&1 & echo $!"
+    )
+    launch_result = run(run_cmd, ssh_alias, timeout=timeout)
+    if not launch_result.ok:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            stderr=launch_result.stderr,
+        )
+
+    remote_pid = None
+    for line in reversed(launch_result.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.isdigit():
+            remote_pid = int(line)
+            break
+
+    remote_url, remote_port, token, log_wait_error = _wait_for_jupyter_log(
+        ssh_alias, log_file, timeout=startup_timeout, ssh_timeout=timeout
+    )
+    if log_wait_error:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            remote_pid=remote_pid,
+            stderr=log_wait_error,
+        )
+    if remote_port is None:
+        remote_port = 8888
+
+    tunnel_result: TunnelResult = forward_port(
+        ssh_alias, local_port=local_port, remote_port=remote_port
+    )
+    if not tunnel_result.ok:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            remote_pid=remote_pid,
+            remote_port=remote_port,
+            token=token,
+            remote_url=remote_url,
+            local_port=local_port,
+            stderr=tunnel_result.stderr or "failed to start SSH tunnel",
+        )
+
+    local_url = f"http://localhost:{local_port}/lab"
+    if token:
+        local_url = f"{local_url}?token={token}"
+
+    return ReplResult(
+        ok=True,
+        is_slurm=False,
+        selected_host=host_name,
+        ssh_host=ssh_alias,
+        log_path=log_file,
+        remote_pid=remote_pid,
+        remote_port=remote_port,
+        token=token,
+        remote_url=remote_url,
+        local_port=local_port,
+        local_url=local_url,
+        tunnel_pid=tunnel_result.pid,
+    )
+
+
+def _dispatch_repl_slurm(
+    solve_result: SolveResult,
+    spec: JobSpec,
+    dispatch_config: DispatchConfig,
+    work_dir: str,
+    share_dir: str,
+    cluster: Cluster,
+    juicefs_mount: JuiceFSMount | None,
+    mem: str | None,
+    dirty: bool,
+    timeout: float,
+    startup_timeout: float,
+    slurm_wait_timeout: float | None,
+) -> ReplResult:
+    from theseus.dispatch.slurm import wait_until_running
+
+    assert solve_result.host_name is not None
+    assert solve_result.host_config is not None
+    assert isinstance(solve_result.host_config, SlurmHostConfig)
+    assert solve_result.result is not None
+
+    host_name = solve_result.host_name
+    host_config = solve_result.host_config
+    ssh_alias = host_config.ssh
+
+    gpus_per_node = solve_result.result.total_chips // max(
+        len(solve_result.result.hosts), 1
+    )
+    chip_name = solve_result.result.chip.name if solve_result.result.chip else None
+    gpu_type = dispatch_config.gres_mapping.get(chip_name) if chip_name else None
+    job_mem = mem or host_config.mem
+
+    project = spec.project or "general"
+    group = spec.group or "default"
+    job_name = f"{project}-{group}-{spec.name}"
+    output_template = f"{cluster.log_dir}/{job_name}-%j.out"
+
+    job = SlurmJob(
+        name=job_name,
+        command=(
+            "--with jupyter jupyter lab --ip 0.0.0.0 --no-browser "
+            "--port 8888 --ServerApp.port_retries=50"
+        ),
+        root_dir=cluster.root,
+        partition=solve_result.partition,
+        nodes=len(solve_result.result.hosts),
+        gpus_per_node=gpus_per_node,
+        gpu_type=gpu_type,
+        mem=job_mem,
+        account=host_config.account,
+        qos=host_config.qos,
+        exclude=host_config.exclude,
+        uv_groups=host_config.uv_groups,
+        payload_extract_to=work_dir,
+        output=output_template,
+        juicefs_mount=juicefs_mount,
+        cpus_per_task=2,
+        time="14-0",
+    )
+
+    submit_result: SlurmResult = submit_packed(
+        job,
+        ssh_alias,
+        share_dir=share_dir,
+        dirty=dirty,
+        timeout=timeout,
+    )
+    if not submit_result.ok or submit_result.job_id is None:
+        stderr = submit_result.ssh_result.stderr if submit_result.ssh_result else ""
+        return ReplResult(
+            ok=False,
+            is_slurm=True,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=output_template,
+            stderr=stderr or "SLURM submit failed",
+        )
+
+    job_id = submit_result.job_id
+    allocated_hostname, _ = wait_until_running(
+        job_id,
+        ssh_alias,
+        poll_interval=5.0,
+        timeout=slurm_wait_timeout,
+    )
+    log_file = output_template.replace("%j", str(job_id))
+    if allocated_hostname is None:
+        return ReplResult(
+            ok=False,
+            is_slurm=True,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            job_id=job_id,
+            stderr=f"Timed out waiting for SLURM allocation for job {job_id}",
+        )
+
+    remote_url, remote_port, token, log_wait_error = _wait_for_jupyter_log(
+        ssh_alias, log_file, timeout=startup_timeout, ssh_timeout=timeout
+    )
+    if log_wait_error:
+        return ReplResult(
+            ok=False,
+            is_slurm=True,
+            selected_host=host_name,
+            ssh_host=ssh_alias,
+            log_path=log_file,
+            job_id=job_id,
+            allocated_hostname=allocated_hostname,
+            stderr=log_wait_error,
+        )
+    if remote_port is None:
+        remote_port = 8888
+
+    return ReplResult(
+        ok=True,
+        is_slurm=True,
+        selected_host=host_name,
+        ssh_host=ssh_alias,
+        log_path=log_file,
+        job_id=job_id,
+        allocated_hostname=allocated_hostname,
+        remote_port=remote_port,
+        token=token,
+        remote_url=remote_url,
+    )
