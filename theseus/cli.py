@@ -1008,6 +1008,12 @@ def repl(
     help="Number of tensor parallel shards for the model",
 )  # type: ignore[misc]
 @click.option(
+    "--target",
+    "uv_targets",
+    multiple=True,
+    help="Dependency target group (cpu/cuda12/cuda13/tpu); can repeat. Always includes 'all' by default.",
+)  # type: ignore[misc]
+@click.option(
     "--root",
     default=None,
     help="Cluster root path (optional; if omitted, generated script requires --root at runtime)",
@@ -1041,6 +1047,7 @@ def bootstrap(
     cache_dir: str | None,
     dirty: bool,
     overrides: tuple[str, ...],
+    uv_targets: tuple[str, ...],
 ) -> None:
     """Generate a standalone bootstrap script (like SLURM submit payload).
 
@@ -1060,11 +1067,6 @@ def bootstrap(
     jobs = _jobs_registry()
 
     custom_header = """#
-#
-# ░▀█▀░█░█░█▀▀░█▀▀░█▀▀░█░█░█▀▀
-# ░░█░░█▀█░█▀▀░▀▀█░█▀▀░█░█░▀▀█
-# ░░▀░░▀░▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀░▀▀▀
-#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as
 # published by the Free Software Foundation, either version 3 of the
@@ -1220,6 +1222,11 @@ def bootstrap(
     slurm_env: dict[str, str] = {}
     if require_root_at_runtime:
         slurm_env["THESEUS_DISPATCH_REQUIRE_ROOT"] = "1"
+    # Always include 'all'; append user targets if provided.
+    effective_uv_groups = ["all"]
+    if uv_targets:
+        effective_uv_groups.extend(list(uv_targets))
+
     slurm_job = SlurmJob(
         name=job_name,
         command="python _bootstrap_dispatch.py",
@@ -1229,6 +1236,7 @@ def bootstrap(
         payload_extract_to=work_dir,
         juicefs_mount=juicefs_mount,
         bootstrap_py=bootstrap_py_content,
+        uv_groups=effective_uv_groups,
     )
 
     if dirty:
