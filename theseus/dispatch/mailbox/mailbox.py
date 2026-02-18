@@ -344,6 +344,8 @@ def _proxy_read_text(spec: ProxySpec, path: str) -> str | None:
 def _proxy_write_text(spec: ProxySpec, path: str, text: str) -> None:
     parent = str(Path(path).parent)
     _proxy_mkdir(spec, parent)
+    _proxy_run(spec, f"touch {shlex.quote(path)} || true")
+    _proxy_run(spec, f"chmod 666 {shlex.quote(path)} || true")
     with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as tmp:
         tmp.write(text)
         local_path = Path(tmp.name)
@@ -355,7 +357,7 @@ def _proxy_write_text(spec: ProxySpec, path: str, text: str) -> None:
             )
     finally:
         local_path.unlink(missing_ok=True)
-    _proxy_run(spec, f"chmod 666 {shlex.quote(path)} || true")
+    _proxy_run(spec, f"chmod 777 {shlex.quote(path)} || true")
 
 
 def _proxy_read_json(spec: ProxySpec, path: str) -> dict[str, Any] | None:

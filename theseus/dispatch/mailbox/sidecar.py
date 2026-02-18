@@ -104,6 +104,20 @@ def _build_logger(workdir: Path) -> Callable[[str], None]:
     return _log
 
 
+def _dir_is_writable(path: Path) -> bool:
+    """Best-effort check that directory is writable for this process."""
+    if not path.exists() or not path.is_dir():
+        return False
+    try:
+        probe = path / f".theseus_write_probe_{os.getpid()}"
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("ok\n")
+        probe.unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
 _STOP = False
 
 
@@ -163,11 +177,16 @@ def main() -> int:
         try:
             p.mkdir(parents=True, exist_ok=True)
         except PermissionError:
-            log(f"mailbox path not writable ({p}); sync apply disabled")
-            _deactivate_active(
-                mailbox_root, job_id, str(workdir), "mailbox-permission-denied"
-            )
-            return 0
+            # Shared filesystems can deny mkdir/chmod on parent-owned paths while
+            # still allowing writes to existing subdirectories.
+            if _dir_is_writable(p):
+                log(f"mkdir denied for existing writable path {p}; continuing")
+            else:
+                log(f"mailbox path not writable ({p}); sync apply disabled")
+                _deactivate_active(
+                    mailbox_root, job_id, str(workdir), "mailbox-permission-denied"
+                )
+                return 0
         try:
             p.chmod(MAILBOX_DIR_MODE)
         except PermissionError:

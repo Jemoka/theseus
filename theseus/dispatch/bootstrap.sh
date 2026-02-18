@@ -28,27 +28,81 @@ echo "[bootstrap] CUDA Visible: ${CUDA_VISIBLE_DEVICES:-NOT_SET}"
 JUICEFS_MOUNT_POINT=""
 # Track work directory for cleanup
 BOOTSTRAP_WORKDIR=""
+MAIN_CHILD_PID=""
+CLEANUP_IN_PROGRESS=0
+MAIN_CHILD_TERM_GRACE_SECONDS="${THESEUS_MAIN_CHILD_TERM_GRACE_SECONDS:-3}"
+SIDECAR_TERM_GRACE_SECONDS="${THESEUS_SIDECAR_TERM_GRACE_SECONDS:-2}"
+CLEANUP_LINGER_SECONDS="${THESEUS_CLEANUP_LINGER_SECONDS:-10}"
 
-cleanup() {
-    local exit_code=$?
-    echo "[bootstrap] cleaning up on $(hostname) (exit code: $exit_code)..."
-
-    # Best-effort cleanup for synced REPL sidecar (in case wrapper trap didn't run).
-    local sidecar_pid_file=""
-    if [[ -n "$BOOTSTRAP_WORKDIR" ]]; then
-        sidecar_pid_file="$BOOTSTRAP_WORKDIR/.theseus_repl_sidecar.pid"
+terminate_repl_sidecar() {
+    set +e
+    local pidfile=""
+    if [[ -n "$BOOTSTRAP_WORKDIR" ]] && [[ -f "$BOOTSTRAP_WORKDIR/.theseus_repl_sidecar.pid" ]]; then
+        pidfile="$BOOTSTRAP_WORKDIR/.theseus_repl_sidecar.pid"
     elif [[ -f ".theseus_repl_sidecar.pid" ]]; then
-        sidecar_pid_file=".theseus_repl_sidecar.pid"
+        pidfile=".theseus_repl_sidecar.pid"
     fi
-    if [[ -n "$sidecar_pid_file" ]] && [[ -f "$sidecar_pid_file" ]]; then
-        local sidecar_pid
-        sidecar_pid="$(cat "$sidecar_pid_file" 2>/dev/null || true)"
-        if [[ -n "$sidecar_pid" ]]; then
-            echo "[bootstrap] stopping repl sidecar pid=$sidecar_pid..."
-            kill "$sidecar_pid" 2>/dev/null || true
-            wait "$sidecar_pid" 2>/dev/null || true
+    if [[ -n "$pidfile" ]]; then
+        local pid
+        pid="$(cat "$pidfile" 2>/dev/null || true)"
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "[bootstrap] stopping repl sidecar pid=$pid..."
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep "$SIDECAR_TERM_GRACE_SECONDS"
+            kill -KILL "$pid" 2>/dev/null || true
         fi
     fi
+    if command -v pkill &>/dev/null; then
+        pkill -TERM -f "theseus.dispatch.mailbox.sidecar" 2>/dev/null || true
+        sleep "$SIDECAR_TERM_GRACE_SECONDS"
+        pkill -KILL -f "theseus.dispatch.mailbox.sidecar" 2>/dev/null || true
+    fi
+    return 0
+}
+
+deactivate_mailbox_active() {
+    set +e
+    if [[ -z "${THESEUS_ROOT:-}" ]] || [[ -z "${SLURM_JOB_ID:-}" ]]; then
+        return 0
+    fi
+    local active="${THESEUS_ROOT}/mailbox/.active"
+    [[ -f "$active" ]] || return 0
+    local tmp="${active}.tmp.$$"
+    awk -v job="$SLURM_JOB_ID" '{ if ($0 ~ job) next; print }' "$active" > "$tmp" && mv "$tmp" "$active"
+    return 0
+}
+
+cleanup() {
+    local exit_code="${1:-$?}"
+    echo "[bootstrap] cleanup function entered (pre-guard) exit_code=${exit_code}"
+    if [[ "${CLEANUP_IN_PROGRESS}" -eq 1 ]]; then
+        echo "[bootstrap] cleanup already in progress; skipping duplicate call"
+        return 0
+    fi
+    CLEANUP_IN_PROGRESS=1
+    set +e
+
+    local now_ts
+    now_ts="$(date +'%Y-%m-%dT%H:%M:%S')"
+    echo "[bootstrap] cleanup enter host=$(hostname) ts=$now_ts exit_code=$exit_code"
+    echo "[bootstrap] cleanup step=sidecar-kill pidfile=${BOOTSTRAP_WORKDIR:-.}/.theseus_repl_sidecar.pid"
+
+    # Best-effort cleanup for synced REPL sidecar (in case wrapper trap didn't run).
+    terminate_repl_sidecar
+    echo "[bootstrap] cleanup step=sidecar-done"
+    deactivate_mailbox_active
+    echo "[bootstrap] cleanup step=mailbox-done"
+
+    # Try to stop main payload (if still alive)
+    if [[ -n "${MAIN_CHILD_PID:-}" ]]; then
+        if kill -0 "$MAIN_CHILD_PID" 2>/dev/null; then
+            echo "[bootstrap] stopping main pid=$MAIN_CHILD_PID..."
+            kill -TERM "$MAIN_CHILD_PID" 2>/dev/null || true
+            sleep "$MAIN_CHILD_TERM_GRACE_SECONDS"
+            kill -KILL "$MAIN_CHILD_PID" 2>/dev/null || true
+        fi
+    fi
+    echo "[bootstrap] cleanup step=main-done"
 
     # Unmount JuiceFS gracefully if mounted
     if [[ -n "$JUICEFS_MOUNT_POINT" ]] && mountpoint -q "$JUICEFS_MOUNT_POINT" 2>/dev/null; then
@@ -57,6 +111,7 @@ cleanup() {
         juicefs umount --force "$JUICEFS_MOUNT_POINT" 2>/dev/null || \
         echo "[bootstrap] WARNING: failed to unmount JuiceFS"
     fi
+    echo "[bootstrap] cleanup step=unmount-done mounted=$( mountpoint -q "$JUICEFS_MOUNT_POINT" 2>/dev/null && echo yes || echo no )"
 
     # Clean up work directory on success
     if [[ $exit_code -eq 0 ]] && [[ -n "$BOOTSTRAP_WORKDIR" ]] && [[ -d "$BOOTSTRAP_WORKDIR" ]]; then
@@ -65,12 +120,44 @@ cleanup() {
     elif [[ $exit_code -ne 0 ]] && [[ -n "$BOOTSTRAP_WORKDIR" ]]; then
         echo "[bootstrap] preserving work directory for debugging: $BOOTSTRAP_WORKDIR"
     fi
+    echo "[bootstrap] cleanup step=workdir-done" 
 
-    exit $exit_code
+    if [[ "$CLEANUP_DRAIN_SECONDS" -gt 0 ]]; then
+        echo "[bootstrap] drain wait ${CLEANUP_DRAIN_SECONDS}s to finish cleanup..."
+        sleep "$CLEANUP_DRAIN_SECONDS"
+    fi
+    echo "[bootstrap] cleanup step=exit"
+
+    return 0
+}
+
+handle_termination_signal() {
+    local signal_name="$1"
+    local signal_exit_code=143
+    set +e
+    # Prevent TERM storms from re-entering this handler.
+    trap '' TERM INT HUP
+    trap - EXIT
+    case "$signal_name" in
+        INT) signal_exit_code=130 ;;
+        HUP) signal_exit_code=129 ;;
+    esac
+    echo "[bootstrap] received $signal_name; shutting down..."
+    cleanup "$signal_exit_code"
+    if [[ -n "${MAIN_CHILD_PID:-}" ]] && kill -0 "$MAIN_CHILD_PID" 2>/dev/null; then
+        echo "[bootstrap] terminating main pid=$MAIN_CHILD_PID..."
+        kill -TERM "$MAIN_CHILD_PID" 2>/dev/null || true
+        sleep "$MAIN_CHILD_TERM_GRACE_SECONDS"
+        kill -KILL "$MAIN_CHILD_PID" 2>/dev/null || true
+    fi
+    exit "$signal_exit_code"
 }
 
 # Trap signals for cleanup on preemption/crash
-trap cleanup EXIT TERM INT HUP
+trap 'cleanup "$?"' EXIT
+trap 'handle_termination_signal TERM' TERM
+trap 'handle_termination_signal INT' INT
+trap 'handle_termination_signal HUP' HUP
 
 # ============================================================================
 # UV Installation
@@ -728,7 +815,15 @@ PY
 }
 
 if should_search_batch_size; then
-    run_command_with_autobatch_search
+    run_command_with_autobatch_search &
 else
-    bash -lc "$MAIN_COMMAND"
+    bash -lc "$MAIN_COMMAND" &
 fi
+
+MAIN_CHILD_PID=$!
+set +e
+wait "$MAIN_CHILD_PID"
+main_exit_code=$?
+set -e
+MAIN_CHILD_PID=""
+exit "$main_exit_code"
