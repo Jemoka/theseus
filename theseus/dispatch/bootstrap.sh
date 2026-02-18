@@ -12,6 +12,14 @@ if [ -f ~/.bashrc ]; then
     source ~/.bashrc
 fi
 
+error_handler() {
+    local ec=$?
+    local line=${BASH_LINENO[0]:-unknown}
+    local cmd=${BASH_COMMAND:-unknown}
+    echo "[bootstrap] ERROR exit=$ec line=$line cmd='$cmd'"
+}
+trap 'error_handler' ERR
+
 echo
 echo
 echo " ░▀█▀░█░█░█▀▀░█▀▀░█▀▀░█░█░█▀▀ "
@@ -32,6 +40,7 @@ MAIN_CHILD_PID=""
 CLEANUP_IN_PROGRESS=0
 MAIN_CHILD_TERM_GRACE_SECONDS="${THESEUS_MAIN_CHILD_TERM_GRACE_SECONDS:-3}"
 SIDECAR_TERM_GRACE_SECONDS="${THESEUS_SIDECAR_TERM_GRACE_SECONDS:-2}"
+CLEANUP_DRAIN_SECONDS="${THESEUS_CLEANUP_DRAIN_SECONDS:-0}"
 CLEANUP_LINGER_SECONDS="${THESEUS_CLEANUP_LINGER_SECONDS:-10}"
 
 terminate_repl_sidecar() {
@@ -74,6 +83,7 @@ deactivate_mailbox_active() {
 
 cleanup() {
     local exit_code="${1:-$?}"
+    trap - ERR
     echo "[bootstrap] cleanup function entered (pre-guard) exit_code=${exit_code}"
     if [[ "${CLEANUP_IN_PROGRESS}" -eq 1 ]]; then
         echo "[bootstrap] cleanup already in progress; skipping duplicate call"
@@ -257,7 +267,7 @@ resolve_runtime_root_tokens() {
     local value="$1"
     if [[ "$value" == *"$ROOT_PLACEHOLDER"* ]]; then
         if [[ -z "${THESEUS_DISPATCH_ROOT_OVERRIDE:-}" ]]; then
-            echo "[bootstrap] ERROR: this script requires --root PATH at runtime"
+            echo "[bootstrap] ERROR: this script requires --root PATH at runtime" 1>&2
             exit 2
         fi
         value="${value//$ROOT_PLACEHOLDER/${THESEUS_DISPATCH_ROOT_OVERRIDE}}"

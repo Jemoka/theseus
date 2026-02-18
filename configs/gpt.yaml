@@ -37,6 +37,4 @@ logging:
   validation_interval: 2048
   wandb: true
 job: gpt/train/pretrain
-request:
-  chip: ada6000
-  min_chips: 1
+
