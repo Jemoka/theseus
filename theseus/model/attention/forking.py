@@ -106,3 +106,17 @@ class ForkingAttention(RopeAttention):
             y = jax.nn.dot_product_attention(q, k, v, is_causal=True)
 
         return y
+
+    def postprocess_attn(
+        self,
+        y: jax.Array,
+        padding_mask: Optional[jax.Array],
+        deterministic: bool,
+        **kwargs: Any,
+    ) -> jax.Array:
+        token_index: jax.Array = kwargs.get("token_index")  # type: ignore
+
+        if padding_mask is not None:
+            padding_mask = jnp.take_along_axis(padding_mask, token_index, axis=-1)
+
+        return super().postprocess_attn(y, padding_mask, deterministic, **kwargs)

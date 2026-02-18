@@ -78,6 +78,21 @@ class SelfAttention(Module):
 
         return y
 
+    def postprocess_attn(
+        self,
+        y: jax.Array,
+        padding_mask: Optional[jax.Array],
+        deterministic: bool,
+        **kwargs: Any,
+    ) -> jax.Array:
+        if padding_mask is not None:
+            y = y * padding_mask[:, :, None, None].astype(y.dtype)
+
+        if not deterministic:
+            y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
+
+        return y
+
     @nn.compact
     def __call__(
         self,
@@ -116,12 +131,7 @@ class SelfAttention(Module):
             mask = None
 
         y = self.attn(q, k, v, mask, **kwargs)
-
-        if padding_mask is not None:
-            y = y * padding_mask[:, :, None, None].astype(y.dtype)
-
-        if not deterministic:
-            y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
+        y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
 
         y = y.reshape(B, T, C)
         y = self.c_proj(y)

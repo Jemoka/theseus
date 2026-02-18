@@ -23,12 +23,14 @@ from theseus.quick import quick
 from theseus.experiments.llama import PretrainLlama
 from theseus.experiments.forking import PretrainThoughtbubbles
 
+
+
 with quick(PretrainThoughtbubbles, "test") as j:
     j.config.architecture.n_layers = 8
-    j.config.architecture.n_embd = 512
-    j.config.training.per_device_batch_size = 1
-    r = job.train_step(job.state, (x[None, :, :],y[None, :, :],mask[None, :, :]), job.key, 1)
-mask[None, :, :]
+    j.config.architecture.n_embd = 128
+    j.config.training.per_device_batch_size = 32
+    j.config.logging.report_interval=2
+    j()
 
     job = j.create()
     x,y,mask = job.batch()

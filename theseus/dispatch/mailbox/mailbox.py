@@ -101,7 +101,7 @@ def _write_text_atomic(path: Path, text: str) -> None:
         tmp_path = Path(tmp.name)
     tmp_path.replace(path)
     try:
-        path.chmod(MAILBOX_FILE_MODE)
+        path.chmod(0o777)
     except Exception:
         pass
 
@@ -324,6 +324,7 @@ def _proxy_run(spec: ProxySpec, cmd: str, timeout: float = 30.0) -> str:
 
 def _proxy_mkdir(spec: ProxySpec, path: str) -> None:
     _proxy_run(spec, f"mkdir -p {shlex.quote(path)}")
+    _proxy_run(spec, f"chmod 777 {shlex.quote(path)} || true")
 
 
 def _proxy_read_text(spec: ProxySpec, path: str) -> str | None:
@@ -345,7 +346,7 @@ def _proxy_write_text(spec: ProxySpec, path: str, text: str) -> None:
     parent = str(Path(path).parent)
     _proxy_mkdir(spec, parent)
     _proxy_run(spec, f"touch {shlex.quote(path)} || true")
-    _proxy_run(spec, f"chmod 666 {shlex.quote(path)} || true")
+    _proxy_run(spec, f"chmod 777 {shlex.quote(path)} || true")
     with tempfile.NamedTemporaryFile(mode="w", delete=False, encoding="utf-8") as tmp:
         tmp.write(text)
         local_path = Path(tmp.name)
