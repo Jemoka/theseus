@@ -1,4 +1,4 @@
-# uv run theseus submit test_fork ./configs/forking.yaml -p playground --mem 128G
+# uv run theseus submit baseline_fork ./configs/forking.yaml -n 2 --chip h200 --mem 128G -p scratchbubbles -g e0
 
 architecture:
   rope: true
