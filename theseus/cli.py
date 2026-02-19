@@ -207,6 +207,42 @@ def configure(
     else:
         config = build(job_obj.config())
 
+    def _keep_known_keys(src: Any, template: Any) -> Any:
+        """Return a copy of src containing only keys present in template.
+
+        This lets us safely merge a previous config onto a new schema while
+        dropping fields the new job doesn't know about. For nested containers we
+        recurse, and for leaves we keep the src value.
+        """
+
+        from omegaconf import DictConfig, ListConfig
+
+        # If template is a dict-like config, only keep intersecting keys
+        if isinstance(template, DictConfig):
+            if not isinstance(src, (DictConfig, dict)):
+                return OmegaConf.create({})
+            kept: dict[str, Any] = {}
+            for key in template.keys():
+                if key in src:
+                    kept[key] = _keep_known_keys(src[key], template[key])
+            return OmegaConf.create(kept)
+
+        # If template is a list-like config, keep aligned positions only.
+        # When the new schema leaves the list empty, carry over the whole src list.
+        if isinstance(template, ListConfig):
+            if not isinstance(src, (ListConfig, list, tuple)):
+                return OmegaConf.create([])
+            if len(template) == 0:
+                return OmegaConf.create(list(src))
+            kept_list = []
+            for idx, tmpl_item in enumerate(template):
+                if idx < len(src):
+                    kept_list.append(_keep_known_keys(src[idx], tmpl_item))
+            return OmegaConf.create(kept_list)
+
+        # Leaf node: use value from src
+        return src
+
     # If previous config provided, merge it
     if previous:
         if not Path(previous).exists():
@@ -216,8 +252,9 @@ def configure(
             sys.exit(1)
 
         prev_config = OmegaConf.load(previous)
-        # Merge only fields that exist in the new config
-        config = OmegaConf.merge(config, OmegaConf.masked_copy(prev_config, config))
+        # Merge only fields that exist in the new config schema
+        safe_prev = _keep_known_keys(prev_config, config)
+        config = OmegaConf.merge(config, safe_prev)
 
     # Apply CLI overrides
     if overrides:

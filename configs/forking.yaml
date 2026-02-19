@@ -17,7 +17,7 @@ architecture:
   use_fork_channel: true
   vram_calib_factor: 1.0
 eval:
-  evaluations: []
+  evaluations: ["blimp"]
 optimization:
   weight_decay: 0.1
   beta1: 0.9
@@ -43,6 +43,3 @@ logging:
   validation_interval: 2048
   wandb: true
 job: thoughtbubbles/train/pretrain
-request:
-  chip: h200
-  min_chips: 2

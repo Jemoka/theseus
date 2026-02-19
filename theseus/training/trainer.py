@@ -117,6 +117,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             if optim_cfg is not None:
                 cfg.append(optim_cfg)
 
+        if isinstance(cls.schedule(), str):
+            _, sched_cfg = SCHEDULES.get(cls.schedule(), (None, None))  # type: ignore
+            if sched_cfg is not None:
+                cfg.append(sched_cfg)
+
         return cfg
 
     def _schedule(self) -> optax._src.base.Schedule:
