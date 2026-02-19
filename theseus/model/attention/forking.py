@@ -33,6 +33,7 @@ class ForkingAttention(RopeAttention):
 
     block_size: int = field("architecture/block_size", default=512)
     max_block_size: int = field("architecture/max_block_size", default=1024)
+    use_fork_channel: bool = field("architecture/use_fork_channel", default=True)
 
     def preprocess_qkv(
         self,
@@ -60,10 +61,11 @@ class ForkingAttention(RopeAttention):
             axis=-1,
         )
         q, k = self.rope(q, k, t=partial_rotations)
-        q = q.at[:, :, :, -1].set(jnp.ones_like(q[:, :, :, -1]))
-        k = k.at[:, :, :, -1].set(
-            jnp.repeat(cumulative_scores[:, None, :], k.shape[1], axis=1)
-        )
+        if self.use_fork_channel:
+            q = q.at[:, :, :, -1].set(jnp.ones_like(q[:, :, :, -1]))
+            k = k.at[:, :, :, -1].set(
+                jnp.repeat(cumulative_scores[:, None, :], k.shape[1], axis=1)
+            )
 
         return q, k, v
 
@@ -83,16 +85,26 @@ class ForkingAttention(RopeAttention):
                 "cumulative_scores and token_index must be provided for ForkingAttention"
             )
 
+        # Build attention bias/mask to exactly mirror the legacy implementation.
+        # When padding_mask is provided we convert the additive bias to a boolean mask;
+        # otherwise we pass an additive causal bias.
         if mask is not None:
             padding_mask = mask[:, 0, 0, :]
             padding_bias = key_padding_bias(padding_mask)
             padding_bias = jnp.take_along_axis(
                 padding_bias, token_index[:, None, None, :], axis=-1
             )
-            mask = (
+            attn_bias = (
                 causal_bias(self.max_block_size)[:, :, : q.shape[-2], : k.shape[-2]]
                 + padding_bias
             )
+            boolean_mask = attn_bias == 0  # broadcasted lower‑triangular keep mask
+            attn_bias = None  # use mask path below
+        else:
+            attn_bias = causal_bias(self.max_block_size)[
+                :, :, : q.shape[-2], : k.shape[-2]
+            ]
+            boolean_mask = None
 
         v = jnp.einsum("bnlh,bl->bnlh", v, jnp.exp(cumulative_scores))
 
@@ -100,10 +112,12 @@ class ForkingAttention(RopeAttention):
         k = k.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
         v = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
 
-        if mask is not None:
-            y = jax.nn.dot_product_attention(q, k, v, bias=mask, is_causal=True)
+        if boolean_mask is not None:
+            # Legacy path: boolean mask (no explicit causal flag).
+            y = jax.nn.dot_product_attention(q, k, v, mask=boolean_mask)
         else:
-            y = jax.nn.dot_product_attention(q, k, v, is_causal=True)
+            # Legacy path when no padding mask: additive causal bias.
+            y = jax.nn.dot_product_attention(q, k, v, bias=attn_bias)
 
         return y
 

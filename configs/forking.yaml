@@ -25,7 +25,7 @@ optimization:
   lr: 0.0003
 training:
   batch_size: 512
-  per_device_batch_size: 8
+  per_device_batch_size: -1
   tokens: 40000000000
   warmup_pct: 0.01
   decay_pct: 0.1
@@ -42,4 +42,6 @@ logging:
   checkpoint_interval: 16384
   validation_interval: 2048
   wandb: true
+request:
+  n_shards: 1
 job: thoughtbubbles/train/pretrain

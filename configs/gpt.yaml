@@ -45,4 +45,6 @@ logging:
   checkpoint_interval: 16384
   validation_interval: 2048
   wandb: true
+request:
+  n_shards: 1
 job: gpt/train/pretrain
