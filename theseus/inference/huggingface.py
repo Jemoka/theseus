@@ -45,19 +45,24 @@ class HFInferenceJob(InferenceJob[C, M], Generic[C, M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-    ) -> Tuple[jax.Array, jax.Array]:
+        mutable: Optional[list[str]] = None,
+        extra_variables: Optional[dict[str, Any]] = None,
+    ) -> Any:
         x, y, padding_mask = batch
         del key, deterministic
 
         buffers = getattr(state, "buffers", None)
-        variables = {"params": params}
+        variables: dict[str, Any] = {"params": params}
         if buffers is not None:
             variables["buffers"] = buffers
+        if extra_variables is not None:
+            variables.update(extra_variables)
 
-        logits, loss = state.apply_fn(
-            variables,
-            x,
-            y,
-            padding_mask=padding_mask,
-        )
-        return logits, loss
+        if mutable is not None:
+            (logits, loss), mutated = state.apply_fn(
+                variables, x, y, padding_mask=padding_mask, mutable=mutable
+            )
+            return (logits, loss), mutated
+        else:
+            logits, loss = state.apply_fn(variables, x, y, padding_mask=padding_mask)
+            return logits, loss

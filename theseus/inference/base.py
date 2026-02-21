@@ -97,25 +97,46 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-    ) -> Tuple[jax.Array, jax.Array]:
-        """Forward pass, if desired subclassess may override."""
+        mutable: Optional[list[str]] = None,
+        extra_variables: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        """Forward pass with optional mutable variable collections (e.g. KV cache).
 
+        Args:
+            mutable: List of mutable variable collections (e.g. ['cache']).
+                When provided, returns ((logits, loss), mutated_variables).
+            extra_variables: Additional variable collections to pass alongside params
+                (e.g. {'cache': cache_state} for decode steps).
+
+        Returns:
+            (logits, loss) when mutable is None.
+            ((logits, loss), mutated_variables) when mutable is provided.
+        """
         x, y, padding_mask = batch  # (B, T)
 
         dropout_key = None
         if not deterministic and key is not None:
             _, dropout_key = jax_random.split(key)
 
-        logits, loss = state.apply_fn(  # logits: (B, T, V), loss: scalar
-            {"params": params},
-            x,
-            y,
-            padding_mask=padding_mask,
-            deterministic=deterministic,
-            rngs={"dropout": dropout_key} if dropout_key is not None else {},
-        )
+        variables: dict[str, Any] = {"params": params}
+        if extra_variables is not None:
+            variables.update(extra_variables)
 
-        return logits, loss
+        kwargs: dict[str, Any] = {
+            "padding_mask": padding_mask,
+            "deterministic": deterministic,
+        }
+        if dropout_key is not None:
+            kwargs["rngs"] = {"dropout": dropout_key}
+
+        if mutable is not None:
+            (logits, loss), mutated = state.apply_fn(
+                variables, x, y, mutable=mutable, **kwargs
+            )
+            return (logits, loss), mutated
+        else:
+            logits, loss = state.apply_fn(variables, x, y, **kwargs)
+            return logits, loss
 
     @staticmethod
     def _init_template_state(model: M, block_size: int) -> train_state.TrainState:
@@ -292,12 +313,13 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             return tok, key
 
         B, T_in = input.shape
+        forward_fn = self.forward
 
         # Step 1: Prefill — initialize cache with full prompt
-        (prefill_logits, _), cache = state.apply_fn(
-            {"params": state.params},
-            input,
-            padding_mask=input_mask,
+        (prefill_logits, _), cache = forward_fn(
+            state,
+            state.params,
+            (input, None, input_mask),
             deterministic=True,
             mutable=["cache"],
         )
@@ -320,11 +342,13 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             cache_state, last_tok, out, offset, key = carry
             token_input = last_tok[:, None]  # (B, 1)
 
-            (logits, _), new_cache = state.apply_fn(
-                {"params": state.params, **cache_state},
-                token_input,
+            (logits, _), new_cache = forward_fn(
+                state,
+                state.params,
+                (token_input, None, None),  # type: ignore[arg-type]
                 deterministic=True,
                 mutable=["cache"],
+                extra_variables=cache_state,
             )
 
             next_logits = logits[:, -1, :]

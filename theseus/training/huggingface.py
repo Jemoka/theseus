@@ -3,7 +3,7 @@ Trainer helpers for HuggingFace-compatible Theseus models.
 """
 
 from dataclasses import dataclass
-from typing import Any, Generic, Optional, Tuple, Type, TypeVar, cast
+from typing import Any, Dict, Generic, Optional, Tuple, Type, TypeVar, cast
 
 import flax
 import jax
@@ -97,7 +97,9 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         batch: Tuple[jax.Array, jax.Array, jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-    ) -> Tuple[jax.Array, jax.Array]:
+        mutable: Optional[list[str]] = None,
+        extra_variables: Optional[Dict[str, Any]] = None,
+    ) -> Any:
         del key, deterministic
         buffers = getattr(state, "buffers", flax.core.freeze({}))
         logits, loss, _ = HFTrainer._forward_with_buffers(
@@ -107,6 +109,8 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
             batch=batch,
             mutable_buffers=False,
         )
+        if mutable is not None:
+            return (logits, loss), flax.core.freeze({})
         return logits, loss
 
     @classmethod

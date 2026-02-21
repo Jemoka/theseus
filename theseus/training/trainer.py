@@ -369,23 +369,34 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: Tuple[jax.Array, jax.Array, jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-    ) -> Tuple[jax.Array, jax.Array]:
+        mutable: Optional[list[str]] = None,
+        extra_variables: Optional[Dict[str, Any]] = None,
+    ) -> Any:
         x, y, padding_mask = batch  # (B, T)
 
         dropout_key = None
         if not deterministic and key is not None:
             _, dropout_key = jax_random.split(key)
 
-        logits, loss = state.apply_fn(  # logits: (B, T, V), loss: scalar
-            {"params": params},
-            x,
-            y,
-            padding_mask=padding_mask,
-            deterministic=deterministic,
-            rngs={"dropout": dropout_key} if dropout_key is not None else {},
-        )
+        variables: Dict[str, Any] = {"params": params}
+        if extra_variables is not None:
+            variables.update(extra_variables)
 
-        return logits, loss
+        kwargs: Dict[str, Any] = {
+            "padding_mask": padding_mask,
+            "deterministic": deterministic,
+        }
+        if dropout_key is not None:
+            kwargs["rngs"] = {"dropout": dropout_key}
+
+        if mutable is not None:
+            (logits, loss), mutated = state.apply_fn(
+                variables, x, y, mutable=mutable, **kwargs
+            )
+            return (logits, loss), mutated
+        else:
+            logits, loss = state.apply_fn(variables, x, y, **kwargs)
+            return logits, loss
 
     @classmethod
     def train_step(
@@ -424,7 +435,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     key=key,
                     deterministic=False,
                 )
-                return loss / accumulate_steps
+                return loss / accumulate_steps  # type: ignore[no-any-return]
 
             loss, grads = jax.value_and_grad(loss_fn)(
                 state.params
