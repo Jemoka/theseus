@@ -245,9 +245,11 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         temperature: float,
         top_p: float,
     ) -> jax.Array:
-        """Autoregressive generation using self.forward().
+        """Autoregressive generation with KV cache.
 
-        Uses self.forward() which subclasses may override. forward() always returns (logits, loss).
+        Uses KV cache for O(n) generation instead of O(n²).
+        Step 1: Prefill — run full prompt, initialize cache.
+        Step 2: Decode — one token at a time via jax.lax.scan.
 
         Args:
             state: Training state with params and apply_fn
@@ -263,67 +265,76 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         """
 
         def top_p_filter_logits(logits: jnp.ndarray, top_p: float) -> jnp.ndarray:
-            """Nucleus (top-p) filtering on logits."""
             if top_p >= 1.0:
                 return logits
-
             sort_idx = jnp.argsort(logits, axis=-1)[:, ::-1]
             sorted_logits = jnp.take_along_axis(logits, sort_idx, axis=-1)
             sorted_probs = jax.nn.softmax(sorted_logits, axis=-1)
             cumprobs = jnp.cumsum(sorted_probs, axis=-1)
-
             keep_sorted = cumprobs <= top_p
             keep_sorted = keep_sorted.at[:, 0].set(True)
-
             keep = jnp.zeros_like(logits, dtype=jnp.bool_)
             keep = keep.at[jnp.arange(logits.shape[0])[:, None], sort_idx].set(
                 keep_sorted
             )
+            return jnp.where(keep, logits, jnp.array(-jnp.inf, dtype=logits.dtype))
 
-            neg_inf = jnp.array(-jnp.inf, dtype=logits.dtype)
-            return jnp.where(keep, logits, neg_inf)
+        def sample_token(
+            logits: jnp.ndarray, key: jax.Array
+        ) -> tuple[jnp.ndarray, jax.Array]:
+            if temperature == 0.0:
+                return jnp.argmax(logits, axis=-1).astype(jnp.int32), key
+            key, subkey = jax_random.split(key)
+            scaled = logits / temperature
+            if top_p is not None:
+                scaled = top_p_filter_logits(scaled, float(top_p))
+            tok = jax.random.categorical(subkey, scaled, axis=-1).astype(jnp.int32)
+            return tok, key
 
         B, T_in = input.shape
-        T_total = num_tokens
-        seq = jnp.arange(num_tokens - T_in)
 
-        inp_buf = jnp.zeros((B, T_total), dtype=jnp.int32)
-        mask_buf = jnp.zeros((B, T_total), dtype=jnp.bool_)
-        inp_buf = inp_buf.at[:, :T_in].set(input.astype(jnp.int32))
-        mask_buf = mask_buf.at[:, :T_in].set(input_mask.astype(jnp.bool_))
+        # Step 1: Prefill — initialize cache with full prompt
+        (prefill_logits, _), cache = state.apply_fn(
+            {"params": state.params},
+            input,
+            padding_mask=input_mask,
+            deterministic=True,
+            mutable=["cache"],
+        )
 
-        forward_fn = self.forward
+        # Sample the first generated token from the last prompt position
+        last_logits = prefill_logits[:, -1, :]
+        first_token, key = sample_token(last_logits, key)
 
-        def reduce(carry: Any, step: Any) -> Any:
-            inputs, masks, key = carry
-            offset = T_in + step
+        # Build output buffer
+        out_buf = jnp.zeros((B, num_tokens), dtype=jnp.int32)
+        out_buf = out_buf.at[:, :T_in].set(input.astype(jnp.int32))
+        out_buf = out_buf.at[:, T_in].set(first_token)
 
-            # Call forward - returns (logits, loss)
-            logits, _ = forward_fn(
-                state,
-                state.params,
-                (inputs, None, masks),
-                None,
+        n_gen = num_tokens - T_in - 1  # remaining tokens after the first generated one
+        if n_gen <= 0:
+            return out_buf
+
+        # Step 2: Decode loop — one token at a time with cached KV
+        def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
+            cache_state, last_tok, out, offset, key = carry
+            token_input = last_tok[:, None]  # (B, 1)
+
+            (logits, _), new_cache = state.apply_fn(
+                {"params": state.params, **cache_state},
+                token_input,
                 deterministic=True,
+                mutable=["cache"],
             )
 
-            next_logits = logits[:, offset - 1, :]
+            next_logits = logits[:, -1, :]
+            next_token, key = sample_token(next_logits, key)
 
-            if temperature == 0.0:
-                next_token = jnp.argmax(next_logits, axis=-1).astype(jnp.int32)
-            else:
-                key, subkey = jax_random.split(key)
-                scaled = next_logits / temperature
-                if top_p is not None:
-                    scaled = top_p_filter_logits(scaled, float(top_p))
-                next_token = jax.random.categorical(subkey, scaled, axis=-1).astype(
-                    jnp.int32
-                )
+            out = out.at[:, offset].set(next_token)
+            return (new_cache, next_token, out, offset + 1, key), None
 
-            inputs = inputs.at[:, offset].set(next_token)
-            masks = masks.at[:, offset].set(True)
-
-            return (inputs, masks, key), None
-
-        (final_inputs, _, _), _ = jax.lax.scan(reduce, (inp_buf, mask_buf, key), seq)
-        return final_inputs
+        init_carry = (cache, first_token, out_buf, T_in + 1, key)
+        (_, _, final_out, _, _), _ = jax.lax.scan(
+            decode_step, init_carry, jnp.arange(n_gen)
+        )
+        return final_out

@@ -107,18 +107,17 @@ class ForkingAttention(RopeAttention):
         # Scale v by cumulative scores: (B, T, H, D) * (B, T) → (B, T, H, D)
         v = jnp.einsum("bthd,bt->bthd", v, jnp.exp(cumulative_scores))
 
-        # Transpose to (B, H, T, D) for dot_product_attention
-        q = q.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
-        k = k.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
-        v = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
+        # dot_product_attention expects (B, T, H, D) — same as our convention
+        q = q.astype(ATTN_DTYPE)
+        k = k.astype(ATTN_DTYPE)
+        v = v.astype(ATTN_DTYPE)
 
         if boolean_mask is not None:
             y = jax.nn.dot_product_attention(q, k, v, mask=boolean_mask)
         else:
             y = jax.nn.dot_product_attention(q, k, v, bias=attn_bias)
 
-        # Transpose back to (B, T, H, D)
-        return y.transpose(0, 2, 1, 3)
+        return y
 
     def postprocess_attn(
         self,

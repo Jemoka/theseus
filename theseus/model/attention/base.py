@@ -1,8 +1,11 @@
 """
-Base self-attention module with hook-based API.
+Base self-attention module with hook-based API and KV cache support.
 
 All Q/K/V hooks operate on (B, T, H, D) format.
-Subclasses override project/preprocess_qkv/build_mask/attn/postprocess_attn/output_proj.
+Subclasses override _project_inner/preprocess_qkv/build_mask/attn/postprocess_attn/output_proj.
+
+KV cache is activated by calling model.apply(..., mutable=['cache']).
+Without mutable=['cache'], the cache is a no-op (training mode).
 """
 
 import math
@@ -15,6 +18,7 @@ import flax.linen as nn
 from theseus.config import field
 from theseus.model.axes import Axes
 from theseus.model.module import Module
+from theseus.model.masks import cache_mask
 
 ATTN_DTYPE = jnp.bfloat16
 
@@ -26,6 +30,7 @@ class SelfAttention(Module):
     dropout: float = field("architecture/dropout")
 
     n_head: int = field("architecture/n_head", default=16)
+    block_size: int = field("architecture/block_size", default=512)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
@@ -61,8 +66,12 @@ class SelfAttention(Module):
             dtype=jnp.bfloat16,
         )
 
-    def project(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
-        """Project input to (q, k, v) each in (B, T, H, D) format."""
+    # ------------------------------------------------------------------
+    # Projection hooks
+    # ------------------------------------------------------------------
+
+    def _project_inner(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        """Raw Q/K/V projection. Override in subclasses. Returns (B, T, H, D)."""
         B, T, _C = x.shape
         qkv = self.c_attn(x)
         q, k, v = jnp.split(qkv, 3, axis=2)
@@ -70,6 +79,79 @@ class SelfAttention(Module):
         k = k.reshape(B, T, self.n_head, self.head_dim)
         v = v.reshape(B, T, self.n_head, self.head_dim)
         return q, k, v
+
+    def project(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        """Project input to (q, k, v). Calls _project_inner."""
+        return self._project_inner(x)
+
+    # ------------------------------------------------------------------
+    # KV cache
+    # ------------------------------------------------------------------
+
+    @nn.compact
+    def _cached_kv(
+        self, k: jax.Array, v: jax.Array
+    ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
+        """Update KV cache if active. k, v: (B, T, H, D).
+
+        Returns (k, v, cache_index_after_update) where cache_index is None
+        when cache is not active (training mode).
+        """
+        if not self.is_mutable_collection("cache"):
+            return k, v, None
+
+        # Cache is requested — create or update variables
+        # Allocate to block_size so we can decode up to that many tokens
+        B, _T, H, D = k.shape
+        cache_shape = (B, self.block_size, H, D)
+        is_initialized = self.variable(
+            "cache", "is_initialized", lambda: jnp.array(False)
+        )
+        cached_key = self.variable(
+            "cache", "cached_key", jnp.zeros, cache_shape, k.dtype
+        )
+        cached_value = self.variable(
+            "cache", "cached_value", jnp.zeros, cache_shape, v.dtype
+        )
+        cache_index = self.variable(
+            "cache", "cache_index", lambda: jnp.array(0, dtype=jnp.int32)
+        )
+
+        if is_initialized.value:
+            # Decode step: k, v are (B, 1, H, D) — single new token
+            cur_index = cache_index.value
+            batch_dims = k.ndim - 3  # typically 1 (B)
+            zero = jnp.array(0, dtype=jnp.int32)
+            indices: tuple[jax.Array, ...] = (zero,) * batch_dims + (
+                cur_index,
+                zero,
+                zero,
+            )
+            k = jax.lax.dynamic_update_slice(cached_key.value, k, indices)
+            v = jax.lax.dynamic_update_slice(cached_value.value, v, indices)
+            cached_key.value = k
+            cached_value.value = v
+            new_index = cur_index + 1
+            cache_index.value = new_index
+            return k, v, new_index
+        else:
+            # Prefill: k, v are (B, T_prefill, H, D) — write into the larger cache
+            T_prefill = k.shape[1]
+            batch_dims = k.ndim - 3
+            zero = jnp.array(0, dtype=jnp.int32)
+            indices = (zero,) * batch_dims + (zero, zero, zero)
+            new_cached_k = jax.lax.dynamic_update_slice(cached_key.value, k, indices)
+            new_cached_v = jax.lax.dynamic_update_slice(cached_value.value, v, indices)
+            cached_key.value = new_cached_k
+            cached_value.value = new_cached_v
+            cache_index.value = jnp.array(T_prefill, dtype=jnp.int32)
+            is_initialized.value = jnp.array(True)
+            # Return original k, v (not full cache) — prefill uses normal causal mask
+            return k, v, None
+
+    # ------------------------------------------------------------------
+    # Attention hooks
+    # ------------------------------------------------------------------
 
     def preprocess_qkv(
         self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
@@ -84,6 +166,9 @@ class SelfAttention(Module):
         **kwargs: Any,
     ) -> Optional[jax.Array]:
         """Construct attention mask. Returns bool mask or None."""
+        ci = kwargs.get("_cache_index")
+        if ci is not None:
+            return cache_mask(t, ci)
         if padding_mask is not None:
             return padding_mask[:, None, None, :]  # (B, 1, 1, T)
         return None
@@ -96,19 +181,18 @@ class SelfAttention(Module):
         mask: Optional[jax.Array] = None,
         **kwargs: Any,
     ) -> jax.Array:
-        """Core attention. Input q/k/v: (B, T, H, D). Output: (B, T, H, D)."""
-        # Transpose to (B, H, T, D) for dot_product_attention
-        q = q.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
-        k = k.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
-        v = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
+        """Core attention. Input q/k/v: (B, T_q/T_kv, H, D). Output: (B, T_q, H, D)."""
+        # dot_product_attention expects (B, T, H, D) — same as our convention
+        q = q.astype(ATTN_DTYPE)
+        k = k.astype(ATTN_DTYPE)
+        v = v.astype(ATTN_DTYPE)
 
         if mask is not None:
-            y = jax.nn.dot_product_attention(q, k, v, mask=mask, is_causal=True)
+            y = jax.nn.dot_product_attention(q, k, v, mask=mask)
         else:
             y = jax.nn.dot_product_attention(q, k, v, is_causal=True)
 
-        # Transpose back to (B, T, H, D)
-        return y.transpose(0, 2, 1, 3)
+        return y
 
     def postprocess_attn(
         self,
@@ -138,22 +222,22 @@ class SelfAttention(Module):
         deterministic: bool = False,
         **kwargs: Any,
     ) -> jax.Array:
-        """
-        Args:
-            x: Input tensor of shape (B, T, C).
-            padding_mask: Boolean tensor of shape (B, T) or (B, 1, T, T).
-                True for valid tokens, False for padding.
-            deterministic: If False, applies dropout.
-            **kwargs: Additional arguments passed to hooks.
-
-        Returns:
-            Output tensor of shape (B, T, C).
-        """
         B, T, C = x.shape
 
         q, k, v = self.project(x)
+
+        # For decode steps with cache, inject correct RoPE positions
+        if self.has_variable("cache", "is_initialized"):
+            is_init: Any = self.get_variable("cache", "is_initialized")
+            if is_init:
+                ci: Any = self.get_variable("cache", "cache_index")
+                kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
-        mask = self.build_mask(T, padding_mask, **kwargs)
+        k, v, cache_idx = self._cached_kv(k, v)
+
+        T_kv = k.shape[1]
+        mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
         y = self.attn(q, k, v, mask, **kwargs)
         y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
 

@@ -20,3 +20,11 @@ def combine_padding(mask: jnp.ndarray, padding: Optional[jnp.ndarray]) -> jnp.nd
     if padding is None:
         return mask
     return mask & padding[:, None, None, :]
+
+
+def cache_mask(max_length: int, cache_index: jnp.ndarray) -> jnp.ndarray:
+    """Boolean mask for KV cache: attend only to positions < cache_index.
+
+    Returns (1, 1, 1, max_length) bool mask, True=keep.
+    """
+    return (jnp.arange(max_length) < cache_index)[None, None, None, :]

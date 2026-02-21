@@ -14,7 +14,12 @@ from theseus.config import field
 from theseus.model.axes import Axes
 from theseus.model.attention.base import SelfAttention
 from theseus.model.layers.rope import RotaryPosEncoding
-from theseus.model.masks import causal_mask, sliding_window_mask, combine_padding
+from theseus.model.masks import (
+    causal_mask,
+    sliding_window_mask,
+    combine_padding,
+    cache_mask,
+)
 
 ATTN_DTYPE = jnp.float32
 
@@ -106,7 +111,7 @@ class GroupedSelfAttention(SelfAttention):
         x = jnp.broadcast_to(x, (b, t, kvh, self.n_rep, d))
         return x.reshape(b, t, kvh * self.n_rep, d)
 
-    def project(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+    def _project_inner(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
         b, t, _ = x.shape
         q = self.q_proj(x).reshape(b, t, self.n_head, self.head_dim)
         k = self.k_proj(x).reshape(b, t, self.n_kv_head_eff, self.head_dim)
@@ -127,6 +132,10 @@ class GroupedSelfAttention(SelfAttention):
         padding_mask: Optional[jax.Array],
         **kwargs: Any,
     ) -> Optional[jax.Array]:
+        # When cache is active, _cache_index is passed from __call__
+        ci = kwargs.get("_cache_index")
+        if ci is not None:
+            return cache_mask(t, ci)
         # Accept an already-prepared 4D mask (True=keep) for parity/debug
         if padding_mask is not None and padding_mask.ndim == 4:
             return padding_mask
@@ -146,7 +155,9 @@ class GroupedSelfAttention(SelfAttention):
         mask: Optional[jax.Array] = None,
         **kwargs: Any,
     ) -> jax.Array:
-        b, t = q.shape[:2]
+        b = q.shape[0]
+        t_q = q.shape[1]
+        t_kv = k.shape[1]
         qh = q.transpose(0, 2, 1, 3).astype(jnp.float32)
         kh = k.transpose(0, 2, 1, 3).astype(jnp.float32)
         vh = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
@@ -155,14 +166,14 @@ class GroupedSelfAttention(SelfAttention):
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)
 
         if mask is not None:
-            bias = jnp.where(jnp.broadcast_to(mask, (b, 1, t, t)), 0.0, -1e9).astype(
-                jnp.float32
-            )
+            bias = jnp.where(
+                jnp.broadcast_to(mask, (b, 1, t_q, t_kv)), 0.0, -1e9
+            ).astype(jnp.float32)
             scores = scores + bias
 
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
         y = jnp.einsum("bhtT,bhTd->bhtd", attn_w, vh.astype(attn_w.dtype))
-        return y.transpose(0, 2, 1, 3)  # back to (B, T, H, D)
+        return y.transpose(0, 2, 1, 3)  # back to (B, T_q, H, D)
 
     def postprocess_attn(
         self,

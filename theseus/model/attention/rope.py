@@ -18,5 +18,5 @@ class RopeAttention(SelfAttention):
     def preprocess_qkv(
         self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
-        q, k = self.rope(q, k)
+        q, k = self.rope(q, k, t=kwargs.get("positions"))
         return q, k, v
