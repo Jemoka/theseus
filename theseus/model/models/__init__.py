@@ -1,5 +1,6 @@
 from .base import GPT
 from .llama import Llama
 from .thoughtbubbles import Thoughtbubbles
+from .qwen import Qwen
 
-__all__ = ["GPT", "Llama", "Thoughtbubbles"]
+__all__ = ["GPT", "Llama", "Thoughtbubbles", "Qwen"]

@@ -23,16 +23,17 @@ from theseus.quick import quick
 from theseus.experiments.llama import PretrainLlama
 from theseus.experiments.forking import PretrainThoughtbubbles
 
-with quick(PretrainThoughtbubbles, "scratchbubbles") as j:
+with quick(PretrainThoughtbubbles, "test") as j:
     j.config.architecture.n_head = 16
     j.config.architecture.max_block_size = 1024
     j.config.architecture.block_size = 512
-    j.config.training.per_device_batch_size = 32
+    j.config.training.per_device_batch_size = 8
     j.config.logging.report_interval=32
     j.config.logging.checkpoint_interval=10240
     j.config.logging.validation_interval=2048
     j.config.eval.evaluations = ["blimp"]
-    j.save("./configs/"
+    j()
+    # j.save("./configs/"
     # j()
 
     # job = j.create()

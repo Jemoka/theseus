@@ -1,0 +1,22 @@
+import jax.numpy as jnp
+from typing import Optional
+
+
+def causal_mask(seq_len: int) -> jnp.ndarray:
+    """Boolean causal mask (1,1,T,T), True=keep."""
+    mask = jnp.tril(jnp.ones((seq_len, seq_len), dtype=jnp.bool_))
+    return mask[None, None, :, :]
+
+
+def sliding_window_mask(seq_len: int, window: int) -> jnp.ndarray:
+    """Sliding window causal mask (1,1,T,T)."""
+    idx = jnp.arange(seq_len)
+    dist = idx[None, :] - idx[:, None]
+    mask = (dist >= 0) & (dist < window)
+    return mask[None, None, :, :]
+
+
+def combine_padding(mask: jnp.ndarray, padding: Optional[jnp.ndarray]) -> jnp.ndarray:
+    if padding is None:
+        return mask
+    return mask & padding[:, None, None, :]

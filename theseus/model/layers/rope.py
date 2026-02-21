@@ -83,3 +83,51 @@ class RotaryPosEncoding:
     ) -> Tuple[jnp.ndarray, jnp.ndarray]:
         sin, cos = self.get(k, t)
         return self.apply_rotary_pos_emb(q, k, sin, cos, self.seq_dim, pos_offset)
+
+
+class QwenRotaryPosEncoding(RotaryPosEncoding):
+    """Qwen RoPE with HF parity (theta default 1e6)."""
+
+    def __init__(self, d_model: int, base: int = 1000000, seq_dim: int = 1):
+        super().__init__(d_model=d_model, base=base, seq_dim=seq_dim)
+
+    def get(
+        self, x: jnp.ndarray, t: Optional[jnp.ndarray] = None
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        # x: (B, T) positions
+        positions = x if t is None else t
+        if positions.ndim == 1:
+            positions = positions[None, :]
+        # positions: (B, T)
+        freqs = positions[..., None] * self.inv_freq[None, None, :]
+        emb = jnp.concatenate((freqs, freqs), axis=-1)  # (B,T,D)
+        cos = jnp.cos(emb)
+        sin = jnp.sin(emb)
+        return sin, cos
+
+    def __call__(
+        self,
+        q: jnp.ndarray,
+        k: jnp.ndarray,
+        pos_offset: int = 0,
+        t: Optional[jnp.ndarray] = None,
+    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        # q: (B,T,H,D)  k: (B,T,K,D)
+        b, tlen, h, d = q.shape
+        kvh = k.shape[2]
+        if t is None:
+            positions = jnp.arange(tlen, dtype=jnp.int32)[None, :].repeat(b, axis=0)
+        else:
+            positions = t
+            if positions.ndim == 1:
+                positions = positions[None, :].repeat(b, axis=0)
+        positions = positions + pos_offset
+        sin, cos = self.get(positions)
+        # Broadcast separately for q and k to avoid head misalignment when kv < q heads
+        sin_q = sin[:, :, None, :]  # (B,T,1,D)
+        cos_q = cos[:, :, None, :]
+        sin_k = sin[:, :, None, :].repeat(kvh, axis=2) if kvh != h else sin_q
+        cos_k = cos[:, :, None, :].repeat(kvh, axis=2) if kvh != h else cos_q
+        q_out = (q * cos_q) + (self.rotate_half(q) * sin_q)
+        k_out = (k * cos_k) + (self.rotate_half(k) * sin_k)
+        return q_out, k_out
