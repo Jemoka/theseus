@@ -5,7 +5,7 @@ import jax
 from theseus.config import field
 from theseus.model.module import Module
 from theseus.model.layers import RMSNorm, QwenMLP
-from theseus.model.attention.grouped_self_attention import GroupedSelfAttention
+from theseus.model.attention.grouped import GroupedSelfAttention
 
 
 class QwenDecoderBlock(Module):
