@@ -8,7 +8,7 @@ import flax.linen as nn
 from theseus.config import field
 from theseus.model.axes import Axes
 from theseus.model.module import Module
-from theseus.model.layers.rope import QwenRotaryPosEncoding
+from theseus.model.layers.rope import QwenRotaryPosEncoding, RotaryPosEncoding
 from theseus.model.masks import causal_mask, sliding_window_mask, combine_padding
 
 ATTN_DTYPE = jnp.float32
@@ -22,10 +22,14 @@ class GroupedSelfAttention(Module):
     dropout: float = field("architecture/dropout", default=0.0)
     attn_dropout: float = field("architecture/attn_dropout", default=0.0)
     rope_theta: float = field("architecture/rope_theta", default=1e6)
+    rope_mode: str = field(
+        "architecture/rope_mode", default="qwen"
+    )  # "qwen" or "standard"
     use_sliding_window: bool = field("architecture/use_sliding_window", default=False)
     sliding_window: int = field(
         "architecture/sliding_window", default=-1
     )  # -1 -> no sliding
+    attn_bias: bool = field("architecture/attn_bias", default=True)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
@@ -50,7 +54,7 @@ class GroupedSelfAttention(Module):
 
         self.q_proj = nn.Dense(
             self.n_head * head_dim,
-            use_bias=True,
+            use_bias=self.attn_bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
@@ -60,7 +64,7 @@ class GroupedSelfAttention(Module):
         )
         self.k_proj = nn.Dense(
             n_kv_head * head_dim,
-            use_bias=True,
+            use_bias=self.attn_bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
@@ -70,7 +74,7 @@ class GroupedSelfAttention(Module):
         )
         self.v_proj = nn.Dense(
             n_kv_head * head_dim,
-            use_bias=True,
+            use_bias=self.attn_bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
@@ -89,9 +93,10 @@ class GroupedSelfAttention(Module):
             dtype=ATTN_DTYPE,
         )
 
-        self.rope = QwenRotaryPosEncoding(
-            head_dim, base=int(self.rope_theta), seq_dim=1
+        rope_cls = (
+            QwenRotaryPosEncoding if self.rope_mode == "qwen" else RotaryPosEncoding
         )
+        self.rope = rope_cls(head_dim, base=int(self.rope_theta), seq_dim=1)
 
     def _repeat_kv(self, x: jnp.ndarray) -> jnp.ndarray:
         if self.n_rep == 1:

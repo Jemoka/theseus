@@ -108,3 +108,13 @@ class QwenMLP(MLP):
         if not deterministic and self.dropout > 0:
             h = nn.Dropout(rate=self.dropout)(h, deterministic=False)
         return h
+
+
+class LlamaMLP(QwenMLP):
+    n_embd: int = field("architecture/n_embd", default=4096)
+    n_layers: int = field("architecture/n_layers", default=32)
+    intermediate_size: int = field("architecture/intermediate_size", default=11008)
+    dropout: float = field("architecture/dropout", default=0.0)
+    bias: bool = field("architecture/bias", default=False)
+
+    # Inherits setup/forward from QwenMLP; shapes and activation (SiLU) match Llama
