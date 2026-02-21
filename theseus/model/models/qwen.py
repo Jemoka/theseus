@@ -200,11 +200,11 @@ class Qwen(Module):
 
         dummy = jnp.zeros((1, 1), dtype=jnp.int32)
         params = model.init(jax.random.PRNGKey(0), dummy)["params"]
-        params = _load_hf_qwen_params(params, hf_model.state_dict(), model.n_layers)
+        params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
         return params
 
 
-def _load_hf_qwen_params(params: Any, state_dict: Any, n_layers: int) -> Any:
+def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int) -> Any:
     from flax.core import freeze, unfreeze
 
     p = unfreeze(params)
