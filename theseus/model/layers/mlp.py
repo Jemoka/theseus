@@ -13,33 +13,54 @@ class MLP(Module):
     n_embd: int = field("architecture/n_embd")
     n_layers: int = field("architecture/n_layers")
     dropout: float = field("architecture/dropout")
+    intermediate_size: int = field("architecture/intermediate_size", default=-1)
     bias: bool = field("architecture/bias", default=True)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
         return []
 
-    def setup(self) -> None:
-        self.c_fc = nn.Dense(
-            4 * self.n_embd,
+    @property
+    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
+        return []
+
+    @property
+    def _compute_dtype(self) -> Any:
+        return jnp.bfloat16
+
+    @property
+    def _intermediate_features(self) -> int:
+        return self.intermediate_size if self.intermediate_size > 0 else 4 * self.n_embd
+
+    def _make_dense(
+        self,
+        features: int,
+        sharding_axes: Tuple[str, str],
+        stddev: float,
+    ) -> nn.Dense:
+        return nn.Dense(
+            features,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02),
-                (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
+                jax.nn.initializers.normal(stddev=stddev),
+                sharding_axes,
             ),
             param_dtype=jnp.float32,
-            dtype=jnp.bfloat16,
+            dtype=self._compute_dtype,
         )
 
-        self.c_proj = nn.Dense(
+    def setup(self) -> None:
+        init_std = 0.02
+        proj_std = 0.02 / math.sqrt(2 * self.n_layers)
+        self.c_fc = self._make_dense(
+            self._intermediate_features,
+            (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
+            init_std,
+        )
+        self.c_proj = self._make_dense(
             self.n_embd,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layers)),
-                (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.bfloat16,
+            (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
+            proj_std,
         )
 
     @nn.compact
@@ -62,41 +83,26 @@ class QwenMLP(MLP):
     bias: bool = field("architecture/bias", default=False)
 
     @property
-    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
-        return []
+    def _compute_dtype(self) -> Any:
+        return jnp.float32
 
     def setup(self) -> None:
         init_std = 0.02
         proj_std = 0.02 / math.sqrt(2 * self.n_layers)
-        self.gate = nn.Dense(
-            self.intermediate_size,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=init_std),
-                (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.float32,
+        self.gate = self._make_dense(
+            self._intermediate_features,
+            (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
+            init_std,
         )
-        self.up = nn.Dense(
-            self.intermediate_size,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=init_std),
-                (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.float32,
+        self.up = self._make_dense(
+            self._intermediate_features,
+            (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
+            init_std,
         )
-        self.down = nn.Dense(
+        self.down = self._make_dense(
             self.n_embd,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=proj_std),
-                (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.float32,
+            (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
+            proj_std,
         )
 
     @nn.compact
@@ -110,7 +116,7 @@ class QwenMLP(MLP):
         return h
 
 
-class NeoXMLP(Module):
+class NeoXMLP(MLP):
     n_embd: int = field("architecture/n_embd", default=2048)
     n_layers: int = field("architecture/n_layers", default=24)
     intermediate_size: int = field("architecture/intermediate_size", default=8192)
@@ -118,36 +124,22 @@ class NeoXMLP(Module):
     hidden_act: str = field("architecture/hidden_act", default="gelu")
     bias: bool = field("architecture/bias", default=True)
 
-    @classmethod
-    def components(cls) -> List[Type[Any]]:
-        return []
-
     @property
-    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
-        return []
+    def _compute_dtype(self) -> Any:
+        return jnp.float32
 
     def setup(self) -> None:
         init_std = 0.02
         proj_std = 0.02 / math.sqrt(2 * self.n_layers)
-        self.dense_h_to_4h = nn.Dense(
-            self.intermediate_size,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=init_std),
-                (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.float32,
+        self.dense_h_to_4h = self._make_dense(
+            self._intermediate_features,
+            (Axes.N_EMBD.value, Axes.N_EMBD_FF.value),
+            init_std,
         )
-        self.dense_4h_to_h = nn.Dense(
+        self.dense_4h_to_h = self._make_dense(
             self.n_embd,
-            use_bias=self.bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=proj_std),
-                (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
-            ),
-            param_dtype=jnp.float32,
-            dtype=jnp.float32,
+            (Axes.N_EMBD_FF.value, Axes.N_EMBD.value),
+            proj_std,
         )
 
     @nn.compact
