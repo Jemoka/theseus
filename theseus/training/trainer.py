@@ -52,7 +52,6 @@ class BaseTrainerConfig:
     per_device_batch_size: int = field(
         "training/per_device_batch_size", default=-1
     )  # -1 = auto-estimate based on VRAM
-    vram_calib_factor: float = field("architecture/vram_calib_factor", default=1.0)
     total_tokens: int = field("training/tokens", default=1_000_000_000)
 
     # Learning rate schedule (WSD: Warmup-Stable-Decay)

@@ -19,6 +19,7 @@ from theseus.base.job import ExecutionSpec
 class DatasetStyle(Enum):
     PADDED = "padded"
     PMD = "pmd"
+    CONTRASTIVE = "contrastive"
 
 
 class Dataset(ABC):
@@ -136,11 +137,27 @@ class Strategy:
         self.datasets: list[Dataset] = []
         for sampling in mixture:
             ds: Dataset
-            if sampling.style == DatasetStyle.PADDED or sampling.style == "PADDED":  # type: ignore
+            style_val = sampling.style
+            style_str = (
+                style_val.value
+                if isinstance(style_val, DatasetStyle)
+                else str(style_val)
+            )
+            style_lower = style_str.lower()
+
+            if style_lower == DatasetStyle.PADDED.value:
                 from theseus.training.flywheel.padded import PaddedDataset
 
                 ds = PaddedDataset(spec, block_size, sampling.name, sampling.suffix)
-            elif sampling.style == DatasetStyle.PMD or sampling.style == "PMD":
+            elif style_lower == DatasetStyle.CONTRASTIVE.value:
+                from theseus.training.flywheel.contrastive import (
+                    ContrastivePaddedDataset,
+                )
+
+                ds = ContrastivePaddedDataset(
+                    spec, block_size, sampling.name, sampling.suffix
+                )
+            elif style_lower == DatasetStyle.PMD.value:
                 from theseus.training.flywheel.pmd import MemmapDataset
 
                 ds = MemmapDataset(spec, block_size, sampling.name, sampling.suffix)
@@ -204,7 +221,9 @@ class Strategy:
         padding_mask = padding_mask[perm]
 
         # Validate batch: resample any all-zero rows
-        valid_rows = ~(x == 0).all(axis=-1)
+        # Consider a row valid if any token across non-batch dims is non-zero.
+        reduce_axes = tuple(range(1, x.ndim))
+        valid_rows = ~(x == 0).all(axis=reduce_axes)
         cut_batch_x = x[valid_rows]
         cut_batch_y = y[valid_rows]
         cut_batch_mask = padding_mask[valid_rows]

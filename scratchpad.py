@@ -23,6 +23,13 @@ from theseus.quick import quick
 from theseus.experiments.llama import PretrainLlama
 from theseus.experiments.forking import PretrainThoughtbubbles
 
+from theseus.base.job import ExecutionSpec
+
+spec = ExecutionSpec.local("/Users/houjun/theseus/")
+spec
+block_size = 1024
+
+
 # with quick(PretrainThoughtbubbles, "test") as j:
 #     j.config.architecture.n_head = 16
 #     j.config.architecture.max_block_size = 1024

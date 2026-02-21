@@ -14,6 +14,7 @@ from theseus.data.datasets import (
     ChatTemplate,
     ChatTemplateDataset,
     StringDataset,
+    ContrastiveDataset,
     StreamingStringDataset,
     StreamingChatTemplateDataset,
 )
@@ -23,6 +24,73 @@ from theseus.data.tokenizer import (
     encode_chat_template_with_mask,
     get_tokenizer,
 )
+
+
+def _encode_dataset_item(
+    item: Any,
+    is_chat: bool,
+    tokenizer: Any,
+    args: "TokenizeDatasetConfig | TokenizeContrastiveDatasetConfig",
+) -> tuple[list[int], list[bool] | None]:
+    """Encode a single dataset item into token ids (and optional mask)."""
+
+    if is_chat:
+        chat_item = cast(ChatTemplate, item)
+        if args.assistant_only:
+            ids, token_mask = encode_chat_template_with_mask(
+                chat_item, tokenizer, args.system_prompt
+            )
+        else:
+            ids = encode_chat_template(
+                chat_item,
+                tokenizer,
+                args.system_prompt,
+                tokenize=True,
+            )
+            token_mask = None
+    else:
+        string_item = cast(str, item)
+        ids = tokenizer.encode(string_item)
+        token_mask = None
+
+    return ids, token_mask
+
+
+def _build_padded_arrays(
+    ids: list[int],
+    token_mask: list[bool] | None,
+    block_size: int,
+    pad_token: int,
+    dtype: type[np.uint32] = np.uint32,
+) -> tuple[np.ndarray, np.ndarray, int, bool, bool]:
+    """
+    Truncate or pad ids and optional token mask to block_size.
+
+    Returns tokens array, mask array, original sequence length, truncated flag,
+    padded flag.
+    """
+
+    seq_len = len(ids)
+    truncated = seq_len > block_size
+    padded = seq_len < block_size
+
+    if truncated:
+        ids = ids[-block_size:]
+        if token_mask is not None:
+            token_mask = token_mask[-block_size:]
+
+    padding_len = block_size - len(ids)
+    padded_ids = [pad_token] * padding_len + ids
+
+    if token_mask is not None:
+        mask = [False] * padding_len + token_mask
+    else:
+        mask = [False] * padding_len + [True] * len(ids)
+
+    tokens_arr = np.array(padded_ids, dtype=dtype)
+    mask_arr = np.array(mask, dtype=np.bool_)
+
+    return tokens_arr, mask_arr, seq_len, truncated, padded
 
 
 # ========== Dataclass Configs ==========
@@ -64,6 +132,18 @@ class TokenizePretrainingDatasetConfig(TokenizeDatasetConfigBase):
     """Config for tokenizing pretraining datasets with streaming"""
 
     max_samples: int = field("data/max_samples", default=-1)
+
+
+@dataclass
+class TokenizeContrastiveDatasetConfig(TokenizeDatasetConfigBase):
+    """Config for contrastive dataset tokenization with fixed block size."""
+
+    split: str = field("data/split", default="train")
+    block_size: int = field("architecture/block_size", default=512)
+    pad_token: int = field("data/pad_token", default=0)
+    num_proc: int = field("system/num_proc", default=8)
+    system_prompt: str = field("data/system_prompt", default="")
+    assistant_only: bool = field("data/assistant_only", default=False)
 
 
 # ========== Dataset Preparation Jobs ==========
@@ -217,62 +297,22 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
             for arr_idx, dataset_idx in enumerate(split_indices):
                 item = dataset[dataset_idx]
 
-                # Encode based on type
-                ids: list[int]
-                # Per-token mask: True = compute loss on this token
-                token_mask: list[bool] | None = None
-                if is_chat:
-                    chat_item = cast(ChatTemplate, item)
-                    if args.assistant_only:
-                        ids, token_mask = encode_chat_template_with_mask(
-                            chat_item,
-                            tokenizer,
-                            args.system_prompt,
-                        )
-                    else:
-                        ids = encode_chat_template(
-                            chat_item,
-                            tokenizer,
-                            args.system_prompt,
-                            tokenize=True,
-                        )
-                else:
-                    # String dataset
-                    string_item = cast(str, item)
-                    ids = tokenizer.encode(string_item)
+                ids, token_mask = _encode_dataset_item(item, is_chat, tokenizer, args)
+                tokens, mask, seq_len, truncated, padded = _build_padded_arrays(
+                    ids, token_mask, args.block_size, args.pad_token, dtype
+                )
 
-                seq_len = len(ids)
+                tokens_arr[arr_idx] = tokens
+                mask_arr[arr_idx] = mask
 
                 # Update statistics
                 total_length += seq_len
                 max_length = max(max_length, seq_len)
                 min_length = min(min_length, seq_len)
-
-                if seq_len > args.block_size:
-                    # Left truncate: keep rightmost block_size tokens
+                if truncated:
                     num_truncated += 1
-                    ids = ids[-args.block_size :]
-                    tokens_arr[arr_idx] = np.array(ids, dtype=dtype)
-                    if token_mask is not None:
-                        token_mask = token_mask[-args.block_size :]
-                        mask_arr[arr_idx] = np.array(token_mask, dtype=np.bool_)
-                    else:
-                        mask_arr[arr_idx] = True
-                else:
-                    # Left pad with pad_token
-                    if seq_len < args.block_size:
-                        num_padded += 1
-                    padding_len = args.block_size - seq_len
-                    padded = [args.pad_token] * padding_len + ids
-                    tokens_arr[arr_idx] = np.array(padded, dtype=dtype)
-
-                    if token_mask is not None:
-                        # assistant_only: pad=False, then per-token assistant mask
-                        mask = [False] * padding_len + token_mask
-                    else:
-                        # Default: False for padding, True for real tokens
-                        mask = [False] * padding_len + [True] * seq_len
-                    mask_arr[arr_idx] = np.array(mask, dtype=np.bool_)
+                if padded:
+                    num_padded += 1
 
                 # Periodic logging
                 if (arr_idx + 1) % log_interval == 0:
@@ -319,6 +359,220 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
         with open(os.path.join(output_path, "config.json"), "w") as f:
             json.dump(asdict(args), f, indent=4)
         logger.info(f"Wrote config.json to {output_path}")
+
+
+class TokenizeContrastiveDatasetJob(BasicJob[TokenizeContrastiveDatasetConfig]):
+    """
+    Prepare contrastive datasets with fixed block size.
+    Creates .pos.bin/.pos.bin.mask and .neg.bin/.neg.bin.mask files for train/val.
+    """
+
+    @classmethod
+    def config(cls) -> Type[TokenizeContrastiveDatasetConfig] | list[Type[Any]]:
+        return [TokenizeContrastiveDatasetConfig, TokenizerConfig]
+
+    @property
+    def done(self) -> bool:
+        args = self.args
+        data_dir = self.spec.hardware.hosts[0].cluster.data_dir
+        output_name = args.name if args.suffix == "" else f"{args.name}_{args.suffix}"
+        output_path = data_dir / output_name
+
+        config_path = output_path / "config.json"
+        if not config_path.exists():
+            return False
+
+        try:
+            with open(config_path) as f:
+                saved_config = json.load(f)
+            if saved_config != asdict(args):
+                return False
+
+            shape_path = output_path / "shape.json"
+            if not shape_path.exists():
+                return False
+            with open(shape_path) as f:
+                shapes = json.load(f)
+
+            for split_name, shape in shapes.items():
+                for side in ("pos", "neg"):
+                    tokens_file = output_path / f"{split_name}.{side}.bin"
+                    mask_file = output_path / f"{split_name}.{side}.bin.mask"
+                    if not (tokens_file.exists() and mask_file.exists()):
+                        return False
+
+                    expected_tokens_size = (
+                        shape[side][0] * shape[side][1] * np.uint32().itemsize
+                    )
+                    expected_mask_size = (
+                        shape[side][0] * shape[side][1] * np.bool_().itemsize
+                    )
+
+                    if tokens_file.stat().st_size != expected_tokens_size:
+                        return False
+                    if mask_file.stat().st_size != expected_mask_size:
+                        return False
+            return True
+        except Exception:
+            return False
+
+    def run(self) -> None:
+        args = self.args
+        if not self.main_process():
+            return
+
+        data_dir = self.spec.hardware.hosts[0].cluster.data_dir
+        output_name = args.name if args.suffix == "" else f"{args.name}_{args.suffix}"
+        output_path = data_dir / output_name
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        if self.done:
+            logger.info(f"Dataset already prepared at {output_path}")
+            with open(output_path / "shape.json") as f:
+                logger.info(f"Shapes: {json.load(f)}")
+            return
+
+        dataset_cls: Any = DATASETS[args.name]
+        dataset: ContrastiveDataset[Any] = dataset_cls(
+            split=args.split, config=args.config
+        )
+
+        tokenizer = get_tokenizer()
+
+        first_pos, _ = dataset[0]
+        is_chat = isinstance(first_pos, list)
+
+        dataset_size = len(dataset)
+        indices = list(range(dataset_size))
+        random.seed(args.seed)
+        random.shuffle(indices)
+
+        val_size = int(dataset_size * args.val_pct)
+        train_indices = indices[val_size:]
+        val_indices = indices[:val_size]
+        splits = {"train": train_indices, "val": val_indices}
+
+        shapes: dict[str, dict[str, list[int]]] = {}
+
+        dtype = np.uint32
+
+        for split_name, split_indices in splits.items():
+            num_samples = len(split_indices)
+
+            stats = {
+                "pos": {
+                    "truncated": 0,
+                    "padded": 0,
+                    "total_len": 0,
+                    "max": 0,
+                    "min": float("inf"),
+                },
+                "neg": {
+                    "truncated": 0,
+                    "padded": 0,
+                    "total_len": 0,
+                    "max": 0,
+                    "min": float("inf"),
+                },
+            }
+
+            pos_tokens = np.memmap(
+                os.path.join(output_path, f"{split_name}.pos.bin"),
+                dtype=dtype,
+                mode="w+",
+                shape=(num_samples, args.block_size),
+            )
+            pos_mask = np.memmap(
+                os.path.join(output_path, f"{split_name}.pos.bin.mask"),
+                dtype=np.bool_,
+                mode="w+",
+                shape=(num_samples, args.block_size),
+            )
+
+            neg_tokens = np.memmap(
+                os.path.join(output_path, f"{split_name}.neg.bin"),
+                dtype=dtype,
+                mode="w+",
+                shape=(num_samples, args.block_size),
+            )
+            neg_mask = np.memmap(
+                os.path.join(output_path, f"{split_name}.neg.bin.mask"),
+                dtype=np.bool_,
+                mode="w+",
+                shape=(num_samples, args.block_size),
+            )
+
+            logger.info(f"Processing {split_name} split: {num_samples} samples")
+            log_interval = max(1, num_samples // 20)
+
+            for arr_idx, dataset_idx in enumerate(split_indices):
+                pos_item, neg_item = dataset[dataset_idx]
+
+                pos_ids, pos_mask_list = _encode_dataset_item(
+                    pos_item, is_chat, tokenizer, args
+                )
+                p_tokens, p_mask, p_len, p_trunc, p_pad = _build_padded_arrays(
+                    pos_ids, pos_mask_list, args.block_size, args.pad_token, dtype
+                )
+                pos_tokens[arr_idx] = p_tokens
+                pos_mask[arr_idx] = p_mask
+                stats["pos"]["total_len"] += p_len
+                stats["pos"]["max"] = max(stats["pos"]["max"], p_len)
+                stats["pos"]["min"] = min(stats["pos"]["min"], p_len)
+                if p_trunc:
+                    stats["pos"]["truncated"] += 1
+                if p_pad:
+                    stats["pos"]["padded"] += 1
+
+                neg_ids, neg_mask_list = _encode_dataset_item(
+                    neg_item, is_chat, tokenizer, args
+                )
+                n_tokens, n_mask, n_len, n_trunc, n_pad = _build_padded_arrays(
+                    neg_ids, neg_mask_list, args.block_size, args.pad_token, dtype
+                )
+                neg_tokens[arr_idx] = n_tokens
+                neg_mask[arr_idx] = n_mask
+                stats["neg"]["total_len"] += n_len
+                stats["neg"]["max"] = max(stats["neg"]["max"], n_len)
+                stats["neg"]["min"] = min(stats["neg"]["min"], n_len)
+                if n_trunc:
+                    stats["neg"]["truncated"] += 1
+                if n_pad:
+                    stats["neg"]["padded"] += 1
+
+                if (arr_idx + 1) % log_interval == 0:
+                    logger.info(
+                        f"[{split_name}] {arr_idx + 1}/{num_samples} "
+                        f"({100 * (arr_idx + 1) / num_samples:.1f}%)"
+                    )
+
+            pos_tokens.flush()
+            pos_mask.flush()
+            neg_tokens.flush()
+            neg_mask.flush()
+
+            shapes[split_name] = {
+                "pos": [num_samples, args.block_size],
+                "neg": [num_samples, args.block_size],
+            }
+
+            for side in ("pos", "neg"):
+                total_len = stats[side]["total_len"]
+                avg = total_len / num_samples if num_samples > 0 else 0
+                logger.info(
+                    f"{split_name.upper()} {side}: shape=({num_samples}, {args.block_size}), "
+                    f"truncated={stats[side]['truncated']} ({100 * stats[side]['truncated'] / num_samples:.2f}%), "
+                    f"padded={stats[side]['padded']} ({100 * stats[side]['padded'] / num_samples:.2f}%), "
+                    f"len(min/avg/max)={stats[side]['min']}/{avg:.2f}/{stats[side]['max']}"
+                )
+
+        with open(os.path.join(output_path, "shape.json"), "w") as f:
+            json.dump(shapes, f, indent=4)
+
+        with open(os.path.join(output_path, "config.json"), "w") as f:
+            json.dump(asdict(args), f, indent=4)
+
+        logger.info(f"Wrote data to {output_path}")
 
 
 class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):

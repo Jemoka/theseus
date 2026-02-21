@@ -7,6 +7,8 @@ from theseus.data.datasets.siqa import SIQA
 from theseus.data.datasets.sst2 import SST2
 from theseus.data.datasets.winogrande import Winogrande
 
+from theseus.data.datasets.redcodegen.hardening import RCGHardeningDataset
+
 DATASETS = {
     "fever": FEVER,
     "fineweb": FineWeb,
@@ -16,4 +18,6 @@ DATASETS = {
     "siqa": SIQA,
     "sst2": SST2,
     "winogrande": Winogrande,
+    # project-specific datasets
+    "redcodegen/hardening": RCGHardeningDataset,
 }
