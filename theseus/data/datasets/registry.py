@@ -19,5 +19,5 @@ DATASETS = {
     "sst2": SST2,
     "winogrande": Winogrande,
     # project-specific datasets
-    "redcodegen/hardening": RCGHardeningDataset,
+    "redcodegen__hardening": RCGHardeningDataset,
 }
