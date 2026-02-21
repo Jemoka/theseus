@@ -1,7 +1,7 @@
 # theseus
 Have you ever wanted to train a language model from scratch but hate writing boilerplate? Previously the solution to this is to work at a frontier lab with Research Engineers:tm:.
 
-Now the solution is to make Jack:tm: do your research engineering. It will probably break a lot but what the heck at least I tried.
+Now the solution is to make Jack:tm: (and also a cast of frontier coding models) do your research engineering. It will probably break a lot but what the heck at least I tried.
 
 ## Download
 
