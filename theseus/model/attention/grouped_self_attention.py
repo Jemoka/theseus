@@ -1,5 +1,10 @@
+"""
+Grouped Query Attention (GQA) with RoPE, sliding window, and partial rotation support.
+Inherits from SelfAttention, overriding projection, RoPE, masking, and attention.
+"""
+
 import math
-from typing import Optional, Tuple, Any, List, Type
+from typing import Optional, Tuple, Any
 
 import jax
 import jax.numpy as jnp
@@ -7,14 +12,14 @@ import flax.linen as nn
 
 from theseus.config import field
 from theseus.model.axes import Axes
-from theseus.model.module import Module
+from theseus.model.attention.base import SelfAttention
 from theseus.model.layers.rope import RotaryPosEncoding
 from theseus.model.masks import causal_mask, sliding_window_mask, combine_padding
 
 ATTN_DTYPE = jnp.float32
 
 
-class GroupedSelfAttention(Module):
+class GroupedSelfAttention(SelfAttention):
     n_embd: int = field("architecture/n_embd", default=4096)
     n_layers: int = field("architecture/n_layers", default=32)
     n_head: int = field("architecture/n_head", default=32)
@@ -29,15 +34,8 @@ class GroupedSelfAttention(Module):
     sliding_window: int = field(
         "architecture/sliding_window", default=-1
     )  # -1 -> no sliding
+    bias: bool = field("architecture/bias", default=True)
     attn_bias: bool = field("architecture/attn_bias", default=True)
-
-    @classmethod
-    def components(cls) -> List[Type[Any]]:
-        return []
-
-    @property
-    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
-        return []
 
     def setup(self) -> None:
         assert self.n_embd % self.n_head == 0
@@ -108,74 +106,73 @@ class GroupedSelfAttention(Module):
         x = jnp.broadcast_to(x, (b, t, kvh, self.n_rep, d))
         return x.reshape(b, t, kvh * self.n_rep, d)
 
-    def _select_mask(
-        self, t: int, padding_mask: Optional[jnp.ndarray], sliding: bool
-    ) -> Optional[jnp.ndarray]:
+    def project(self, x: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        b, t, _ = x.shape
+        q = self.q_proj(x).reshape(b, t, self.n_head, self.head_dim)
+        k = self.k_proj(x).reshape(b, t, self.n_kv_head_eff, self.head_dim)
+        v = self.v_proj(x).reshape(b, t, self.n_kv_head_eff, self.head_dim)
+        return q, k, v
+
+    def preprocess_qkv(
+        self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
+    ) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        q, k = self.rope(q, k, t=kwargs.get("positions"))
+        k = self._repeat_kv(k)
+        v = self._repeat_kv(v)
+        return q, k, v
+
+    def build_mask(
+        self,
+        t: int,
+        padding_mask: Optional[jax.Array],
+        **kwargs: Any,
+    ) -> Optional[jax.Array]:
+        # Accept an already-prepared 4D mask (True=keep) for parity/debug
+        if padding_mask is not None and padding_mask.ndim == 4:
+            return padding_mask
+        sliding = kwargs.get("sliding", False)
         base = (
             sliding_window_mask(t, self.sliding_window)
             if sliding and self.sliding_window > 0
             else causal_mask(t)
         )
-        base = combine_padding(base, padding_mask)
-        return base  # boolean
+        return combine_padding(base, padding_mask)
 
-    @nn.compact
-    def __call__(
+    def attn(
         self,
-        x: jax.Array,
-        padding_mask: Optional[jax.Array] = None,
-        deterministic: bool = False,
-        sliding: bool = False,
-        positions: Optional[jnp.ndarray] = None,
+        q: jax.Array,
+        k: jax.Array,
+        v: jax.Array,
+        mask: Optional[jax.Array] = None,
+        **kwargs: Any,
     ) -> jax.Array:
-        b, t, _ = x.shape
-
-        q = self.q_proj(x)
-        k = self.k_proj(x)
-        v = self.v_proj(x)
-
-        q = q.reshape(b, t, self.n_head, self.head_dim)
-        k = k.reshape(b, t, self.n_kv_head_eff, self.head_dim)
-        v = v.reshape(b, t, self.n_kv_head_eff, self.head_dim)
-
-        # apply RoPE before kv repeat (B, T, H, D)
-        q, k = self.rope(q, k, t=positions)
-        qh = q.transpose(0, 2, 1, 3)  # (B, H, T, D)
-        kh = k.transpose(0, 2, 1, 3)
-
-        k = self._repeat_kv(k)
-        v = self._repeat_kv(v)
-
-        kh = k.transpose(0, 2, 1, 3)
+        b, t = q.shape[:2]
+        qh = q.transpose(0, 2, 1, 3).astype(jnp.float32)
+        kh = k.transpose(0, 2, 1, 3).astype(jnp.float32)
         vh = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
 
-        # Accept an already-prepared 4D mask (True=keep) to bypass internal construction (used for parity/debug).
-        mask: Optional[jnp.ndarray]
-        if padding_mask is not None and padding_mask.ndim == 4:
-            mask = padding_mask
-        else:
-            mask = self._select_mask(t, padding_mask, sliding)  # (1,1,T,T) or None
-        bias = None
-        if mask is not None:
-            # convert to additive bias float32 pre-softmax
-            mask = jnp.broadcast_to(mask, (b, 1, t, t))
-            bias = jnp.where(mask, 0.0, -1e9).astype(jnp.float32)
-
-        qh_f32 = qh.astype(jnp.float32)
-        kh_f32 = kh.astype(jnp.float32)
-        scores = jnp.einsum("bhtd,bhTd->bhtT", qh_f32, kh_f32)
+        scores = jnp.einsum("bhtd,bhTd->bhtT", qh, kh)
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)
-        if bias is not None:
+
+        if mask is not None:
+            bias = jnp.where(jnp.broadcast_to(mask, (b, 1, t, t)), 0.0, -1e9).astype(
+                jnp.float32
+            )
             scores = scores + bias
+
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
+        y = jnp.einsum("bhtT,bhTd->bhtd", attn_w, vh.astype(attn_w.dtype))
+        return y.transpose(0, 2, 1, 3)  # back to (B, T, H, D)
 
-        attn_out = jnp.einsum("bhtT,bhTd->bhtd", attn_w, vh.astype(attn_w.dtype))
+    def postprocess_attn(
+        self,
+        y: jax.Array,
+        padding_mask: Optional[jax.Array],
+        deterministic: bool,
+        **kwargs: Any,
+    ) -> jax.Array:
+        # No-op: dropout is handled in the shared __call__ after output_proj
+        return y
 
-        attn = attn_out.transpose(0, 2, 1, 3).reshape(b, t, self.n_embd)
-
-        attn = self.o_proj(attn)
-
-        if not deterministic and self.dropout > 0:
-            attn = nn.Dropout(rate=self.dropout)(attn, deterministic=False)
-
-        return attn
+    def output_proj(self, y: jax.Array) -> jax.Array:
+        return self.o_proj(y)
