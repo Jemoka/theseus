@@ -23,7 +23,7 @@ C: {answerC}
 
 
 class SIQA(ChatTemplateDataset):
-    def __init__(self, split: str = "train") -> None:
+    def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("lighteval/siqa", split=split)
 
     def __len__(self) -> int:

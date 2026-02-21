@@ -17,7 +17,7 @@ hypothesis: {hypothesis}
 
 
 class MNLI(ChatTemplateDataset):
-    def __init__(self, split: str = "train") -> None:
+    def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("nyu-mll/multi_nli", split=split)
 
     def __len__(self) -> int:

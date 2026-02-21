@@ -9,6 +9,8 @@ from .dataset import (
     StreamingChatTemplateDataset,
     PretrainingDataset,
     StreamingPretrainingDataset,
+    ContrastiveChatTemplateDataset,
+    ContrastiveDataset,
 )
 from .registry import DATASETS
 
@@ -24,4 +26,6 @@ __all__ = [
     "StreamingChatTemplateDataset",
     "PretrainingDataset",
     "StreamingPretrainingDataset",
+    "ContrastiveChatTemplateDataset",
+    "ContrastiveDataset",
 ]

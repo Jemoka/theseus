@@ -16,7 +16,7 @@ sentence: {sentence}
 
 
 class SST2(ChatTemplateDataset):
-    def __init__(self, split: str = "train") -> None:
+    def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("stanfordnlp/sst2", split=split)
 
     def __len__(self) -> int:

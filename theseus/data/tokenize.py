@@ -33,6 +33,7 @@ class TokenizeDatasetConfigBase:
     """Base config for dataset tokenization"""
 
     name: str = field("data/dataset")
+    config: str = field("data/config", default="")
     suffix: str = field("data/suffix", default="")
     val_pct: float = field("data/val_pct", default=0.05)
     seed: int = field("data/seed", default=2357)
@@ -152,7 +153,8 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
         # Get dataset from registry
         dataset_cls: Any = DATASETS[args.name]
         dataset: Union[ChatTemplateDataset, StringDataset] = dataset_cls(
-            split=args.split
+            split=args.split,
+            config=args.config,
         )
 
         # Get tokenizer from tokenizer/* config
@@ -356,7 +358,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
         # Get dataset from registry
         dataset_cls: Any = DATASETS[args.name]
         dataset: Union[StreamingChatTemplateDataset, StreamingStringDataset] = (
-            dataset_cls()
+            dataset_cls(config=args.config)
         )
 
         # Get tokenizer from tokenizer/* config

@@ -1,4 +1,4 @@
-from typing import Generic, TypeVar, List, Dict, Iterator
+from typing import Generic, TypeVar, List, Dict, Iterator, Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -39,6 +39,20 @@ class PretrainingDataset(StringDataset):
 
     ...
 
+
+####### contrastive datasets #######
+
+
+class ContrastiveDataset(ABC, Generic[C]):
+    @abstractmethod
+    def __getitem__(self, indx: int) -> Tuple[C, C]: ...
+
+    @abstractmethod
+    def __len__(self) -> int: ...
+
+
+ContrastiveStringDataset = ContrastiveDataset[str]
+ContrastiveChatTemplateDataset = ContrastiveDataset[ChatTemplate]
 
 ####### streaming datasets #######
 

@@ -25,7 +25,7 @@ Answer with only the letter (A, B, C, or D):""",
 
 
 class LongBench(ChatTemplateDataset):
-    def __init__(self, split: str = "train") -> None:
+    def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("THUDM/LongBench-v2", split="train")
 
     def __len__(self) -> int:

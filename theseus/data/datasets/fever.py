@@ -53,7 +53,7 @@ Claim: {claim}"""
 
 
 class FEVER(ChatTemplateDataset):
-    def __init__(self, split: str = "train") -> None:
+    def __init__(self, split: str = "train", config: str | None = None) -> None:
         if split == "train":
             url = TRAIN_URL
         elif split in ("dev", "validation"):
