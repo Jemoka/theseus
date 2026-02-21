@@ -183,12 +183,17 @@ class SelfAttention(Module):
     ) -> jax.Array:
         """Core attention. Input q/k/v: (B, T_q/T_kv, H, D). Output: (B, T_q, H, D)."""
         # dot_product_attention expects (B, T, H, D) — same as our convention
-        q = q.astype(ATTN_DTYPE)
-        k = k.astype(ATTN_DTYPE)
-        v = v.astype(ATTN_DTYPE)
+        # Compute attention in float32 for precision parity between
+        # full-sequence and cached single-token paths
+        q = q.astype(jnp.float32)
+        k = k.astype(jnp.float32)
+        v = v.astype(jnp.float32)
 
         if mask is not None:
-            y = jax.nn.dot_product_attention(q, k, v, mask=mask)
+            # Use additive bias (-inf for masked) instead of boolean mask
+            # to ensure identical DPA kernel path as is_causal=True
+            bias = jnp.where(mask, 0.0, -1e9)
+            y = jax.nn.dot_product_attention(q, k, v, bias=bias)
         else:
             y = jax.nn.dot_product_attention(q, k, v, is_causal=True)
 
