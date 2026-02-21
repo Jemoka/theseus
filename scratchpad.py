@@ -20,14 +20,18 @@ logger.add(
 from theseus.config import *
 from theseus.quick import quick
 
-from theseus.experiments.llama import PretrainLlama
-from theseus.experiments.forking import PretrainThoughtbubbles
+from theseus.experiments.models.gpt import PretrainGPT
 
-from theseus.base.job import ExecutionSpec
 
-spec = ExecutionSpec.local("/Users/houjun/theseus/")
-spec
-block_size = 1024
+with quick(PretrainGPT, "test") as j:
+    j.oco gtgr
+# from theseus.experiments.forking import PretrainThoughtbubbles
+
+# from theseus.base.job import ExecutionSpec
+
+# spec = ExecutionSpec.local("/Users/houjun/theseus/")
+# spec
+# block_size = 1024
 
 
 # with quick(PretrainThoughtbubbles, "test") as j:

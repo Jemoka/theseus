@@ -3,14 +3,14 @@ import wandb
 import numpy as np
 from pathlib import Path
 
-from typing import List, Tuple, Generic, TypeVar
+from typing import List, Generic, TypeVar
 from loguru import logger
 from jax.experimental import multihost_utils
 
 from dataclasses import dataclass
 from theseus.config import field
 from theseus.model.models import GPT
-from theseus.base import Topology, ExecutionSpec
+from theseus.base import Topology, ExecutionSpec, PyTree
 from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
@@ -112,15 +112,17 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
             )
             for i in self.strategies
         ]
+        val_batch_size = max(
+            self.per_device_batch_size * self.local_replicas,
+            (
+                self.args.validation_steps
+                // (self.per_device_batch_size * self.local_replicas)
+            )
+            * (self.per_device_batch_size * self.local_replicas),
+        )
         self.val_dls = [
             i.get_async_batches(
-                (
-                    (
-                        self.args.validation_steps
-                        // (self.per_device_batch_size * self.local_replicas)
-                    )
-                    * (self.per_device_batch_size * self.local_replicas)
-                ),
+                val_batch_size,
                 split="val",
                 deterministic_key=32,
             )
@@ -130,7 +132,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
         # Track current dataset index for logging switches
         self._current_dl_idx: int = 0
 
-    def batch(self, slice: str = "train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         """get the next batch from the dataset strategy"""
 
         # based on global_step_counter, get the right dl
@@ -181,16 +183,14 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
                 )
             self._current_dl_idx = dl_idx
 
-        x: np.ndarray
-        y: np.ndarray
-        padding_mask: np.ndarray
+        from typing import cast as type_cast
 
         if slice == "train":
-            x, y, padding_mask = self.train_dls[dl_idx].get_batch()
+            batch = self.train_dls[dl_idx].get_batch()
         else:
-            x, y, padding_mask = self.val_dls[dl_idx].get_batch()
+            batch = self.val_dls[dl_idx].get_batch()
 
-        return x, y, padding_mask
+        return type_cast(PyTree[np.ndarray], batch)
 
 
 class ABCDTrainer(ABCDBaseTrainer[ABCDConfig, GPT]):

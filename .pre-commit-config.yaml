@@ -21,4 +21,4 @@ repos:
            "--strict",
            "--ignore-missing-imports"
          ]
-         exclude: ^(examples/|tests/|playground\.py|scratchpad\.py|theseus/web/)
+         exclude: ^(examples/|tests/|playground\.py|scratchpad\.py|theseus/web/|scripts/)

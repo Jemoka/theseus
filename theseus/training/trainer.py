@@ -303,14 +303,16 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             self.per_device_batch_size * self.local_replicas * self.accumulate_steps,
             split="train",
         )
-        self.val_dl = self.strategy.get_async_batches(
+        val_batch_size = max(
+            self.per_device_batch_size * self.local_replicas,
             (
-                (
-                    self.args.validation_steps
-                    // (self.per_device_batch_size * self.local_replicas)
-                )
-                * (self.per_device_batch_size * self.local_replicas)
-            ),
+                self.args.validation_steps
+                // (self.per_device_batch_size * self.local_replicas)
+            )
+            * (self.per_device_batch_size * self.local_replicas),
+        )
+        self.val_dl = self.strategy.get_async_batches(
+            val_batch_size,
             split="val",
             deterministic_key=32,
         )
@@ -347,31 +349,59 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         return None
 
-    def batch(self, slice: str = "train") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         """get the next batch from the dataset strategy"""
-
-        x: np.ndarray
-        y: np.ndarray
-        padding_mask: np.ndarray
+        from typing import cast as type_cast
 
         if slice == "train":
-            x, y, padding_mask = self.train_dl.get_batch()
+            return type_cast(PyTree[np.ndarray], self.train_dl.get_batch())
         else:
-            x, y, padding_mask = self.val_dl.get_batch()
+            return type_cast(PyTree[np.ndarray], self.val_dl.get_batch())
 
-        return x, y, padding_mask
+    def _reshape_batch(self, batch: PyTree[np.ndarray]) -> PyTree[np.ndarray]:
+        """Reshape batch for sharding; assumes dict batches."""
+        from typing import cast as type_cast
+
+        per = self.per_device_batch_size * self.local_replicas
+
+        def _reshape(arr: np.ndarray) -> np.ndarray:
+            return arr.reshape(-1, per, arr.shape[-1])
+
+        return type_cast(PyTree[np.ndarray], jax.tree_util.tree_map(_reshape, batch))
+
+    def _to_global(self, batch: PyTree[np.ndarray]) -> PyTree[jax.Array]:
+        """Move host-local numpy batch to global arrays with standard sharding."""
+        from typing import cast as type_cast
+
+        pspec = P(None, Axis.BATCH, None)  # type: ignore
+
+        def convert(arr: np.ndarray) -> jax.Array:
+            result: jax.Array = multihost_utils.host_local_array_to_global_array(
+                arr,
+                self.mesh,
+                pspec,
+            )
+            return result
+
+        return type_cast(PyTree[jax.Array], jax.tree_util.tree_map(convert, batch))
 
     @staticmethod
     def forward(
         state: train_state.TrainState,
         params: PyTree[jax.Array],
-        batch: Tuple[jax.Array, jax.Array, jax.Array],
+        batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
         mutable: Optional[list[str]] = None,
         extra_variables: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        x, y, padding_mask = batch  # (B, T)
+        # batch is expected to be a dict with x, y, padding_mask keys
+        from typing import cast as type_cast
+
+        batch_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
+        x = batch_dict["x"]
+        y = batch_dict["y"]
+        padding_mask = batch_dict["padding_mask"]
 
         dropout_key = None
         if not deterministic and key is not None:
@@ -401,7 +431,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def train_step(
         cls,
         state: train_state.TrainState,
-        batch: Tuple[jax.Array, jax.Array, jax.Array],  # (S, B, T) each
+        batch: PyTree[jax.Array],  # (S, B, T) each
         key: jax.Array,
         accumulate_steps: int,
     ) -> Tuple[train_state.TrainState, jax.Array]:
@@ -420,17 +450,17 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         def train_eval(
             state: train_state.TrainState,
-            batch: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+            batch: PyTree[jax.Array],  # (B, T) each
             key: jax.Array,
             accumulate_steps: int,
         ) -> Tuple[jax.Array, PyTree[jax.Array]]:
-            x, y, padding_mask = batch  # (B, T)
+            payload = batch
 
             def loss_fn(params: PyTree[jax.Array]) -> jax.Array:
                 logits, loss = cls.forward(
                     state,
                     params,
-                    (x, y, padding_mask),
+                    payload,
                     key=key,
                     deterministic=False,
                 )
@@ -444,12 +474,12 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         def reduce(
             carry: Tuple[PyTree[jax.Array], jax.Array, jax.Array],
-            batch: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+            batch_item: Any,  # PyTree with single batch (B, T)
         ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, jax.Array], None]:
             grad, loss, key = carry
             key, subkey = jax_random.split(key)
             loss_single, grad_single = train_eval(
-                state, batch, subkey, accumulate_steps
+                state, batch_item, subkey, accumulate_steps
             )
 
             grad_acc = jax.tree_util.tree_map(lambda a, g: a + g, grad, grad_single)
@@ -471,7 +501,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def val_step(
         cls,
         state: train_state.TrainState,
-        batch: Tuple[jax.Array, jax.Array, jax.Array],  # (S, B, T) each
+        batch: PyTree[jax.Array],  # (S, B, T) each
     ) -> Tuple[jax.Array, jax.Array]:
         """Compute validation loss over S micro-batches.
 
@@ -483,28 +513,39 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         Returns:
             (loss_sum, token_count) for computing mean: loss = loss_sum / token_count
         """
-        x, y, padding_mask = batch  # (S, B, T)
 
         def reduce(
             carry: Tuple[jax.Array, jax.Array],
-            xb: Tuple[jax.Array, jax.Array, jax.Array],  # (B, T) each
+            xb_item: Any,  # PyTree with single batch item (B, T)
         ) -> Tuple[Tuple[jax.Array, jax.Array], None]:
-            loss_sum, count = carry
-            x_i, y_i, mask_i = xb  # (B, T)
+            from typing import cast as type_cast
 
+            loss_sum, count = carry
+
+            # Cast to PyTree for forward call
+            xb_pytree: PyTree[jax.Array] = type_cast(PyTree[jax.Array], xb_item)
+            params_pytree: PyTree[jax.Array] = type_cast(
+                PyTree[jax.Array], state.params
+            )
             _, loss_i = cls.forward(
-                state,
-                state.params,  # type: ignore
-                (x_i, y_i, mask_i),
-                deterministic=True,
+                state, params_pytree, xb_pytree, deterministic=True
             )  # loss_i: scalar
 
-            n = mask_i.sum()  # count real tokens: scalar
+            # Extract mask from batch (expected to be dict)
+            xb_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], xb_item)
+            mask = xb_dict.get("padding_mask")
+            if mask is None and "padding_mask_pos" in xb_dict:
+                mask = jnp.stack(
+                    [xb_dict["padding_mask_pos"], xb_dict["padding_mask_neg"]], axis=1
+                )
+            assert mask is not None, "No padding mask found in batch"
+
+            n = mask.sum()  # count real tokens: scalar
             return (loss_sum + loss_i * n, count + n), None
 
         # scan over S micro-batches, accumulating weighted loss
         (loss_sum, count), _ = jax.lax.scan(
-            reduce, (jnp.array(0.0), jnp.array(0)), (x, y, padding_mask)
+            reduce, (jnp.array(0.0), jnp.array(0)), batch
         )
 
         return loss_sum, count  # scalar arrays
@@ -512,31 +553,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def __make_valid_step(
         self,
     ) -> Callable[[train_state.TrainState], Tuple[float, Dict[str, float]]]:
-        x, y, padding_mask = self.batch("val")
-
-        # reshape into (steps, per_device_bs*replicas, seq_len) and shard the middle axis
-        x = x.reshape(-1, self.per_device_batch_size * self.local_replicas, x.shape[-1])
-        y = y.reshape(-1, self.per_device_batch_size * self.local_replicas, y.shape[-1])
-        padding_mask = padding_mask.reshape(
-            -1, self.per_device_batch_size * self.local_replicas, padding_mask.shape[-1]
-        )
-
-        x = multihost_utils.host_local_array_to_global_array(
-            x,
-            self.mesh,
-            P(None, Axis.BATCH, None),  # type: ignore
-        )
-        y = multihost_utils.host_local_array_to_global_array(
-            y,
-            self.mesh,
-            P(None, Axis.BATCH, None),  # type: ignore
-        )
-        padding_mask = multihost_utils.host_local_array_to_global_array(
-            padding_mask,
-            self.mesh,
-            P(None, Axis.BATCH, None),  # type: ignore
-        )
-
+        batch = self._to_global(self._reshape_batch(self.batch("val")))
         data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
 
         valid_step_inner_jit = jax.jit(
@@ -548,7 +565,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         def valid_step_wrapper(
             state: train_state.TrainState,
         ) -> Tuple[float, Dict[str, float]]:
-            loss_sum, count = valid_step_inner_jit(state, (x, y, padding_mask))
+            loss_sum, count = valid_step_inner_jit(state, batch)
             loss_sum = jax.device_get(loss_sum)
             count = jax.device_get(count)
 
@@ -573,7 +590,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     ) -> Callable[
         [
             train_state.TrainState,
-            Tuple[jax.Array, jax.Array, jax.Array],
+            PyTree[jax.Array],
             jax.Array,
             int,
         ],
@@ -600,48 +617,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             self.global_step_counter_, self.total_batches + 1, self.accumulate_steps
         ):
             logger.debug("DATA | {} | START", indx)
-            x, y, padding_mask = self.batch()
-            x = x.reshape(
-                -1,
-                self.local_replicas * self.per_device_batch_size,
-                self.args.block_size,
-            )
-            y = y.reshape(
-                -1,
-                self.local_replicas * self.per_device_batch_size,
-                self.args.block_size,
-            )
-            padding_mask = padding_mask.reshape(
-                -1,
-                self.local_replicas * self.per_device_batch_size,
-                self.args.block_size,
-            )
-            logger.debug("DATA | {} | PLACING", indx)
-
-            xa: jax.Array = multihost_utils.host_local_array_to_global_array(
-                x,
-                self.mesh,
-                P(None, Axis.BATCH, None),  # type: ignore
-            )
-            ya: jax.Array = multihost_utils.host_local_array_to_global_array(
-                y,
-                self.mesh,
-                P(None, Axis.BATCH, None),  # type: ignore
-            )
-            padding_mask_a: jax.Array = (
-                multihost_utils.host_local_array_to_global_array(
-                    padding_mask,
-                    self.mesh,
-                    P(None, Axis.BATCH, None),  # type: ignore
-                )
-            )
-
+            batch = self._to_global(self._reshape_batch(self.batch()))
             logger.debug("DATA | {} | PLACED", indx)
 
             self.dropout_key, subkey = jax_random.split(self.dropout_key)
             self.state, loss = train_step(
                 self.state,
-                (xa, ya, padding_mask_a),
+                batch,
                 subkey,
                 self.accumulate_steps,
             )

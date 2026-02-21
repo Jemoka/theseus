@@ -125,7 +125,7 @@ def write_and_load(td_path: Path, tokenizer_cfg: TokenizerConfig, label: str) ->
     ds = ContrastivePaddedDataset(
         spec, block_size=args.block_size, name=name, suffix=""
     )
-    x, y, m = ds.get_batch(batch_size=2, split="train")
+    direct_batch = ds.get_batch(batch_size=2, split="train")
 
     strat = Strategy(
         spec,
@@ -133,28 +133,34 @@ def write_and_load(td_path: Path, tokenizer_cfg: TokenizerConfig, label: str) ->
         mixture=[Sampling(name=name, rate=1.0, style=DatasetStyle.CONTRASTIVE)],
     )
     async_loader = strat.get_async_batches(batch_size=2, split="train")
-    ax, ay, am = async_loader.get_batch()
+    async_batch = async_loader.get_batch()
     async_loader.close()
 
     def decode_batch(batch_tokens: np.ndarray) -> list[str]:
         return [tokenizer.decode(row.tolist()) for row in batch_tokens]
 
-    direct_pos_dec = decode_batch(x)
-    direct_neg_dec = decode_batch(y)
-    async_pos_dec = decode_batch(ax)
-    async_neg_dec = decode_batch(ay)
+        direct_pos_dec = decode_batch(direct_batch["pos"])
+        direct_neg_dec = decode_batch(direct_batch["neg"])
+        async_pos_dec = decode_batch(async_batch["pos"])
+        async_neg_dec = decode_batch(async_batch["neg"])
 
-    print(f"[{label}] Direct decode pos:", direct_pos_dec)
-    print(f"[{label}] Direct decode neg:", direct_neg_dec)
-    print(f"[{label}] Async decode pos:", async_pos_dec)
-    print(f"[{label}] Async decode neg:", async_neg_dec)
-    print(f"[{label}] Mask shapes:", m.shape, am.shape)
+        print(f"[{label}] Direct decode pos:", direct_pos_dec)
+        print(f"[{label}] Direct decode neg:", direct_neg_dec)
+        print(f"[{label}] Async decode pos:", async_pos_dec)
+        print(f"[{label}] Async decode neg:", async_neg_dec)
+        print(
+            f"[{label}] Mask shapes:",
+            direct_batch["padding_mask_pos"].shape,
+            async_batch["padding_mask_pos"].shape,
+        )
 
-    assert m.shape == (2, 2, args.block_size)
-    assert am.shape == (2, 2, args.block_size)
-    assert all(s.strip() for s in direct_pos_dec + async_pos_dec)
-    assert all(s.strip() for s in direct_neg_dec + async_neg_dec)
-    print(f"[{label}] Round-trip decode sanity passed.")
+        assert direct_batch["padding_mask_pos"].shape == (2, args.block_size)
+        assert direct_batch["padding_mask_neg"].shape == (2, args.block_size)
+        assert async_batch["padding_mask_pos"].shape == (2, args.block_size)
+        assert async_batch["padding_mask_neg"].shape == (2, args.block_size)
+        assert all(s.strip() for s in direct_pos_dec + async_pos_dec)
+        assert all(s.strip() for s in direct_neg_dec + async_neg_dec)
+        print(f"[{label}] Round-trip decode sanity passed.")
 
 
 def main() -> None:

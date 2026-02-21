@@ -5,7 +5,7 @@ pmd.py
 
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional
 
 import jax
 import numpy as np
@@ -155,7 +155,7 @@ class MemmapDataset(Dataset):
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Dict[str, np.ndarray]:
         """Get batches using cache-optimal sequential block reads."""
         if not self.has_val and split == "val":
             split = "train"
@@ -185,7 +185,7 @@ class MemmapDataset(Dataset):
                 [data[i + 1 : i + 1 + block_size].astype(np.int64) for i in ix]
             )
             padding_mask = np.ones_like(x, dtype=np.bool_)
-            return x, y, padding_mask
+            return {"x": x, "y": y, "padding_mask": padding_mask}
 
         # Random access: use buffer for cache-optimal loading
         if split == "train":
@@ -266,4 +266,4 @@ class MemmapDataset(Dataset):
         y = np.stack(y_list)
         padding_mask = np.ones_like(x, dtype=np.bool_)
 
-        return x, y, padding_mask
+        return {"x": x, "y": y, "padding_mask": padding_mask}

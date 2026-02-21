@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from queue import Queue
 from threading import Thread
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, List
 
 import numpy as np
 from enum import Enum
@@ -29,16 +29,7 @@ class Dataset(ABC):
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Get a batch of data.
-
-        Returns:
-            Tuple of (x, y, padding_mask) where:
-                x: input tokens
-                y: target tokens
-                padding_mask: bool array, True for real tokens, False for padding
-        """
-        pass
+    ) -> Dict[str, np.ndarray]: ...
 
 
 @dataclass
@@ -59,20 +50,18 @@ class AsyncStrategy:
         """
         self.strategy = strategy
         self.kwargs = kwargs
-        self.queue: Queue[Tuple[np.ndarray, np.ndarray, np.ndarray] | Exception] = (
-            Queue(maxsize=512)
-        )
+        self.queue: Queue[Any] = Queue(maxsize=512)
         self.stop_flag = False
         self.error: Optional[Exception] = None
 
         self.thread = Thread(target=self._fetch_worker, daemon=True)
         self.thread.start()
 
-    def get_batch(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def get_batch(self) -> Any:
         """Get the next batch. Blocks until a batch is available.
 
         Returns:
-            Tuple of numpy arrays (x, y, padding_mask)
+            PyTree containing batch data
 
         Raises:
             Exception: If the worker thread encountered an error.
@@ -135,6 +124,7 @@ class Strategy:
 
         # Create dataset objects
         self.datasets: list[Dataset] = []
+        styles_lower: list[str] = []
         for sampling in mixture:
             ds: Dataset
             style_val = sampling.style
@@ -144,6 +134,7 @@ class Strategy:
                 else str(style_val)
             )
             style_lower = style_str.lower()
+            styles_lower.append(style_lower)
 
             if style_lower == DatasetStyle.PADDED.value:
                 from theseus.training.flywheel.padded import PaddedDataset
@@ -164,6 +155,10 @@ class Strategy:
             else:
                 raise ValueError(f"Unknown dataset style: {sampling.style}")
             self.datasets.append(ds)
+
+        self.is_contrastive = all(
+            s == DatasetStyle.CONTRASTIVE.value for s in styles_lower
+        )
 
     def get_async_batches(
         self,
@@ -186,7 +181,7 @@ class Strategy:
         split: str = "train",
         deterministic_key: Optional[int] = None,
         _recursion_depth: int = 0,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Dict[str, np.ndarray]:
         MAX_RECURSION_DEPTH = 10
 
         r = random if deterministic_key is None else random.Random(deterministic_key)
@@ -195,7 +190,9 @@ class Strategy:
         counts = self._sample_batch_distribution(batch_size, r)  # type: ignore
 
         # Gather samples from each dataset
-        x_parts, y_parts, mask_parts = [], [], []
+        x_parts: List[np.ndarray] = []
+        y_parts: List[np.ndarray] = []
+        mask_parts: List[np.ndarray] = []
         key_offset = 0
         for dataset, count in zip(self.datasets, counts):
             if count > 0:
@@ -204,10 +201,24 @@ class Strategy:
                     if deterministic_key is not None
                     else None
                 )
-                bx, by, bm = dataset.get_batch(count, split, det_key)
-                x_parts.append(bx)
-                y_parts.append(by)
-                mask_parts.append(bm)
+                batch = dataset.get_batch(count, split, det_key)
+                # dict batches only
+                if "pos" in batch:
+                    x_parts.append(np.asarray(batch["pos"]))
+                    y_parts.append(np.asarray(batch["neg"]))
+                    mask_parts.append(
+                        np.stack(
+                            [
+                                np.asarray(batch["padding_mask_pos"]),
+                                np.asarray(batch["padding_mask_neg"]),
+                            ],
+                            axis=1,
+                        )
+                    )
+                else:
+                    x_parts.append(np.asarray(batch["x"]))
+                    y_parts.append(np.asarray(batch["y"]))
+                    mask_parts.append(np.asarray(batch["padding_mask"]))
                 key_offset += 1
 
         x = np.concatenate(x_parts, axis=0)
@@ -220,22 +231,28 @@ class Strategy:
         y = y[perm]
         padding_mask = padding_mask[perm]
 
-        # Validate batch: resample any all-zero rows
-        # Consider a row valid if any token across non-batch dims is non-zero.
+        # Validate batch: resample any all-zero rows (consider pos and neg if present)
         reduce_axes = tuple(range(1, x.ndim))
-        valid_rows = ~(x == 0).all(axis=reduce_axes)
+        valid_rows = ~((x == 0).all(axis=reduce_axes) & (y == 0).all(axis=reduce_axes))
         cut_batch_x = x[valid_rows]
         cut_batch_y = y[valid_rows]
         cut_batch_mask = padding_mask[valid_rows]
 
         # Try to fill remaining batch, but stop after max depth
         if cut_batch_x.shape[0] < batch_size and _recursion_depth < MAX_RECURSION_DEPTH:
-            x_addn, y_addn, mask_addn = self.get_batch(
+            extra = self.get_batch(
                 batch_size - cut_batch_x.shape[0],
                 split,
                 deterministic_key + 1000 if deterministic_key is not None else None,
                 _recursion_depth=_recursion_depth + 1,
             )
+            x_addn = extra.get("x", extra.get("pos"))
+            y_addn = extra.get("y", extra.get("neg"))
+            mask_addn = extra.get("padding_mask")
+            if mask_addn is None and "padding_mask_pos" in extra:
+                mask_addn = np.stack(
+                    [extra["padding_mask_pos"], extra["padding_mask_neg"]], axis=1
+                )
             x = np.concatenate([cut_batch_x, x_addn], axis=0)
             y = np.concatenate([cut_batch_y, y_addn], axis=0)
             padding_mask = np.concatenate([cut_batch_mask, mask_addn], axis=0)
@@ -245,7 +262,17 @@ class Strategy:
             y = cut_batch_y
             padding_mask = cut_batch_mask
 
-        return (x, y, padding_mask)
+        if self.is_contrastive:
+            padding_mask_pos = padding_mask[:, 0]
+            padding_mask_neg = padding_mask[:, 1]
+            return {
+                "pos": x,
+                "neg": y,
+                "padding_mask_pos": padding_mask_pos,
+                "padding_mask_neg": padding_mask_neg,
+            }
+
+        return {"x": x, "y": y, "padding_mask": padding_mask}
 
     def _sample_batch_distribution(
         self, batch_size: int, r: random.Random

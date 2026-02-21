@@ -105,7 +105,7 @@ class ContrastivePaddedDataset(Dataset):
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """Get batches from contrastive padded dataset with masks."""
 
         if not self.has_val and split == "val":
@@ -173,6 +173,9 @@ class ContrastivePaddedDataset(Dataset):
         x_pos, mask_pos = pad_arr(x_pos, mask_pos)
         y_neg, mask_neg = pad_arr(y_neg, mask_neg)
 
-        padding_mask = np.stack([mask_pos, mask_neg], axis=1)  # (batch, 2, seq)
-
-        return x_pos, y_neg, padding_mask
+        return {
+            "pos": x_pos,
+            "neg": y_neg,
+            "padding_mask_pos": mask_pos,
+            "padding_mask_neg": mask_neg,
+        }

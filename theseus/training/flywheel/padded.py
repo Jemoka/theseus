@@ -6,7 +6,7 @@ Padded Dataset - datasets with pre-padded sequences and masks.
 import json
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 import jax
 import numpy as np
@@ -39,7 +39,7 @@ class PaddedDataset(Dataset):
         batch_size: int,
         split: str = "train",
         deterministic_key: Optional[int] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """get batches from padded dataset with masks"""
 
         if not self.has_val and split == "val":
@@ -136,4 +136,4 @@ class PaddedDataset(Dataset):
                 axis=-1,
             )
 
-        return x, y, padding_mask
+        return {"x": x, "y": y, "padding_mask": padding_mask}
