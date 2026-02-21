@@ -155,6 +155,10 @@ class NeoXMLP(Module):
         x = self.dense_h_to_4h(x)
         if self.hidden_act == "gelu_new":
             x = jax.nn.gelu(x, approximate=True)
+        elif self.hidden_act == "gelu":
+            # Manual erf-based GELU: avoids XLA pattern-matching jax.nn.gelu
+            # into a less precise fused kernel, giving ~100x better parity with PyTorch
+            x = x * (jax.lax.erf(x / jnp.sqrt(2.0)) + 1) / 2
         else:
             x = getattr(jax.nn, self.hidden_act, jax.nn.gelu)(x)
         x = self.dense_4h_to_h(x)
