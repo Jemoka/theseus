@@ -121,7 +121,6 @@ class NeoXMLP(MLP):
     n_layers: int = field("architecture/n_layers", default=24)
     intermediate_size: int = field("architecture/intermediate_size", default=8192)
     dropout: float = field("architecture/dropout", default=0.0)
-    hidden_act: str = field("architecture/hidden_act", default="gelu")
     bias: bool = field("architecture/bias", default=True)
 
     @property
@@ -145,14 +144,9 @@ class NeoXMLP(MLP):
     @nn.compact
     def __call__(self, x: jax.Array, deterministic: bool = False) -> jax.Array:
         x = self.dense_h_to_4h(x)
-        if self.hidden_act == "gelu_new":
-            x = jax.nn.gelu(x, approximate=True)
-        elif self.hidden_act == "gelu":
-            # Manual erf-based GELU: avoids XLA pattern-matching jax.nn.gelu
-            # into a less precise fused kernel, giving ~100x better parity with PyTorch
-            x = x * (jax.lax.erf(x / jnp.sqrt(2.0)) + 1) / 2
-        else:
-            x = getattr(jax.nn, self.hidden_act, jax.nn.gelu)(x)
+        # Manual erf-based GELU: avoids XLA pattern-matching jax.nn.gelu
+        # into a less precise fused kernel, giving ~100x better parity with PyTorch
+        x = x * (jax.lax.erf(x / jnp.sqrt(2.0)) + 1) / 2
         x = self.dense_4h_to_h(x)
         if not deterministic and self.dropout > 0:
             x = nn.Dropout(rate=self.dropout)(x, deterministic=False)

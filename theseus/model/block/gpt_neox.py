@@ -28,7 +28,6 @@ class GPTNeoXDecoderBlock(Module):
     )
     bias: bool = field("architecture/bias", default=True)
     attention_bias: bool = field("architecture/attention_bias", default=True)
-    hidden_act: str = field("architecture/hidden_act", default="gelu_new")
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
@@ -62,7 +61,6 @@ class GPTNeoXDecoderBlock(Module):
             n_layers=self.n_layers,
             intermediate_size=self.intermediate_size,
             dropout=self.dropout,
-            hidden_act=self.hidden_act,
             bias=self.bias,
         )
         self.dropout_layer = nn.Dropout(rate=self.dropout)

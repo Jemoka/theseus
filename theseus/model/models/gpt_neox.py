@@ -35,7 +35,6 @@ class GPTNeoX(Module):
     attn_dropout: float = field("architecture/attn_dropout", default=0.0)
     bias: bool = field("architecture/bias", default=True)
     attention_bias: bool = field("architecture/attention_bias", default=True)
-    hidden_act: str = field("architecture/hidden_act", default="gelu_new")
     use_parallel_residual: bool = field(
         "architecture/use_parallel_residual", default=True
     )
@@ -97,7 +96,6 @@ class GPTNeoX(Module):
                 use_parallel_residual=self.use_parallel_residual,
                 bias=self.bias,
                 attention_bias=self.attention_bias,
-                hidden_act=self.hidden_act,
             )
             for _ in range(self.n_layers)
         ]
@@ -204,7 +202,6 @@ class GPTNeoX(Module):
             attention_bias=cfg.attention_bias
             if hasattr(cfg, "attention_bias")
             else True,
-            hidden_act=cfg.hidden_act,
             use_parallel_residual=cfg.use_parallel_residual,
         )
 

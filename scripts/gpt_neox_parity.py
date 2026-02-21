@@ -72,7 +72,6 @@ def main() -> None:
         layer_norm_eps=cfg.layer_norm_eps,
         bias=True,
         attention_bias=cfg.attention_bias if hasattr(cfg, "attention_bias") else True,
-        hidden_act=cfg.hidden_act,
         use_parallel_residual=cfg.use_parallel_residual,
     )
 
