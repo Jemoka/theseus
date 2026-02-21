@@ -15,7 +15,7 @@ import difflib
 from loguru import logger
 from theseus.dispatch.ssh import run, copy_from, copy_to
 
-MAILBOX_FILE_MODE = 0o666
+MAILBOX_FILE_MODE = 0o777
 MAILBOX_DIR_MODE = 0o777
 
 

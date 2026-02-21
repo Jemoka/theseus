@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-MAILBOX_FILE_MODE = 0o666
+MAILBOX_FILE_MODE = 0o777
 MAILBOX_DIR_MODE = 0o777
 
 

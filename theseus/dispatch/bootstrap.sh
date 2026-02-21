@@ -74,10 +74,13 @@ deactivate_mailbox_active() {
     if [[ -z "${THESEUS_ROOT:-}" ]] || [[ -z "${SLURM_JOB_ID:-}" ]]; then
         return 0
     fi
-    local active="${THESEUS_ROOT}/mailbox/.active"
+    local mailbox_dir="${THESEUS_ROOT}/mailbox"
+    local active="${mailbox_dir}/.active"
     [[ -f "$active" ]] || return 0
     local tmp="${active}.tmp.$$"
     awk -v job="$SLURM_JOB_ID" '{ if ($0 ~ job) next; print }' "$active" > "$tmp" && mv "$tmp" "$active"
+    chmod 777 "$mailbox_dir" 2>/dev/null || true
+    chmod 777 "$active" 2>/dev/null || true
     return 0
 }
 
