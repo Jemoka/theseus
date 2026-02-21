@@ -20,6 +20,7 @@ from theseus.data.datasets import (
 from theseus.data.tokenizer import (
     TokenizerConfig,
     encode_chat_template,
+    encode_chat_template_with_mask,
     get_tokenizer,
 )
 
@@ -54,6 +55,7 @@ class TokenizeDatasetConfig(TokenizeDatasetConfigBase):
     pad_token: int = field("data/pad_token", default=0)
     num_proc: int = field("system/num_proc", default=8)
     system_prompt: str = field("data/system_prompt", default="")
+    assistant_only: bool = field("data/assistant_only", default=False)
 
 
 @dataclass
@@ -215,14 +217,23 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
 
                 # Encode based on type
                 ids: list[int]
+                # Per-token mask: True = compute loss on this token
+                token_mask: list[bool] | None = None
                 if is_chat:
                     chat_item = cast(ChatTemplate, item)
-                    ids = encode_chat_template(
-                        chat_item,
-                        tokenizer,
-                        args.system_prompt,
-                        tokenize=True,
-                    )
+                    if args.assistant_only:
+                        ids, token_mask = encode_chat_template_with_mask(
+                            chat_item,
+                            tokenizer,
+                            args.system_prompt,
+                        )
+                    else:
+                        ids = encode_chat_template(
+                            chat_item,
+                            tokenizer,
+                            args.system_prompt,
+                            tokenize=True,
+                        )
                 else:
                     # String dataset
                     string_item = cast(str, item)
@@ -240,7 +251,11 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
                     num_truncated += 1
                     ids = ids[-args.block_size :]
                     tokens_arr[arr_idx] = np.array(ids, dtype=dtype)
-                    mask_arr[arr_idx] = True
+                    if token_mask is not None:
+                        token_mask = token_mask[-args.block_size :]
+                        mask_arr[arr_idx] = np.array(token_mask, dtype=np.bool_)
+                    else:
+                        mask_arr[arr_idx] = True
                 else:
                     # Left pad with pad_token
                     if seq_len < args.block_size:
@@ -249,8 +264,12 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
                     padded = [args.pad_token] * padding_len + ids
                     tokens_arr[arr_idx] = np.array(padded, dtype=dtype)
 
-                    # Mask: False for padding, True for real tokens
-                    mask = [False] * padding_len + [True] * seq_len
+                    if token_mask is not None:
+                        # assistant_only: pad=False, then per-token assistant mask
+                        mask = [False] * padding_len + token_mask
+                    else:
+                        # Default: False for padding, True for real tokens
+                        mask = [False] * padding_len + [True] * seq_len
                     mask_arr[arr_idx] = np.array(mask, dtype=np.bool_)
 
                 # Periodic logging

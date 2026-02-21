@@ -324,6 +324,94 @@ def encode_chat_template(
     return tokens
 
 
+def encode_chat_template_with_mask(
+    template: ChatTemplate,
+    encoder: Tokenizer,
+    system_prompt: Optional[str] = None,
+) -> tuple[list[int], list[bool]]:
+    """Encode a chat template and return a per-token assistant mask.
+
+    Returns:
+        (ids, assistant_mask): ids is the token list, assistant_mask[i] is True
+        if token i belongs to an assistant turn (standard SFT masking).
+
+    Uses incremental encoding: encodes progressively longer prefixes of the
+    conversation to find exact token boundaries for each turn.
+    """
+    # Build the list of (turns_so_far, is_assistant_turn) pairs
+    turns: list[dict[str, str]] = []
+    if system_prompt and system_prompt != "":
+        turns.append({"role": "system", "content": system_prompt})
+
+    # Encode empty prefix to get the baseline length
+    all_turns_with_role: list[tuple[dict[str, str], bool]] = []
+    for turn in template:
+        entry = {"role": turn.role, "content": turn.message}
+        all_turns_with_role.append((entry, turn.role == "assistant"))
+
+    if isinstance(encoder, HuggingFaceTokenizer):
+
+        def _hf_encode_turns(turn_list: list[dict[str, str]]) -> list[int]:
+            """Encode a turn list via apply_chat_template, always returning a flat id list."""
+            result: Any = encoder._tokenizer.apply_chat_template(
+                turn_list, tokenize=True, add_generation_prompt=False
+            )
+            # BatchEncoding / dict-like → extract input_ids
+            if hasattr(result, "input_ids"):
+                result = result.input_ids
+            elif hasattr(result, "__getitem__") and not isinstance(
+                result, (list, tuple)
+            ):
+                result = result["input_ids"]
+            if hasattr(result, "tolist"):
+                result = result.tolist()
+            return [int(x) for x in result]
+
+        # Incremental encoding: encode progressively longer prefixes
+        # to find exact token boundaries per turn.
+        current_turns = list(turns)  # starts with system prompt if any
+        prev_len = 0
+
+        if current_turns:
+            prev_len = len(_hf_encode_turns(current_turns))
+
+        assistant_mask: list[bool] = [False] * prev_len
+
+        for entry, is_assistant in all_turns_with_role:
+            current_turns.append(entry)
+            ids_so_far = _hf_encode_turns(current_turns)
+            new_len = len(ids_so_far)
+            turn_token_count = new_len - prev_len
+            assistant_mask.extend([is_assistant] * turn_token_count)
+            prev_len = new_len
+
+        all_ids: list[int] = ids_so_far
+        return all_ids, assistant_mask
+
+    # ChatML (tiktoken) path: build incrementally by encoding each segment
+    assert encoder is not None
+
+    all_ids_chatml: list[int] = []
+    mask_chatml: list[bool] = []
+
+    # System prompt
+    if system_prompt and system_prompt != "":
+        seg = f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+        seg_ids = encoder.encode(seg, allowed_special="all")
+        all_ids_chatml.extend(seg_ids)
+        mask_chatml.extend([False] * len(seg_ids))
+
+    # Each turn
+    for turn in template:
+        seg = f"<|im_start|>{turn.role}\n{turn.message}<|im_end|>\n"
+        seg_ids = encoder.encode(seg, allowed_special="all")
+        is_assistant = turn.role == "assistant"
+        all_ids_chatml.extend(seg_ids)
+        mask_chatml.extend([is_assistant] * len(seg_ids))
+
+    return all_ids_chatml, mask_chatml
+
+
 def decode_chat_template(
     tokens: list[int] | str,
     encoder: Optional[Tokenizer] = None,
