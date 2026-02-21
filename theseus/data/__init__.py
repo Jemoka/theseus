@@ -1,7 +1,11 @@
 from typing import Any
 
 from .datasets import DATASETS
-from .tokenize import TokenizeBlockwiseDatasetJob, TokenizeVariableDatasetJob
+from .tokenize import (
+    TokenizeBlockwiseDatasetJob,
+    TokenizeVariableDatasetJob,
+    TokenizeContrastiveDatasetJob,
+)
 from .tokenizer import (
     Tokenizer,
     TokenizerConfig,
@@ -15,6 +19,7 @@ from theseus.job import BasicJob
 JOBS: dict[str, type[BasicJob[Any]]] = {
     "data/tokenize_blockwise_dataset": TokenizeBlockwiseDatasetJob,
     "data/tokenize_variable_dataset": TokenizeVariableDatasetJob,
+    "data/tokenize_contrastive_dataset": TokenizeContrastiveDatasetJob,
 }
 
 __all__ = [
