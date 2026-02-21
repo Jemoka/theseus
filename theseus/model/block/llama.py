@@ -39,7 +39,6 @@ class LlamaDecoderBlock(Module):
             dropout=self.dropout,
             attn_dropout=self.attn_dropout,
             rope_theta=self.rope_theta,
-            rope_mode="standard",
             use_sliding_window=False,
             attn_bias=self.attention_bias,
         )

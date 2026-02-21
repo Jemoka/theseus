@@ -11,7 +11,13 @@ from theseus.model.module import Module
 class LayerNorm(Module):
     ndim: int = field("architecture/n_embd")
     bias: bool = field("architecture/bias")
-    dtype: jnp.dtype = jnp.bfloat16
+    # Use float32 for parity with HF GPT-NeoX/LLaMA style norms
+    dtype: jnp.dtype = jnp.float32
+    eps: float = field("architecture/layer_norm_eps", default=1e-5)
+
+    @property
+    def sharding(self) -> list[tuple[str, Any | None]]:
+        return []
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
@@ -30,7 +36,7 @@ class LayerNorm(Module):
         x_f32 = x.astype(jnp.float32)
         mean = jnp.mean(x_f32, axis=-1, keepdims=True)
         var = jnp.var(x_f32, axis=-1, keepdims=True)
-        x_norm = (x_f32 - mean) / jnp.sqrt(var + 1e-5)
+        x_norm = (x_f32 - mean) / jnp.sqrt(var + self.eps)
 
         # Cast back to compute dtype
         x_norm = x_norm.astype(self.dtype)

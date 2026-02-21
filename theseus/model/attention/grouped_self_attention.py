@@ -8,7 +8,7 @@ import flax.linen as nn
 from theseus.config import field
 from theseus.model.axes import Axes
 from theseus.model.module import Module
-from theseus.model.layers.rope import QwenRotaryPosEncoding, RotaryPosEncoding
+from theseus.model.layers.rope import RotaryPosEncoding
 from theseus.model.masks import causal_mask, sliding_window_mask, combine_padding
 
 ATTN_DTYPE = jnp.float32
@@ -22,9 +22,9 @@ class GroupedSelfAttention(Module):
     dropout: float = field("architecture/dropout", default=0.0)
     attn_dropout: float = field("architecture/attn_dropout", default=0.0)
     rope_theta: float = field("architecture/rope_theta", default=1e6)
-    rope_mode: str = field(
-        "architecture/rope_mode", default="qwen"
-    )  # "qwen" or "standard"
+    partial_rotary_factor: float = field(
+        "architecture/partial_rotary_factor", default=1.0
+    )
     use_sliding_window: bool = field("architecture/use_sliding_window", default=False)
     sliding_window: int = field(
         "architecture/sliding_window", default=-1
@@ -84,7 +84,7 @@ class GroupedSelfAttention(Module):
         )
         self.o_proj = nn.Dense(
             self.n_embd,
-            use_bias=False,
+            use_bias=self.attn_bias,
             kernel_init=nn.with_partitioning(
                 jax.nn.initializers.normal(stddev=proj_init_std),
                 (Axes.N_ATTN.value, Axes.N_EMBD.value),
@@ -93,10 +93,12 @@ class GroupedSelfAttention(Module):
             dtype=ATTN_DTYPE,
         )
 
-        rope_cls = (
-            QwenRotaryPosEncoding if self.rope_mode == "qwen" else RotaryPosEncoding
+        self.rope = RotaryPosEncoding(
+            head_dim,
+            base=int(self.rope_theta),
+            seq_dim=1,
+            partial_rotary_factor=self.partial_rotary_factor,
         )
-        self.rope = rope_cls(head_dim, base=int(self.rope_theta), seq_dim=1)
 
     def _repeat_kv(self, x: jnp.ndarray) -> jnp.ndarray:
         if self.n_rep == 1:
@@ -136,17 +138,23 @@ class GroupedSelfAttention(Module):
         k = k.reshape(b, t, self.n_kv_head_eff, self.head_dim)
         v = v.reshape(b, t, self.n_kv_head_eff, self.head_dim)
 
-        # apply RoPE before kv repeat (HF does this)
+        # apply RoPE before kv repeat (B, T, H, D)
         q, k = self.rope(q, k, t=positions)
+        qh = q.transpose(0, 2, 1, 3)  # (B, H, T, D)
+        kh = k.transpose(0, 2, 1, 3)
 
         k = self._repeat_kv(k)
         v = self._repeat_kv(v)
 
-        qh = q.transpose(0, 2, 1, 3)  # (B, H, T, D)
         kh = k.transpose(0, 2, 1, 3)
         vh = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
 
-        mask = self._select_mask(t, padding_mask, sliding)  # (1,1,T,T) or None
+        # Accept an already-prepared 4D mask (True=keep) to bypass internal construction (used for parity/debug).
+        mask: Optional[jnp.ndarray]
+        if padding_mask is not None and padding_mask.ndim == 4:
+            mask = padding_mask
+        else:
+            mask = self._select_mask(t, padding_mask, sliding)  # (1,1,T,T) or None
         bias = None
         if mask is not None:
             # convert to additive bias float32 pre-softmax
