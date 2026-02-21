@@ -10,15 +10,12 @@ from jax.experimental import multihost_utils
 from dataclasses import dataclass
 from theseus.config import field
 from theseus.model.models import GPT
-from theseus.model.models.llama import Llama
 from theseus.base import Topology, ExecutionSpec
 from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
 from theseus.evaluation.base import Evaluator
-from theseus.evaluation.huggingface import HFEvaluator
-from theseus.experiments.gpt import EvaluateGPT
-from theseus.experiments.llama import EvaluateLlama
+from theseus.experiments.models.gpt import EvaluateGPT
 
 
 @dataclass
@@ -202,11 +199,3 @@ class ABCDTrainer(ABCDBaseTrainer[ABCDConfig, GPT]):
 
     def evaluator(self) -> Evaluator[GPT]:
         return EvaluateGPT.from_trainer(self)
-
-
-class ABCDHFTrainer(ABCDBaseTrainer[ABCDHFConfig, Llama]):
-    MODEL = Llama
-    CONFIG = ABCDHFConfig
-
-    def evaluator(self) -> HFEvaluator[Llama]:
-        return EvaluateLlama.from_trainer(self)  # type: ignore
