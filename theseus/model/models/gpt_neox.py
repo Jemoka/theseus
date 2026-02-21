@@ -208,7 +208,7 @@ class GPTNeoX(Module):
         dummy = jnp.zeros((1, 1), dtype=jnp.int32)
         params = model.init(jax.random.PRNGKey(0), dummy)["params"]
         params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers, cfg)
-        return params
+        return model, params
 
 
 def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -> Any:
