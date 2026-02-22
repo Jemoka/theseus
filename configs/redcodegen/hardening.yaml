@@ -1,0 +1,45 @@
+# uv run theseus submit harden-qwen2_7b-test ./configs/redcodegen/hardening.yaml --n_shards 4 --chip ada6000 --n_chips 4 -p redcodegen -g e0
+
+architecture:
+  backbone:
+    implementation: qwen
+    weights: Qwen/Qwen2.5-Coder-7B-Instruct
+  block_size: 1024
+eval:
+  evaluations: []
+tokenizer:
+  backend: huggingingface
+  name: Qwen/Qwen2.5-Coder-7B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  dpo:
+    beta: 0.1 # the lower this is, the less deviation from base our model is allowed
+    label_smoothing: 0.0
+  lr: 0.0000003 # ASTPrompter had luck with this number
+training:
+  batch_size: 32
+  per_device_batch_size: -1 # what I found worked fine for 2xa6000s
+  tokens: 100000000 # it'll checkpoint, so we don't really care how long it runs, though this is not very long
+  warmup_pct: 0.01
+  decay_pct: 0.1
+  validation: false
+  evaluate: false
+  dataset:
+  - name: redcodegen__hardening # the name of the dataset, this must be this exactly
+    suffix: qwen2code7b # the suffix from the tokenization job from before
+    style: CONTRASTIVE
+    rate: '1.0'
+  validation_steps: 1
+logging:
+  report_interval: 8
+  checkpoint_interval: 256
+  validation_interval: 2560000 # never validate, since we have it off
+  wandb: true # this will log to whichever account you were logged in as
+job: redcodegen/train/hardening
+request:
+  n_shards: 2
