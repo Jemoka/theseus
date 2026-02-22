@@ -165,8 +165,10 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             -jax.nn.log_sigmoid(cstate.beta * logits) * (1 - cstate.label_smooth)
             - jax.nn.log_sigmoid(-cstate.beta * logits) * cstate.label_smooth
         )
-        chosen_rewards = cstate.beta * (loss_pos - loss_base_pos).detach()
-        rejected_rewards = cstate.beta * (loss_neg - loss_base_neg).detach()
+        chosen_rewards = jax.lax.stop_gradient(cstate.beta * (loss_pos - loss_base_pos))
+        rejected_rewards = jax.lax.stop_gradient(
+            cstate.beta * (loss_neg - loss_base_neg)
+        )
 
         # compute metrcis
         metrics = {
@@ -188,4 +190,4 @@ class BackbonedContrastiveTrainer(BackbonedTrainer, ContrastiveTrainer[Module]):
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
-        return BackbonedTrainer._config() + [DPOConfig]
+        return BaseTrainer._config() + [DPOConfig]
