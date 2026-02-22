@@ -59,7 +59,8 @@ with quick(Hardening, "test") as j:
             "rate": "1.0"
         }
     ]
-    j()
+    j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
+    # j()
 
 # j.config.training.dataset
 
