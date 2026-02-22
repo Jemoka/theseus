@@ -4,7 +4,6 @@ a very basic trainer
 
 from pathlib import Path
 from dataclasses import asdict, dataclass, is_dataclass
-from abc import abstractmethod
 from pprint import pformat
 from typing import Generic, TypeVar, Type, Dict, Any, Optional, List, Tuple, Callable
 
@@ -324,18 +323,16 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         self.best_val_score_ = float("-inf")
 
         # bake evaluator
-        self.inference: Evaluator[M] = self.evaluator()
+        self.inference: Evaluator[M] = self.evaluator()  # type: ignore
 
         # weeeeeeeeeeee
         # print the model
         if self.main_process():
             logger.info(self.model)
 
-    @abstractmethod
-    def evaluator(self) -> Evaluator[M]:
+    def evaluator(self) -> Optional[Evaluator[M]]:
         """define what evaluator to use"""
-
-        raise NotImplementedError("Evaluator not defined for this trainer!")
+        return None
 
     @classmethod
     def optimizer(cls) -> str | optax.GradientTransformation:
@@ -708,7 +705,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     val_score, metrics = valid_step(self.state)
                     score = val_score
                     val_metrics.update(metrics)
-                if self.args.evaluate:
+                if self.args.evaluate and self.inference is not None:
                     self.inference.state = self.state
                     eval_metrics = self.inference.evaluate()
                     if len(eval_metrics) > 0:

@@ -6,7 +6,9 @@ from .models.forking import PretrainThoughtbubbles, EvaluateThoughtbubbles
 from .models.qwen import PretrainQwen, EvaluateQwen, FinetuneBackboneQwen
 from .models.llama import PretrainLlama, EvaluateLlama, FinetuneBackboneLlama
 from .models.gpt_neox import PretrainGPTNeoX, EvaluateGPTNeoX, FinetuneBackboneGPTNeoX
+
 from .continual import JOBS as CONTINUAL_JOBS
+from .redcodegen import JOBS as RCG_JOBS
 
 JOBS: dict[str, type[BasicJob[Any]]] = {
     "gpt/train/pretrain": PretrainGPT,
@@ -24,5 +26,6 @@ JOBS: dict[str, type[BasicJob[Any]]] = {
     "gpt_neox/train/finetune": FinetuneBackboneGPTNeoX,
 }
 JOBS.update(CONTINUAL_JOBS)
+JOBS.update(RCG_JOBS)
 
 __all__ = ["JOBS"]
