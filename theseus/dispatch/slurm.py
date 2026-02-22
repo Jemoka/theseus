@@ -196,8 +196,6 @@ class SlurmJob:
 
         if self.ntasks_per_node:
             lines.append(f"#SBATCH --ntasks-per-node={self.ntasks_per_node}")
-        if self.cpus_per_task:
-            lines.append(f"#SBATCH --cpus-per-task={self.cpus_per_task}")
 
         # GPU allocation via --gres (more widely compatible than --gpus)
         if self.gpus:
