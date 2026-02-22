@@ -190,4 +190,4 @@ class BackbonedContrastiveTrainer(BackbonedTrainer, ContrastiveTrainer[Module]):
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
-        return BaseTrainer._config() + [DPOConfig]
+        return BackbonedTrainer._config() + [DPOConfig]

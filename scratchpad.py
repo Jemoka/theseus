@@ -34,7 +34,10 @@ from theseus.experiments.models.gpt import PretrainGPT
 # block_size = 1024
 
 
-# with quick(PretrainThoughtbubbles, "test") as j:
+from theseus.experiments.redcodegen import Hardening
+with quick(Hardening, "test", "/Users/houjun/theseus") as j:
+    ...
+
 #     j.config.architecture.n_head = 16
 #     j.config.architecture.max_block_size = 1024
 #     j.config.architecture.block_size = 512
