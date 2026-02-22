@@ -21,7 +21,7 @@ from theseus.model.masks import (
     cache_mask,
 )
 
-ATTN_DTYPE = jnp.float32
+ATTN_DTYPE = jnp.bfloat16
 
 
 class GroupedSelfAttention(SelfAttention):

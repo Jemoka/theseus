@@ -84,7 +84,7 @@ class QwenMLP(MLP):
 
     @property
     def _compute_dtype(self) -> Any:
-        return jnp.float32
+        return jnp.bfloat16
 
     def setup(self) -> None:
         init_std = 0.02
@@ -125,7 +125,7 @@ class NeoXMLP(MLP):
 
     @property
     def _compute_dtype(self) -> Any:
-        return jnp.float32
+        return jnp.bfloat16
 
     def setup(self) -> None:
         init_std = 0.02

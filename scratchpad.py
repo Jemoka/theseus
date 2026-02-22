@@ -60,8 +60,6 @@ with quick(Hardening, "test") as j:
         }
     ]
     j()
-    !nvidia-smi
-    !pkill 3267175
 
 # j.config.training.dataset
 
