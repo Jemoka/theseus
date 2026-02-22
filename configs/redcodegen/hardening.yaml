@@ -1,4 +1,4 @@
-# uv run theseus submit harden-qwen2_7b-test ./configs/redcodegen/hardening.yaml --n_shards 4 --chip ada6000 --n_chips 4 -p redcodegen -g e0
+# uv run theseus submit harden-qwen2_7b-test ./configs/redcodegen/hardening.yaml --n_shards 4 --chip ada6000 --n_chips 4 -p redcodegen -g e0 --mem 128G
 
 architecture:
   backbone:
