@@ -56,7 +56,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self.state = ContrastiveTrainState.create(
             apply_fn=self.model.apply,
             params=params,
-            base=jax.tree.map(lambda x: x.copy(), params),  # type: ignore
+            base=params,  # type: ignore
             tx=self.tx,
             label_smooth=self.dpo_config.label_smoothing,
             beta=self.dpo_config.beta,
