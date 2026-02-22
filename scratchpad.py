@@ -23,8 +23,8 @@ from theseus.quick import quick
 from theseus.experiments.models.gpt import PretrainGPT
 
 
-with quick(PretrainGPT, "test") as j:
-    j.oco gtgr
+# with quick(PretrainGPT, "test") as j:
+#     j.oco gtgr
 # from theseus.experiments.forking import PretrainThoughtbubbles
 
 # from theseus.base.job import ExecutionSpec

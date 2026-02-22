@@ -422,10 +422,10 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             (logits, loss), mutated = state.apply_fn(
                 variables, x, y, mutable=mutable, **kwargs
             )
-            return (logits, loss), mutated
+            return (logits, loss, {}), mutated
         else:
             logits, loss = state.apply_fn(variables, x, y, **kwargs)
-            return logits, loss
+            return logits, loss, {}
 
     @classmethod
     def train_step(
@@ -457,7 +457,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             payload = batch
 
             def loss_fn(params: PyTree[jax.Array]) -> jax.Array:
-                logits, loss = cls.forward(
+                logits, loss, _ = cls.forward(
                     state,
                     params,
                     payload,
@@ -527,7 +527,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             params_pytree: PyTree[jax.Array] = type_cast(
                 PyTree[jax.Array], state.params
             )
-            _, loss_i = cls.forward(
+            _, loss_i, _ = cls.forward(
                 state, params_pytree, xb_pytree, deterministic=True
             )  # loss_i: scalar
 

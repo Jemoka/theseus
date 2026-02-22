@@ -407,8 +407,8 @@ class EncodingEvaluation(Evaluation):
 
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch = batch
-                # Use inference's forward method - returns (logits, loss)
-                logits, _ = inference.forward(
+                # Use inference's forward method - returns (logits, loss, meta)
+                logits, _, _ = inference.forward(
                     state,
                     state.params,
                     (x_batch, None, mask_batch),
@@ -622,8 +622,8 @@ class PerplexityEvaluation(Evaluation):
                 is_padding_or_prefix = seq_positions < prefix_end
                 y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
 
-                # Use inference's forward method - returns (logits, loss)
-                logits, _ = inference.forward(
+                # Use inference's forward method - returns (logits, loss, meta)
+                logits, _, _ = inference.forward(
                     state,
                     state.params,
                     (x_batch, None, mask_batch),

@@ -62,7 +62,7 @@ class HFInferenceJob(InferenceJob[C, M], Generic[C, M]):
             (logits, loss), mutated = state.apply_fn(
                 variables, x, y, padding_mask=padding_mask, mutable=mutable
             )
-            return (logits, loss), mutated
+            return (logits, loss, {}), mutated
         else:
             logits, loss = state.apply_fn(variables, x, y, padding_mask=padding_mask)
-            return logits, loss
+            return logits, loss, {}

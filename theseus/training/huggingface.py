@@ -116,8 +116,8 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
             mutable_buffers=False,
         )
         if mutable is not None:
-            return (logits, loss), flax.core.freeze({})
-        return logits, loss
+            return (logits, loss, {}), flax.core.freeze({})
+        return logits, loss, {}
 
     @classmethod
     def train_step(
