@@ -35,14 +35,43 @@ from theseus.experiments.models.gpt import PretrainGPT
 
 
 from theseus.experiments.redcodegen import Hardening
-with quick(Hardening, "test", "/Users/houjun/theseus") as j:
-    ...
+with quick(Hardening, "test") as j:
+    j.config.architecture.backbone.implementation = "qwen"
+    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+    j.config.logging.report_interval=1
+    j.config.architecture.block_size = 1024
+    j.config.training.per_device_batch_size = 4
+    j.config.training.batch_size = 32
+
+    # contrastive learning, yolo, eventually maybe should
+    # evaluate i.e. by literally rolling out the model
+    j.config.training.evaluate = False
+    j.config.training.validation = False
+
+    # tokenizer is qwen
+    j.config.tokenizer.backend = "huggingingface"
+    j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
+    j.config.training.dataset = [
+        {
+            "name": "redcodegen__hardening",
+            "suffix": "qwen205b",
+            "style": "CONTRASTIVE",
+            "rate": "1.0"
+        }
+    ]
+    j()
+    !nvidia-smi
+    !pkill 3267175
+
+# j.config.training.dataset
+
+#     j.config
+
+
 
 #     j.config.architecture.n_head = 16
 #     j.config.architecture.max_block_size = 1024
-#     j.config.architecture.block_size = 512
 #     j.config.training.per_device_batch_size = 8
-#     j.config.logging.report_interval=32
 #     j.config.logging.checkpoint_interval=10240
 #     j.config.logging.validation_interval=2048
 #     j.config.eval.evaluations = ["blimp"]

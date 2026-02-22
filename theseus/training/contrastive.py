@@ -56,7 +56,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self.state = ContrastiveTrainState.create(
             apply_fn=self.model.apply,
             params=params,
-            base=jax.tree_map(lambda x: x.copy(), params),  # type: ignore
+            base=jax.tree.map(lambda x: x.copy(), params),  # type: ignore
             tx=self.tx,
             label_smooth=self.dpo_config.label_smoothing,
             beta=self.dpo_config.beta,
@@ -124,14 +124,14 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             {"params": params},
             pos[:, :-1],
             pos[:, 1:],
-            padding_mask=padding_mask_pos,
+            padding_mask=padding_mask_pos[:, :-1],
             **kwargs,
         )
         (_, loss_neg) = cstate.apply_fn(
             {"params": params},
             neg[:, :-1],
             neg[:, 1:],
-            padding_mask=padding_mask_neg,
+            padding_mask=padding_mask_neg[:, :-1],
             **kwargs,
         )
 
@@ -140,14 +140,14 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             {"params": cstate.base},
             pos[:, :-1],
             pos[:, 1:],
-            padding_mask=padding_mask_pos,
+            padding_mask=padding_mask_pos[:, :-1],
             **kwargs,
         )
         (_, loss_base_neg) = cstate.apply_fn(
             {"params": cstate.base},
             neg[:, :-1],
             neg[:, 1:],
-            padding_mask=padding_mask_neg,
+            padding_mask=padding_mask_neg[:, :-1],
             **kwargs,
         )
         # detach
@@ -155,31 +155,29 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         loss_base_neg = jax.lax.stop_gradient(loss_base_neg)
 
         # compute DPO loss and rewards
-        pi_logratios = loss_pos - loss_neg  # also known as h_{\pi_\theta}^{y_w,y_l}
-        ref_logratios = (
-            loss_base_pos - loss_base_neg
-        )  # also known as h_{\pi_{ref}}^{y_w,y_l}
-        logits = pi_logratios - ref_logratios  # also known as h_{\pi_\theta}^{y_w,y_l}
+        logits = -((loss_pos - loss_neg) - (loss_base_pos - loss_base_neg))
+
+        beta = cstate.beta
+        label_smooth = cstate.label_smooth
 
         loss = (
-            -jax.nn.log_sigmoid(cstate.beta * logits) * (1 - cstate.label_smooth)
-            - jax.nn.log_sigmoid(-cstate.beta * logits) * cstate.label_smooth
-        )
-        chosen_rewards = jax.lax.stop_gradient(cstate.beta * (loss_pos - loss_base_pos))
-        rejected_rewards = jax.lax.stop_gradient(
-            cstate.beta * (loss_neg - loss_base_neg)
+            -jax.nn.log_sigmoid(beta * logits) * (1 - label_smooth)
+            - jax.nn.log_sigmoid(-beta * logits) * label_smooth
         )
 
-        # compute metrcis
+        # reward sign fix
+        chosen_rewards = jax.lax.stop_gradient(-beta * (loss_pos - loss_base_pos))
+        rejected_rewards = jax.lax.stop_gradient(-beta * (loss_neg - loss_base_neg))
+
         metrics = {
             "rewards/chosen": chosen_rewards,
             "rewards/rejected": rejected_rewards,
             "rewards/reward_accuracy": jnp.mean(chosen_rewards > rejected_rewards),
-            "rewards/reward_margin": (chosen_rewards - rejected_rewards),
-            "policy/logprobs_chosen": loss_pos,
-            "policy/logprobs_rejected": loss_neg,
-            "ref/logprobs_chosen": loss_base_pos,
-            "ref/logprobs_rejected": loss_base_neg,
+            "rewards/reward_margin": chosen_rewards - rejected_rewards,
+            "policy/nll_chosen": loss_pos,
+            "policy/nll_rejected": loss_neg,
+            "ref/nll_chosen": loss_base_pos,
+            "ref/nll_rejected": loss_base_neg,
         }
 
         return logits, loss, metrics

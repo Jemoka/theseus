@@ -612,7 +612,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             logger.info("BEGIN TRAINING")
 
         train_step = self.__make_train_step()
-        valid_step = self.__make_valid_step()
+        if self.args.validate:
+            valid_step = self.__make_valid_step()
 
         # because sometimes the load function may skip some epochs
         for indx in range(
