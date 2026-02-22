@@ -126,14 +126,14 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         batch: PyTree[jax.Array],
         key: jax.Array,
         accumulate_steps: int,
-    ) -> Tuple[train_state.TrainState, jax.Array]:
+    ) -> Tuple[train_state.TrainState, jax.Array, Any]:
         del key
 
         def train_eval(
             state: train_state.TrainState,
             batch: PyTree[jax.Array],
             buffers: Any,
-        ) -> Tuple[jax.Array, PyTree[jax.Array], Any]:
+        ) -> Tuple[jax.Array, PyTree[jax.Array], Any, Any]:
             from typing import cast as type_cast
 
             xb: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
@@ -156,32 +156,33 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
             (loss, new_buffers), grads = jax.value_and_grad(loss_fn, has_aux=True)(
                 state.params, buffers
             )
-            return loss, grads, new_buffers
+            return loss, grads, new_buffers, {}
 
         def reduce(
             carry: Tuple[PyTree[jax.Array], jax.Array, Any],
             batch_item: Any,  # PyTree with single batch item
-        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, Any], None]:
+        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, Any], Any]:
             grad, loss, buffers = carry
-            loss_single, grad_single, buffers_next = train_eval(
+            loss_single, grad_single, buffers_next, meta = train_eval(
                 state, batch_item, buffers
             )
 
             grad_acc = jax.tree_util.tree_map(lambda a, g: a + g, grad, grad_single)
             loss_acc = loss + loss_single
-            return (grad_acc, loss_acc, buffers_next), None
+            return (grad_acc, loss_acc, buffers_next), meta
 
         grad_zero = jax.tree_util.tree_map(jnp.zeros_like, state.params)
         buffers0 = getattr(state, "buffers", flax.core.freeze({}))
-        (grad_sum, loss_sum, buffers_out), _ = jax.lax.scan(
+        (grad_sum, loss_sum, buffers_out), metas = jax.lax.scan(
             reduce,
             (grad_zero, jnp.array(0.0), buffers0),
             batch,
         )
+        last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
         new_state = state.apply_gradients(  # type: ignore[no-untyped-call]
             grads=grad_sum, buffers=buffers_out
         )
-        return cast(train_state.TrainState, new_state), loss_sum
+        return cast(train_state.TrainState, new_state), loss_sum, last_meta
 
     @classmethod
     def val_step(

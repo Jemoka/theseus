@@ -12,7 +12,7 @@ logger.add(
     enqueue=True,
     filter=lambda x: x["extra"].get("task", "") != "plot",
 )
-# 
+#
 # !ls $HF_HOME/hub
 
 # import jax
@@ -47,20 +47,20 @@ from theseus.experiments.models.gpt import PretrainGPT
 #     # j.save("./configs/"
 #     # j()
 
-    # job = j.create()
-    # x,y,mask = job.batch()
+# job = j.create()
+# x,y,mask = job.batch()
 
-    # job.state_sharding
-    # mask
+# job.state_sharding
+# mask
 # job
-    # j.config.training.per_device_batch_size = 1
-    # j.config.training.batch_size = 2
-    # j.config.logging.report_interval = 2
-    # j()
-    # j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
+# j.config.training.per_device_batch_size = 1
+# j.config.training.batch_size = 2
+# j.config.logging.report_interval = 2
+# j()
+# j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
 
 # cfg
-    # j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
+# j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
 #     j.config.architecture.n_layers = 16
 #     j.config.training.dataset = [[{
 #         "name": "fineweb",
@@ -126,4 +126,4 @@ from theseus.experiments.models.gpt import PretrainGPT
 # # # # with configuration(cfg):
 # # # #     fb =  configure(ForkingAttention)
 
-# # # # fb.init(jax.random.PRNGKey(7), 
+# # # # fb.init(jax.random.PRNGKey(7),

@@ -434,7 +434,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: PyTree[jax.Array],  # (S, B, T) each
         key: jax.Array,
         accumulate_steps: int,
-    ) -> Tuple[train_state.TrainState, jax.Array]:
+    ) -> Tuple[train_state.TrainState, jax.Array, Any]:
         """Compute gradients over S micro-batches and apply one optimizer step.
 
         Args:
@@ -445,7 +445,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             accumulate_steps: Number of micro-batches (S)
 
         Returns:
-            (updated_state, loss)
+            (updated_state, loss, meta) where meta is the last micro-batch's metadata
         """
 
         def train_eval(
@@ -453,49 +453,54 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             batch: PyTree[jax.Array],  # (B, T) each
             key: jax.Array,
             accumulate_steps: int,
-        ) -> Tuple[jax.Array, PyTree[jax.Array]]:
+        ) -> Tuple[jax.Array, PyTree[jax.Array], Any]:
             payload = batch
 
-            def loss_fn(params: PyTree[jax.Array]) -> jax.Array:
-                logits, loss, _ = cls.forward(
+            def loss_fn(params: PyTree[jax.Array]) -> Tuple[jax.Array, Any]:
+                logits, loss, meta = cls.forward(
                     state,
                     params,
                     payload,
                     key=key,
                     deterministic=False,
                 )
-                return loss / accumulate_steps  # type: ignore[no-any-return]
+                return loss / accumulate_steps, meta
 
-            loss, grads = jax.value_and_grad(loss_fn)(
+            (loss, meta), grads = jax.value_and_grad(loss_fn, has_aux=True)(
                 state.params
             )  # loss: scalar, grads: PyTree
 
-            return loss, grads
+            return loss, grads, meta
 
         def reduce(
             carry: Tuple[PyTree[jax.Array], jax.Array, jax.Array],
             batch_item: Any,  # PyTree with single batch (B, T)
-        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, jax.Array], None]:
+        ) -> Tuple[Tuple[PyTree[jax.Array], jax.Array, jax.Array], Any]:
             grad, loss, key = carry
             key, subkey = jax_random.split(key)
-            loss_single, grad_single = train_eval(
+            loss_single, grad_single, meta = train_eval(
                 state, batch_item, subkey, accumulate_steps
             )
 
             grad_acc = jax.tree_util.tree_map(lambda a, g: a + g, grad, grad_single)
             loss_acc = loss + loss_single
 
-            return (grad_acc, loss_acc, key), None
+            return (grad_acc, loss_acc, key), meta
 
         grad_zero = jax.tree_util.tree_map(jnp.zeros_like, state.params)
 
-        # scan over S micro-batches, accumulating gradients
+        # scan over S micro-batches, accumulating gradients; collect per-step meta
         loss_sum: jax.Array
-        (grad_sum, loss_sum, _), _ = jax.lax.scan(reduce, (grad_zero, 0.0, key), batch)  # type: ignore
+        (grad_sum, loss_sum, _), metas = jax.lax.scan(
+            reduce, (grad_zero, jnp.array(0.0), key), batch
+        )
+
+        # take the last micro-batch's metadata
+        last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
 
         state: PyTree[jax.Array] = state.apply_gradients(grads=grad_sum)  # type: ignore
 
-        return state, loss_sum
+        return state, loss_sum, last_meta
 
     @classmethod
     def val_step(
@@ -594,13 +599,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             jax.Array,
             int,
         ],
-        Tuple[train_state.TrainState, jax.Array],
+        Tuple[train_state.TrainState, jax.Array, Any],
     ]:
         data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
         train_step = jax.jit(
             self.train_step,
             in_shardings=(self.state_sharding, data_shard, None, None),
-            out_shardings=(self.state_sharding, None),
+            out_shardings=(self.state_sharding, None, None),
             donate_argnums=(0,),
         )
         return train_step
@@ -621,7 +626,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             logger.debug("DATA | {} | PLACED", indx)
 
             self.dropout_key, subkey = jax_random.split(self.dropout_key)
-            self.state, loss = train_step(
+            self.state, loss, train_meta = train_step(
                 self.state,
                 batch,
                 subkey,
@@ -647,6 +652,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                         * self.args.block_size
                     )
                     train_metrics["train/loss"] = loss_val
+                    train_metrics.update(jax.device_get(train_meta))
 
                     wandb.log(
                         train_metrics,

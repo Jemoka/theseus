@@ -76,8 +76,3 @@ class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
         self.key, _init_key, self.dropout_key = jax_random.split(self.key, num=3)
 
         return params
-
-    def evaluator(self) -> Any:
-        raise NotImplementedError(
-            "BackbonedTrainer subclasses must implement evaluator()"
-        )
