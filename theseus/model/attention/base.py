@@ -104,9 +104,6 @@ class SelfAttention(Module):
         # Allocate to block_size so we can decode up to that many tokens
         B, _T, H, D = k.shape
         cache_shape = (B, self.block_size, H, D)
-        is_initialized = self.variable(
-            "cache", "is_initialized", lambda: jnp.array(False)
-        )
         cached_key = self.variable(
             "cache", "cached_key", jnp.zeros, cache_shape, k.dtype
         )
@@ -117,7 +114,7 @@ class SelfAttention(Module):
             "cache", "cache_index", lambda: jnp.array(0, dtype=jnp.int32)
         )
 
-        if is_initialized.value:
+        if self.has_variable("cache", "cache_index"):
             # Decode step: k, v are (B, 1, H, D) — single new token
             cur_index = cache_index.value
             batch_dims = k.ndim - 3  # typically 1 (B)
@@ -145,7 +142,6 @@ class SelfAttention(Module):
             cached_key.value = new_cached_k
             cached_value.value = new_cached_v
             cache_index.value = jnp.array(T_prefill, dtype=jnp.int32)
-            is_initialized.value = jnp.array(True)
             # Return original k, v (not full cache) — prefill uses normal causal mask
             return k, v, None
 
@@ -232,11 +228,9 @@ class SelfAttention(Module):
         q, k, v = self.project(x)
 
         # For decode steps with cache, inject correct RoPE positions
-        if self.has_variable("cache", "is_initialized"):
-            is_init: Any = self.get_variable("cache", "is_initialized")
-            if is_init:
-                ci: Any = self.get_variable("cache", "cache_index")
-                kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+        if self.has_variable("cache", "cache_index"):
+            ci: Any = self.get_variable("cache", "cache_index")
+            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
         k, v, cache_idx = self._cached_kv(k, v)

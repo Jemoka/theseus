@@ -436,7 +436,11 @@ def run(
 @click.option(
     "--exclude-cluster", default=None, help="Exclude these clusters (comma-separated)"
 )  # type: ignore[misc]
-@click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
+@click.option(
+    "--dirty/--clean",
+    default=True,
+    help="Include uncommitted changes (default: --dirty)",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -634,7 +638,11 @@ def submit(
 @click.option(
     "--exclude-cluster", default=None, help="Exclude these clusters (comma-separated)"
 )  # type: ignore[misc]
-@click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
+@click.option(
+    "--dirty/--clean",
+    default=True,
+    help="Include uncommitted changes (default: --dirty)",
+)  # type: ignore[misc]
 @click.option(
     "--sync",
     "sync_mode",
@@ -1064,7 +1072,11 @@ def repl(
 )  # type: ignore[misc]
 @click.option("--cache-size", default=None, help="JuiceFS cache size")  # type: ignore[misc]
 @click.option("--cache-dir", default=None, help="JuiceFS cache directory")  # type: ignore[misc]
-@click.option("--dirty", is_flag=True, help="Include uncommitted changes")  # type: ignore[misc]
+@click.option(
+    "--dirty/--clean",
+    default=True,
+    help="Include uncommitted changes (default: --dirty)",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def bootstrap(
     name: str,
