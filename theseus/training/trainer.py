@@ -162,8 +162,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         logger.info(f"CONFIG | \n{pformat(config_dump, sort_dicts=False)}\n")
         topology = self._init_topology(spec)
         params = self._init_model()
-        self._init_optimizer(params)
-        self._init_sharding()
+        self._init_state(params)
         self._init_batch_config(topology)
         self._init_wandb(spec)
         self._init_data(spec)
@@ -222,7 +221,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         )
         return variables["params"]  # type: ignore[no-any-return]
 
-    def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
+    def _init_state(self, params: PyTree[jax.Array]) -> None:
         """Build optimizer, scheduler, and sharded train state."""
         # build the optimizer
         self.scheduler: optax._src.base.Schedule = self._schedule()
@@ -250,9 +249,6 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         if self.main_process():
             logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
-
-    def _init_sharding(self) -> None:
-        """No-op: state and state_sharding are now set in _init_optimizer."""
 
     def _init_batch_config(self, topology: Topology) -> None:
         """Compute batch size, accumulation steps, and log configuration."""

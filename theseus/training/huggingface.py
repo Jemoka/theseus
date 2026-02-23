@@ -50,7 +50,7 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         self._buffers: Any = variables.get("buffers", flax.core.freeze({}))
         return cast(PyTree[jax.Array], variables["params"])
 
-    def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
+    def _init_state(self, params: PyTree[jax.Array]) -> None:
         self.scheduler = self._schedule()
         self.tx = self._optimizer()
 

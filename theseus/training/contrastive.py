@@ -40,7 +40,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
     def _config(cls) -> List[Type[Any]]:
         return BaseTrainer._config() + [DPOConfig]
 
-    def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
+    def _init_state(self, params: PyTree[jax.Array]) -> None:
         """Build optimizer, scheduler, and sharded contrastive train state."""
 
         # initialize DPO configuration from state, we'll use it in loss computation
