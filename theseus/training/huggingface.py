@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Generic, Optional, Tuple, Type, TypeVar, cast
 
 import flax
+import flax.linen
 import jax
 import jax.numpy as jnp
 from flax.training import train_state
@@ -43,7 +44,9 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         self.key, init_key, self.dropout_key = jax_random.split(self.key, num=3)
 
         dummy_input = jnp.ones((1, self.args.block_size), dtype=jnp.int32)
-        variables = self.model.init(init_key, dummy_input)
+        variables, _ = self.sharded_init(
+            self.model, init_key, dummy_input, mesh=self.mesh
+        )
         self._buffers: Any = variables.get("buffers", flax.core.freeze({}))
         return cast(PyTree[jax.Array], variables["params"])
 
@@ -51,10 +54,26 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         self.scheduler = self._schedule()
         self.tx = self._optimizer()
 
-        hf_state = HFTrainState.create(  # type: ignore[no-untyped-call]
-            apply_fn=self.model.apply, params=params, tx=self.tx, buffers=self._buffers
+        buffers = self._buffers
+
+        def make_state(p: PyTree[jax.Array]) -> HFTrainState:
+            return cast(
+                HFTrainState,
+                HFTrainState.create(  # type: ignore[no-untyped-call]
+                    apply_fn=self.model.apply, params=p, tx=self.tx, buffers=buffers
+                ),
+            )
+
+        state_shapes = jax.eval_shape(make_state, params)
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+            flax.linen.get_partition_spec(state_shapes),
+            self.mesh,
+            rules=tuple(self.model.sharding),
         )
-        self.state = cast(train_state.TrainState, hf_state)
+        self.state = cast(
+            train_state.TrainState,
+            jax.jit(make_state, out_shardings=self.state_sharding)(params),
+        )
         self.total_params = (
             sum(x.size for x in jax.tree_util.tree_leaves(self.state.params)) / 1e6
         )

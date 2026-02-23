@@ -23,6 +23,69 @@ from theseus.quick import quick
 from theseus.experiments.models.gpt import PretrainGPT
 
 
+import torch
+from transformers import Qwen2ForCausalLM
+
+import jax
+import jax.numpy as jnp
+import jax.nn as jnn
+import flax.linen as nn
+
+
+torch_dtype = torch.float32
+hf_model = Qwen2ForCausalLM.from_pretrained(
+    "Qwen/Qwen2.5-Coder-7B-Instruct", torch_dtype=torch_dtype, device_map=None
+)
+device = "cpu"
+hf_model.to(device)
+hf_model.eval()
+cfg = hf_model.config
+
+rope_theta = 10000.0
+if cfg.rope_parameters is not None and "rope_theta" in cfg.rope_parameters:
+    rope_theta = cfg.rope_parameters["rope_theta"]
+
+from theseus.model.models.qwen import Qwen
+model = Qwen(
+    n_layers=cfg.num_hidden_layers,
+    n_embd=cfg.hidden_size,
+    n_head=cfg.num_attention_heads,
+    n_kv_head=cfg.num_key_value_heads,
+    intermediate_size=cfg.intermediate_size,
+    block_size=cfg.max_position_embeddings,
+    vocab_size=cfg.vocab_size,
+    dropout=0.0,
+    attn_dropout=cfg.attention_dropout,
+    rope_theta=rope_theta,
+    rms_norm_eps=cfg.rms_norm_eps,
+    use_sliding_window=cfg.use_sliding_window,
+    sliding_window=cfg.sliding_window,
+    max_window_layers=cfg.max_window_layers,
+    bias=True,
+)
+dummy = jnp.zeros((1, 1), dtype=jnp.int32)
+shapes = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
+
+from theseus.base.job import ExecutionSpec
+spec = ExecutionSpec.local("/sailhome/houjun/theseus")
+
+import flax
+
+model_param_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+    flax.linen.get_partition_spec(shapes),
+    spec.topology.mesh,
+    rules=tuple(model.sharding),
+)
+
+params = jax.jit(model.init, out_shardings=model_param_sharding)(jax.random.PRNGKey(0), dummy)
+
+# params = model.init(jax.random.PRNGKey(0), dummy)["params"]
+# praams
+
+model
+
+
+
 # with quick(PretrainGPT, "test") as j:
 #     j.oco gtgr
 # from theseus.experiments.forking import PretrainThoughtbubbles
@@ -34,33 +97,33 @@ from theseus.experiments.models.gpt import PretrainGPT
 # block_size = 1024
 
 
-from theseus.experiments.redcodegen import Hardening
-with quick(Hardening, "test") as j:
-    j.config.architecture.backbone.implementation = "qwen"
-    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
-    j.config.logging.report_interval=1
-    j.config.architecture.block_size = 1024
-    j.config.training.per_device_batch_size = 4
-    j.config.training.batch_size = 32
+# from theseus.experiments.redcodegen import Hardening
+# with quick(Hardening, "test") as j:
+#     j.config.architecture.backbone.implementation = "qwen"
+#     j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+#     j.config.logging.report_interval=1
+#     j.config.architecture.block_size = 1024
+#     j.config.training.per_device_batch_size = 4
+#     j.config.training.batch_size = 32
 
-    # contrastive learning, yolo, eventually maybe should
-    # evaluate i.e. by literally rolling out the model
-    j.config.training.evaluate = False
-    j.config.training.validation = False
+#     # contrastive learning, yolo, eventually maybe should
+#     # evaluate i.e. by literally rolling out the model
+#     j.config.training.evaluate = False
+#     j.config.training.validation = False
 
-    # tokenizer is qwen
-    j.config.tokenizer.backend = "huggingingface"
-    j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
-    j.config.training.dataset = [
-        {
-            "name": "redcodegen__hardening",
-            "suffix": "qwen205b",
-            "style": "CONTRASTIVE",
-            "rate": "1.0"
-        }
-    ]
-    j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
-    # j()
+#     # tokenizer is qwen
+#     j.config.tokenizer.backend = "huggingingface"
+#     j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
+#     j.config.training.dataset = [
+#         {
+#             "name": "redcodegen__hardening",
+#             "suffix": "qwen205b",
+#             "style": "CONTRASTIVE",
+#             "rate": "1.0"
+#         }
+#     ]
+#     j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
+#     # j()
 
 # j.config.training.dataset
 

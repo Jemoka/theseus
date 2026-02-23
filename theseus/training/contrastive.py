@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional, List, Type, Generic
 import jax
 import jax.numpy as jnp
 import jax.random as jax_random
+import flax
+import flax.linen
 from flax.training import train_state
 
 import optax
@@ -39,7 +41,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         return BaseTrainer._config() + [DPOConfig]
 
     def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
-        """Build optimizer, scheduler, and train state."""
+        """Build optimizer, scheduler, and sharded contrastive train state."""
 
         # initialize DPO configuration from state, we'll use it in loss computation
         self.dpo_config = configure(DPOConfig)
@@ -48,19 +50,32 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self.scheduler: optax._src.base.Schedule = self._schedule()
         self.tx = self._optimizer()
 
-        # build state
-        # key here is that assume initalized params are "base." this
-        # is sound for two cases: in the cases where you are doing interesting
-        # pretraining with RL, base is indeed this. and in the case where you
-        # are doing initialized from HF, then base is indeed also correct
-        self.state = ContrastiveTrainState.create(
-            apply_fn=self.model.apply,
-            params=params,
-            base=params,  # type: ignore
-            tx=self.tx,
-            label_smooth=self.dpo_config.label_smoothing,
-            beta=self.dpo_config.beta,
+        # ContrastiveTrainState has a different pytree structure than TrainState:
+        # it includes `base` (same shape as params) plus scalar `beta`/`label_smooth`.
+        # eval_shape traces the full state creation to get correct sharding for all fields.
+        label_smooth = self.dpo_config.label_smoothing
+        beta = self.dpo_config.beta
+
+        def make_state(p: PyTree[jax.Array]) -> ContrastiveTrainState:
+            return type_cast(
+                ContrastiveTrainState,
+                ContrastiveTrainState.create(
+                    apply_fn=self.model.apply,
+                    params=p,
+                    base=p,  # type: ignore
+                    tx=self.tx,
+                    label_smooth=label_smooth,
+                    beta=beta,
+                ),
+            )
+
+        state_shapes = jax.eval_shape(make_state, params)
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+            flax.linen.get_partition_spec(state_shapes),
+            self.mesh,
+            rules=tuple(self.model.sharding),
         )
+        self.state = jax.jit(make_state, out_shardings=self.state_sharding)(params)
 
         self.total_params = (
             sum(x.size for x in jax.tree_util.tree_leaves(self.state.params)) / 1e6

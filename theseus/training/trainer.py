@@ -185,30 +185,65 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         )
         return topology
 
+    @staticmethod
+    def sharded_init(
+        model: Any, key: jax.Array, *args: Any, mesh: jax.sharding.Mesh, **kwargs: Any
+    ) -> Tuple[Any, Any]:
+        """Initialize model params sharded across mesh from the start.
+
+        Uses eval_shape to compute sharding spec without materializing params,
+        then JITs init with out_shardings so arrays land on correct devices directly.
+
+        Returns (variables, var_sharding).
+        """
+        shapes = jax.eval_shape(model.init, key, *args, **kwargs)
+        var_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+            flax.linen.get_partition_spec(shapes),
+            mesh,
+            rules=tuple(model.sharding),
+        )
+        variables = jax.jit(model.init, out_shardings=var_sharding)(
+            key, *args, **kwargs
+        )
+        return variables, var_sharding
+
     def _init_model(self) -> PyTree[jax.Array]:
-        """Initialize model and random keys, return initial params."""
+        """Initialize model and random keys, return initial sharded params."""
         # initialize model from the config in thin air
         self.model: M = configure(self.MODEL)
 
         # Initialize random keys
         self.key, init_key, self.dropout_key = jax_random.split(self.key, num=3)
 
-        # Initialize model
+        # Initialize model with params sharded across mesh from the start
         dummy_input = jnp.ones((1, self.args.block_size), dtype=jnp.int32)
-        variables = self.model.init(init_key, dummy_input)
-        params = variables["params"]
-        return params  # type: ignore[no-any-return]
+        variables, _ = self.sharded_init(
+            self.model, init_key, dummy_input, mesh=self.mesh
+        )
+        return variables["params"]  # type: ignore[no-any-return]
 
     def _init_optimizer(self, params: PyTree[jax.Array]) -> None:
-        """Build optimizer, scheduler, and train state."""
+        """Build optimizer, scheduler, and sharded train state."""
         # build the optimizer
         self.scheduler: optax._src.base.Schedule = self._schedule()
         self.tx = self._optimizer()
 
-        # build state
-        self.state = train_state.TrainState.create(
-            apply_fn=self.model.apply, params=params, tx=self.tx
-        )  # type: ignore
+        # build state sharded from the start — use eval_shape to get state pytree
+        # structure (different from param pytree: includes opt_state, step, etc.)
+        # then JIT create with out_shardings so optimizer buffers land on correct devices
+        def make_state(p: PyTree[jax.Array]) -> train_state.TrainState:
+            return train_state.TrainState.create(  # type: ignore
+                apply_fn=self.model.apply, params=p, tx=self.tx
+            )
+
+        state_shapes = jax.eval_shape(make_state, params)
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+            flax.linen.get_partition_spec(state_shapes),
+            self.mesh,
+            rules=tuple(self.model.sharding),
+        )
+        self.state = jax.jit(make_state, out_shardings=self.state_sharding)(params)
+
         self.total_params = (
             sum(x.size for x in jax.tree_util.tree_leaves(self.state.params)) / 1e6
         )
@@ -217,14 +252,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
 
     def _init_sharding(self) -> None:
-        """Shard the train state across devices."""
-        # Shard the state
-        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
-            flax.linen.get_partition_spec(self.state),
-            self.mesh,
-            rules=tuple(self.model.sharding),
-        )
-        self.state = jax.device_put(self.state, self.state_sharding)
+        """No-op: state and state_sharding are now set in _init_optimizer."""
 
     def _init_batch_config(self, topology: Topology) -> None:
         """Compute batch size, accumulation steps, and log configuration."""
