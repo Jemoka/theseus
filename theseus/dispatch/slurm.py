@@ -273,7 +273,7 @@ MOUNT_POINT="$(resolve_runtime_root_tokens "$MOUNT_POINT")"
 if ! mountpoint -q "$MOUNT_POINT"; then
     echo "[bootstrap] mounting JuiceFS at $MOUNT_POINT..."
     mkdir -p "$MOUNT_POINT"
-    juicefs mount -d {opts_str} {self.juicefs_mount.redis_url} "$MOUNT_POINT"
+    juicefs mount --umask=000 -d {opts_str} {self.juicefs_mount.redis_url} "$MOUNT_POINT"
 fi
 # Track mount point for cleanup on exit/preemption
 JUICEFS_MOUNT_POINT="$MOUNT_POINT"
