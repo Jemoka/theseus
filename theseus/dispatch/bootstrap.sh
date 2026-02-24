@@ -360,7 +360,7 @@ __ENV_VARS__
 
 # JAX/XLA GPU allocator defaults for large-model runs.
 # Keep overridable by honoring pre-set environment values.
-: "${XLA_PYTHON_CLIENT_MEM_FRACTION:=0.85}"
+: "${XLA_PYTHON_CLIENT_MEM_FRACTION:=0.95}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION
 
 # ============================================================================

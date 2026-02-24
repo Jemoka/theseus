@@ -1,0 +1,21 @@
+data:
+  dataset: redcodegen__hardening
+  config: /Users/houjun/Downloads/qwen-contrastive-2pairs.jsonl
+  suffix: qwen2code7b
+  val_pct: 0.05
+  seed: 2357
+  split: train
+  pad_token: 0
+  system_prompt: ''
+  assistant_only: true
+architecture:
+  block_size: 1024
+system:
+  num_proc: 8
+tokenizer:
+  backend: huggingface
+  name: Qwen/Qwen2.5-Coder-7B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+job: data/tokenize_contrastive_dataset
