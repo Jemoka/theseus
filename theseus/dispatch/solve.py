@@ -414,11 +414,14 @@ def _check_plain_host_availability(
     """
     from theseus.dispatch.ssh import run
 
+    # Processes below this threshold are considered noise (e.g., Xorg display server
+    # at ~4 MiB) and do not count as the GPU being occupied.
+    _NOISE_THRESHOLD_MIB = 100
+
     try:
-        # Query nvidia-smi for processes on each GPU
-        # This returns CSV with gpu index, process ID, process name
+        # Query nvidia-smi for processes on each GPU, including memory usage
         result = run(
-            "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv,noheader,nounits",
+            "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits",
             ssh_alias,
             timeout=timeout,
         )
@@ -433,14 +436,36 @@ def _check_plain_host_availability(
             logger.debug(f"SOLVE | {ssh_alias}: no GPU processes running, host is free")
             return configured_chips
 
-        # Count processes (non-empty lines)
-        process_lines = [
-            line for line in result.stdout.strip().split("\n") if line.strip()
-        ]
+        # Filter out low-memory processes (display servers, etc.)
+        significant = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split(",")
+            try:
+                raw = parts[3].strip() if len(parts) >= 4 else ""
+                mem_mib = int(raw) if raw else None
+            except ValueError:
+                mem_mib = None  # "N/A" or unparseable
+            # Only significant if we got a real value at or above the threshold.
+            # Zero, unparseable, or "N/A" (e.g. fused arch like GB10) → noise.
+            if mem_mib is not None and mem_mib >= _NOISE_THRESHOLD_MIB:
+                significant.append(line.strip())
+            else:
+                logger.debug(
+                    f"SOLVE | {ssh_alias}: ignoring low-memory process ({mem_mib} MiB): {line.strip()}"
+                )
+
+        if significant:
+            logger.debug(
+                f"SOLVE | {ssh_alias}: {len(significant)} significant GPU processes, host is busy"
+            )
+            return 0
+
         logger.debug(
-            f"SOLVE | {ssh_alias}: {len(process_lines)} GPU processes running, host is busy"
+            f"SOLVE | {ssh_alias}: only noise-level GPU processes, host is free"
         )
-        return 0
+        return configured_chips
 
     except Exception as e:
         logger.warning(f"SOLVE | failed to check GPU availability on {ssh_alias}: {e}")
