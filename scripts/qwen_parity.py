@@ -11,7 +11,11 @@ import torch
 from transformers import AutoTokenizer, Qwen2ForCausalLM
 from transformers.utils import logging as hf_logging
 
-from theseus.model.models.qwen import Qwen, _from_hf_state_dict, _to_hf_state_dict
+from theseus.model.models.contrib.qwen import (
+    Qwen,
+    _from_hf_state_dict,
+    _to_hf_state_dict,
+)
 
 # silence HF progress/logging for clean parity output
 hf_logging.set_verbosity_error()

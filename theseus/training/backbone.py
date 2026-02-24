@@ -16,9 +16,9 @@ from jax import random as jax_random
 
 from theseus.config import field
 from theseus.model.module import Module
-from theseus.model.models.llama import Llama
-from theseus.model.models.qwen import Qwen
-from theseus.model.models.gpt_neox import GPTNeoX
+from theseus.model.models.contrib.llama import Llama
+from theseus.model.models.contrib.qwen import Qwen
+from theseus.model.models.contrib.gpt_neox import GPTNeoX
 from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
 from theseus.evaluation.base import EvaluatorConfig
 from theseus.data.tokenizer import TokenizerConfig

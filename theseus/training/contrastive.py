@@ -57,12 +57,13 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         beta = self.dpo_config.beta
 
         def make_state(p: PyTree[jax.Array]) -> ContrastiveTrainState:
+            base = jax.tree_util.tree_map(lambda x: x.astype(jnp.bfloat16), p)
             return type_cast(
                 ContrastiveTrainState,
                 ContrastiveTrainState.create(
                     apply_fn=self.model.apply,
                     params=p,
-                    base=p,  # type: ignore
+                    base=base,  # type: ignore
                     tx=self.tx,
                     label_smooth=label_smooth,
                     beta=beta,

@@ -11,7 +11,11 @@ import torch
 from transformers import AutoTokenizer, LlamaForCausalLM
 from transformers.utils import logging as hf_logging
 
-from theseus.model.models.llama import Llama, _from_hf_state_dict, _to_hf_state_dict
+from theseus.model.models.contrib.llama import (
+    Llama,
+    _from_hf_state_dict,
+    _to_hf_state_dict,
+)
 
 hf_logging.set_verbosity_error()
 

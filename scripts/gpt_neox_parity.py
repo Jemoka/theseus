@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, GPTNeoXForCausalLM
 from transformers.utils import logging as hf_logging
 from transformers.masking_utils import create_causal_mask
 
-from theseus.model.models.gpt_neox import (
+from theseus.model.models.contrib.gpt_neox import (
     GPTNeoX,
     _from_hf_state_dict,
     _to_hf_state_dict,

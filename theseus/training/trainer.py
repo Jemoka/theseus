@@ -160,13 +160,21 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         self.args = configure(self.CONFIG)
         config_dump = asdict(self.args) if is_dataclass(self.args) else self.args
         logger.info(f"CONFIG | \n{pformat(config_dump, sort_dicts=False)}\n")
+        logger.debug("TRAINER | Initializing Topology")
         topology = self._init_topology(spec)
+        logger.debug("TRAINER | Initializing Model Parameters")
         params = self._init_model()
+        logger.debug("TRAINER | Initializing State and Optimizers")
         self._init_state(params)
+        logger.debug("TRAINER | Initializing Batch Config")
         self._init_batch_config(topology)
+        logger.debug("TRAINER | Initializing Weights & Biases Logging")
         self._init_wandb(spec)
+        logger.debug("TRAINER | Hydrating Data Loaders")
         self._init_data(spec)
+        logger.debug("TRAINER | Initializing Evaluations")
         self._init_counters_and_eval()
+        logger.debug("TRAINER | running...")
 
     def _init_topology(self, spec: ExecutionSpec) -> Topology:
         """Initialize topology, mesh, and compute total steps."""

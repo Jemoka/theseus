@@ -128,7 +128,7 @@ def main() -> None:
     all_passed &= passed
 
     # --- Llama ---
-    from theseus.model.models.llama import Llama
+    from theseus.model.models.contrib.llama import Llama
 
     print("\nLlama:")
     passed = test_kv_cache_parity(
@@ -153,7 +153,7 @@ def main() -> None:
     all_passed &= passed
 
     # --- Qwen ---
-    from theseus.model.models.qwen import Qwen
+    from theseus.model.models.contrib.qwen import Qwen
 
     print("\nQwen:")
     passed = test_kv_cache_parity(
@@ -180,7 +180,7 @@ def main() -> None:
     all_passed &= passed
 
     # --- GPTNeoX ---
-    from theseus.model.models.gpt_neox import GPTNeoX
+    from theseus.model.models.contrib.gpt_neox import GPTNeoX
 
     print("\nGPTNeoX:")
     passed = test_kv_cache_parity(

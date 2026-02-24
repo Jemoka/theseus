@@ -31,193 +31,224 @@ import jax.numpy as jnp
 import jax.nn as jnn
 import flax.linen as nn
 
+from theseus.experiments.redcodegen.hardening import Hardening
 
-torch_dtype = torch.float32
-hf_model = Qwen2ForCausalLM.from_pretrained(
-    "Qwen/Qwen2.5-Coder-7B-Instruct", torch_dtype=torch_dtype, device_map=None
-)
-device = "cpu"
-hf_model.to(device)
-hf_model.eval()
-cfg = hf_model.config
+with quick(Hardening, "test") as j:
+    j.config.architecture.backbone.implementation = "qwen"
+    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    j.config.logging.report_interval = 1
+    j.config.architecture.block_size = 1024
+    j.config.training.per_device_batch_size = 1
+    j.config.training.batch_size = 32
 
-rope_theta = 10000.0
-if cfg.rope_parameters is not None and "rope_theta" in cfg.rope_parameters:
-    rope_theta = cfg.rope_parameters["rope_theta"]
+    # contrastive learning, yolo, eventually maybe should
+    # evaluate i.e. by literally rolling out the model
+    j.config.training.evaluate = False
+    j.config.training.validation = False
 
-from theseus.model.models.qwen import Qwen
-model = Qwen(
-    n_layers=cfg.num_hidden_layers,
-    n_embd=cfg.hidden_size,
-    n_head=cfg.num_attention_heads,
-    n_kv_head=cfg.num_key_value_heads,
-    intermediate_size=cfg.intermediate_size,
-    block_size=cfg.max_position_embeddings,
-    vocab_size=cfg.vocab_size,
-    dropout=0.0,
-    attn_dropout=cfg.attention_dropout,
-    rope_theta=rope_theta,
-    rms_norm_eps=cfg.rms_norm_eps,
-    use_sliding_window=cfg.use_sliding_window,
-    sliding_window=cfg.sliding_window,
-    max_window_layers=cfg.max_window_layers,
-    bias=True,
-)
-dummy = jnp.zeros((1, 1), dtype=jnp.int32)
-shapes = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
-
-from theseus.base.job import ExecutionSpec
-spec = ExecutionSpec.local("/sailhome/houjun/theseus")
-
-import flax
-
-model_param_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
-    flax.linen.get_partition_spec(shapes),
-    spec.topology.mesh,
-    rules=tuple(model.sharding),
-)
-
-params = jax.jit(model.init, out_shardings=model_param_sharding)(jax.random.PRNGKey(0), dummy)
-
-# params = model.init(jax.random.PRNGKey(0), dummy)["params"]
-# praams
-
-model
+    # tokenizer is qwen
+    j.config.tokenizer.backend = "huggingingface"
+    j.config.tokenizer.name = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    j.config.training.dataset = [
+        {
+            "name": "redcodegen__hardening",
+            "suffix": "qwen2code7b",
+            "style": "CONTRASTIVE",
+            "rate": "1.0"
+        }
+    ]
+    # j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
+    j()
 
 
 
-# with quick(PretrainGPT, "test") as j:
-#     j.oco gtgr
-# from theseus.experiments.forking import PretrainThoughtbubbles
+
+# torch_dtype = torch.float32
+# hf_model = Qwen2ForCausalLM.from_pretrained(
+#     "Qwen/Qwen2.5-Coder-7B-Instruct", torch_dtype=torch_dtype, device_map=None
+# )
+# device = "cpu"
+# hf_model.to(device)
+# hf_model.eval()
+# cfg = hf_model.config
+
+# rope_theta = 10000.0
+# if cfg.rope_parameters is not None and "rope_theta" in cfg.rope_parameters:
+#     rope_theta = cfg.rope_parameters["rope_theta"]
+
+# from theseus.model.models.contrib.qwen import Qwen
+# model = Qwen(
+#     n_layers=cfg.num_hidden_layers,
+#     n_embd=cfg.hidden_size,
+#     n_head=cfg.num_attention_heads,
+#     n_kv_head=cfg.num_key_value_heads,
+#     intermediate_size=cfg.intermediate_size,
+#     block_size=cfg.max_position_embeddings,
+#     vocab_size=cfg.vocab_size,
+#     dropout=0.0,
+#     attn_dropout=cfg.attention_dropout,
+#     rope_theta=rope_theta,
+#     rms_norm_eps=cfg.rms_norm_eps,
+#     use_sliding_window=cfg.use_sliding_window,
+#     sliding_window=cfg.sliding_window,
+#     max_window_layers=cfg.max_window_layers,
+#     bias=True,
+# )
+# dummy = jnp.zeros((1, 1), dtype=jnp.int32)
+# shapes = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
 
 # from theseus.base.job import ExecutionSpec
+# spec = ExecutionSpec.local("/sailhome/houjun/theseus")
 
-# spec = ExecutionSpec.local("/Users/houjun/theseus/")
-# spec
-# block_size = 1024
+# import flax
 
+# model_param_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore
+#     flax.linen.get_partition_spec(shapes),
+#     spec.topology.mesh,
+#     rules=tuple(model.sharding),
+# )
 
-# from theseus.experiments.redcodegen import Hardening
-# with quick(Hardening, "test") as j:
-#     j.config.architecture.backbone.implementation = "qwen"
-#     j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
-#     j.config.logging.report_interval=1
-#     j.config.architecture.block_size = 1024
-#     j.config.training.per_device_batch_size = 4
-#     j.config.training.batch_size = 32
+# params = jax.jit(model.init, out_shardings=model_param_sharding)(jax.random.PRNGKey(0), dummy)
 
-#     # contrastive learning, yolo, eventually maybe should
-#     # evaluate i.e. by literally rolling out the model
-#     j.config.training.evaluate = False
-#     j.config.training.validation = False
+# # params = model.init(jax.random.PRNGKey(0), dummy)["params"]
+# # praams
 
-#     # tokenizer is qwen
-#     j.config.tokenizer.backend = "huggingingface"
-#     j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
-#     j.config.training.dataset = [
-#         {
-#             "name": "redcodegen__hardening",
-#             "suffix": "qwen205b",
-#             "style": "CONTRASTIVE",
-#             "rate": "1.0"
-#         }
-#     ]
-#     j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
-#     # j()
-
-# j.config.training.dataset
-
-#     j.config
+# model
 
 
 
-#     j.config.architecture.n_head = 16
-#     j.config.architecture.max_block_size = 1024
-#     j.config.training.per_device_batch_size = 8
-#     j.config.logging.checkpoint_interval=10240
-#     j.config.logging.validation_interval=2048
-#     j.config.eval.evaluations = ["blimp"]
-#     j()
-#     # j.save("./configs/"
-#     # j()
+# # with quick(PretrainGPT, "test") as j:
+# #     j.oco gtgr
+# # from theseus.experiments.forking import PretrainThoughtbubbles
 
-# job = j.create()
-# x,y,mask = job.batch()
+# # from theseus.base.job import ExecutionSpec
 
-# job.state_sharding
-# mask
-# job
-# j.config.training.per_device_batch_size = 1
-# j.config.training.batch_size = 2
-# j.config.logging.report_interval = 2
-# j()
-# j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
-
-# cfg
-# j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
-#     j.config.architecture.n_layers = 16
-#     j.config.training.dataset = [[{
-#         "name": "fineweb",
-#         "rate": 1.0,
-#         "style": "PMD",
-#         "suffix": "",
-#     }]]
-#     j.config.training.tokens = [1000000000]
-#     j.config.eval.evaluations = ["mnli", "qqp", "sst2", "siqa"]
-
-#     j.config.logging.report_interval=1
-#     # j.config.logging.validation_interval=4
-#     j.config.training.evaluate = False
-#     # j.config.training.batch_size = 6
-#     j.config.training.per_device_batch_size = 96
-#     # trainer = j.create()
-#     j()
-#     # 1+1
-#     # !nvidia-smi
-
-# # # trainer
-# # # import flax
-# # # print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
-# # # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
-# # from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
-
-# # kl = sum_x(p(x) * (p(x) - q(x)))
-# # tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
-# # tk._tokenizer
-# # x.max()
+# # spec = ExecutionSpec.local("/Users/houjun/theseus/")
+# # spec
+# # block_size = 1024
 
 
-# # x,y,pmd = trainer.batch()
-# # trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
+# # from theseus.experiments.redcodegen import Hardening
+# # with quick(Hardening, "test") as j:
+# #     j.config.architecture.backbone.implementation = "qwen"
+# #     j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+# #     j.config.logging.report_interval=1
+# #     j.config.architecture.block_size = 1024
+# #     j.config.training.per_device_batch_size = 4
+# #     j.config.training.batch_size = 32
 
-# # # shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
-# # #     flax.linen.get_partition_spec(trainer.state),
-# # #     trainer.mesh,
-# # #     rules=tuple(trainer.model.sharding),  # type: ignore
-# # # )
+# #     # contrastive learning, yolo, eventually maybe should
+# #     # evaluate i.e. by literally rolling out the model
+# #     j.config.training.evaluate = False
+# #     j.config.training.validation = False
 
-# # # !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
-# # # res
+# #     # tokenizer is qwen
+# #     j.config.tokenizer.backend = "huggingingface"
+# #     j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
+# #     j.config.training.dataset = [
+# #         {
+# #             "name": "redcodegen__hardening",
+# #             "suffix": "qwen205b",
+# #             "style": "CONTRASTIVE",
+# #             "rate": "1.0"
+# #         }
+# #     ]
+# #     j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
+# #     # j()
 
-# # # #     1+1
-# # # # # ls ~/theseus/data/
+# # j.config.training.dataset
+
+# #     j.config
 
 
-# # # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
-# # # #     cfg = j.config
-# # # #     # j.config.data.dataset = "mnli"
-# # #     # j.save("./configs/data/chicken.yaml")
 
-# # # block, params = init(
-# # #     ForkingAttention,
-# # #     cfg,
-# # #     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
-# # #     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
-# # #     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
-# # # )
-# # # params
+# #     j.config.architecture.n_head = 16
+# #     j.config.architecture.max_block_size = 1024
+# #     j.config.training.per_device_batch_size = 8
+# #     j.config.logging.checkpoint_interval=10240
+# #     j.config.logging.validation_interval=2048
+# #     j.config.eval.evaluations = ["blimp"]
+# #     j()
+# #     # j.save("./configs/"
+# #     # j()
 
-# # # # with configuration(cfg):
-# # # #     fb =  configure(ForkingAttention)
+# # job = j.create()
+# # x,y,mask = job.batch()
 
-# # # # fb.init(jax.random.PRNGKey(7),
+# # job.state_sharding
+# # mask
+# # job
+# # j.config.training.per_device_batch_size = 1
+# # j.config.training.batch_size = 2
+# # j.config.logging.report_interval = 2
+# # j()
+# # j.save("./configs/continual/abcd.yaml", chip="h200", n_chips=2)
+
+# # cfg
+# # j.config.architecture.huggingface.model = "meta-llama/Llama-3.1-8B-Instruct"
+# #     j.config.architecture.n_layers = 16
+# #     j.config.training.dataset = [[{
+# #         "name": "fineweb",
+# #         "rate": 1.0,
+# #         "style": "PMD",
+# #         "suffix": "",
+# #     }]]
+# #     j.config.training.tokens = [1000000000]
+# #     j.config.eval.evaluations = ["mnli", "qqp", "sst2", "siqa"]
+
+# #     j.config.logging.report_interval=1
+# #     # j.config.logging.validation_interval=4
+# #     j.config.training.evaluate = False
+# #     # j.config.training.batch_size = 6
+# #     j.config.training.per_device_batch_size = 96
+# #     # trainer = j.create()
+# #     j()
+# #     # 1+1
+# #     # !nvidia-smi
+
+# # # # trainer
+# # # # import flax
+# # # # print([i.value.sharding for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)])
+# # # # [i.value for i in trainer.state.params["_params"].values() if isinstance(i, flax.linen.Partitioned)]
+# # # from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
+
+# # # kl = sum_x(p(x) * (p(x) - q(x)))
+# # # tk = get_tokenizer(TokenizerConfig(backend="huggingface", name="meta-llama/Llama-3.1-8B"))
+# # # tk._tokenizer
+# # # x.max()
+
+
+# # # x,y,pmd = trainer.batch()
+# # # trainer.forward(trainer.state, trainer.state.params, (x,y,pmd))
+
+# # # # shd = flax.linen.logical_to_mesh_sharding(  # type: ignore
+# # # #     flax.linen.get_partition_spec(trainer.state),
+# # # #     trainer.mesh,
+# # # #     rules=tuple(trainer.model.sharding),  # type: ignore
+# # # # )
+
+# # # # !git fetch && git checkout cdb30b47b94a2397044e8eaa6c12416a9825953f
+# # # # res
+
+# # # # #     1+1
+# # # # # # ls ~/theseus/data/
+
+
+# # # # # with quick("thoughtbubbles/train/pretrain", "test", "/Users/houjun/theseus") as j:
+# # # # #     cfg = j.config
+# # # # #     # j.config.data.dataset = "mnli"
+# # # #     # j.save("./configs/data/chicken.yaml")
+
+# # # # block, params = init(
+# # # #     ForkingAttention,
+# # # #     cfg,
+# # # #     x=jnp.ones((7, cfg.architecture.block_size, cfg.architecture.n_embd)),
+# # # #     cumulative_scores=jnp.ones((7, cfg.architecture.block_size)),
+# # # #     token_index=jnp.arange(cfg.architecture.block_size)[None,:].repeat(7, axis=0),
+# # # # )
+# # # # params
+
+# # # # # with configuration(cfg):
+# # # # #     fb =  configure(ForkingAttention)
+
+# # # # # fb.init(jax.random.PRNGKey(7),

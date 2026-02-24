@@ -26,9 +26,9 @@ from theseus.training.backbone import BACKBONES
 # Per-implementation conversion functions.
 # qwen: (params, n_layers)
 # llama / gpt_neox: (params, n_layers, hf_cfg)
-from theseus.model.models.qwen import _to_hf_state_dict as _qwen_to_hf
-from theseus.model.models.llama import _to_hf_state_dict as _llama_to_hf
-from theseus.model.models.gpt_neox import _to_hf_state_dict as _gpt_neox_to_hf
+from theseus.model.models.contrib.qwen import _to_hf_state_dict as _qwen_to_hf
+from theseus.model.models.contrib.llama import _to_hf_state_dict as _llama_to_hf
+from theseus.model.models.contrib.gpt_neox import _to_hf_state_dict as _gpt_neox_to_hf
 
 
 def _call_to_hf(impl: str, params, n_layers: int, hf_cfg):
