@@ -429,6 +429,7 @@ import time
 from datetime import datetime
 
 RESOURCE_MARKER = "RESOURCE_EXHAUSTED"
+INTERNAL_ERROR_MARKER = "JaxRuntimeError: INTERNAL:"
 INITIAL_STABILITY_TIMEOUT = float(
     os.environ.get("THESEUS_DISPATCH_INITIAL_STABILITY_TIMEOUT", "3600")
 )
@@ -502,7 +503,7 @@ def _run_command_worker(command: str, env: dict[str, str], events: mp.Queue) -> 
 
         assert child.stdout is not None
         for line in child.stdout:
-            if RESOURCE_MARKER in line:
+            if RESOURCE_MARKER in line or INTERNAL_ERROR_MARKER in line:
                 saw_resource = True
             _put_event(events, ("line", line))
 
@@ -549,7 +550,7 @@ def _run_attempt(
                 kind = event[0]
                 if kind == "line":
                     line = str(event[1])
-                    if RESOURCE_MARKER in line:
+                    if RESOURCE_MARKER in line or INTERNAL_ERROR_MARKER in line:
                         saw_resource = True
                     sys.stdout.write(line)
                     sys.stdout.flush()
