@@ -226,8 +226,9 @@ class StatusService:
         return sorted(projects.values(), key=lambda p: p.name)
 
     def get_running_jobs(self) -> list[JobMetadata]:
-        """Get all currently running jobs."""
-        return self.list_all_jobs(status=JobStatus.RUNNING, limit=1000)
+        """Get all currently running jobs, excluding stale ones (no heartbeat >5min)."""
+        jobs = self.list_all_jobs(status=JobStatus.RUNNING, limit=1000)
+        return [j for j in jobs if not j.is_stale]
 
     def get_recent_jobs(self, hours: int = 24, limit: int = 50) -> list[JobMetadata]:
         """Get jobs started within the last N hours."""
