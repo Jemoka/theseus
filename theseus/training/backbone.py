@@ -82,10 +82,8 @@ class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
         dtype_cfg = configure(ModelDtypeConfig)
 
         model_cls = BACKBONES[backbone_cfg.implementation]
-        self.model, params = model_cls.from_pretrained(backbone_cfg.weights)
-
-        # Apply configured dtype fields to the loaded model
-        self.model = self.model.replace(
+        self.model, params = model_cls.from_pretrained(
+            backbone_cfg.weights,
             param_dtype=dtype_cfg.param_dtype,
             activation_dtype=dtype_cfg.activation_dtype,
         )

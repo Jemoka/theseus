@@ -171,7 +171,13 @@ class GPTNeoX(Module):
         return logits, loss_val
 
     @classmethod
-    def from_pretrained(cls, model_id: str, device: str = "cpu") -> Any:
+    def from_pretrained(
+        cls,
+        model_id: str,
+        device: str = "cpu",
+        param_dtype: str = "float32",
+        activation_dtype: str = "bfloat16",
+    ) -> Any:
         import torch
         from transformers import GPTNeoXForCausalLM
 
@@ -210,6 +216,8 @@ class GPTNeoX(Module):
             if hasattr(cfg, "attention_bias")
             else True,
             use_parallel_residual=cfg.use_parallel_residual,
+            param_dtype=param_dtype,
+            activation_dtype=activation_dtype,
         )
 
         dummy = jnp.zeros((1, 1), dtype=jnp.int32)
