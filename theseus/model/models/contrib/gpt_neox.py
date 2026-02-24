@@ -68,7 +68,7 @@ class GPTNeoX(Module):
                 (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
-            jnp.float32,
+            self._param_dtype,
         )
         self.lm_head: Any = self.param(
             "lm_head",
@@ -77,7 +77,7 @@ class GPTNeoX(Module):
                 (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
-            jnp.float32,
+            self._param_dtype,
         )
 
         self.drop = nn.Dropout(rate=self.dropout)
@@ -97,15 +97,21 @@ class GPTNeoX(Module):
                 use_parallel_residual=self.use_parallel_residual,
                 bias=self.bias,
                 attention_bias=self.attention_bias,
+                param_dtype=self.param_dtype,
+                activation_dtype=self.activation_dtype,
             )
             for _ in range(self.n_layers)
         ]
         self.ln_f = LayerNorm(
-            self.n_embd, self.bias, eps=self.layer_norm_eps, dtype=jnp.float32
+            ndim=self.n_embd,
+            bias=self.bias,
+            eps=self.layer_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
 
     def embed(self, idx: jax.Array, deterministic: bool = False) -> Any:
-        x = jnp.take(self.wte, idx, axis=0).astype(jnp.float32)
+        x = jnp.take(self.wte, idx, axis=0).astype(self._activation_dtype)
         x = self.drop(x, deterministic=deterministic)
         return x
 

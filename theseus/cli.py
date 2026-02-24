@@ -224,7 +224,15 @@ def configure(
             kept: dict[str, Any] = {}
             for key in template.keys():
                 if key in src:
-                    kept[key] = _keep_known_keys(src[key], template[key])
+                    # Use select to avoid raising on mandatory-missing ("???") leaves
+                    tmpl_val = OmegaConf.select(
+                        template, key, default=None, throw_on_resolution_failure=False
+                    )
+                    if tmpl_val is None:
+                        # Mandatory missing leaf — carry src value directly
+                        kept[key] = src[key]
+                    else:
+                        kept[key] = _keep_known_keys(src[key], tmpl_val)
             return OmegaConf.create(kept)
 
         # If template is a list-like config, keep aligned positions only.

@@ -2,7 +2,6 @@ from typing import Optional, List, Type, Any, Tuple
 
 import jax
 import flax.linen as nn
-import jax.numpy as jnp
 
 from theseus.config import field
 from theseus.model.module import Module
@@ -39,7 +38,11 @@ class GPTNeoXDecoderBlock(Module):
 
     def setup(self) -> None:
         self.ln_1 = LayerNorm(
-            self.n_embd, self.bias, eps=self.layer_norm_eps, dtype=jnp.float32
+            ndim=self.n_embd,
+            bias=self.bias,
+            eps=self.layer_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
         self.attn = GroupedSelfAttention(
             n_embd=self.n_embd,
@@ -52,9 +55,15 @@ class GPTNeoXDecoderBlock(Module):
             partial_rotary_factor=self.partial_rotary_factor,
             use_sliding_window=False,
             attn_bias=self.attention_bias,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
         self.ln_2 = LayerNorm(
-            self.n_embd, self.bias, eps=self.layer_norm_eps, dtype=jnp.float32
+            ndim=self.n_embd,
+            bias=self.bias,
+            eps=self.layer_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
         self.mlp = NeoXMLP(
             n_embd=self.n_embd,
@@ -62,6 +71,8 @@ class GPTNeoXDecoderBlock(Module):
             intermediate_size=self.intermediate_size,
             dropout=self.dropout,
             bias=self.bias,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
         self.dropout_layer = nn.Dropout(rate=self.dropout)
 

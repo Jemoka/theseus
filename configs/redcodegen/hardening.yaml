@@ -23,7 +23,7 @@ optimization:
   lr: 0.0000003 # ASTPrompter had luck with this number
 training:
   batch_size: 32
-  per_device_batch_size: -1 # autosearch (doesn't work without dispatch infra, 4 here seems to work well)
+  per_device_batch_size: 1
   tokens: 100000000 # it'll checkpoint, so we don't really care how long it runs, though this is not very long
   warmup_pct: 0.01
   decay_pct: 0.1

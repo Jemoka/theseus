@@ -8,7 +8,7 @@ from theseus.model.module import Module
 
 
 class RMSNorm(Module):
-    ndim: int = field("architecture/n_embd")
+    ndim: int = field("architecture/n_embd", default=2048)
     eps: float = field("architecture/rms_norm_eps", default=1e-6)
 
     @classmethod
@@ -21,7 +21,9 @@ class RMSNorm(Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        weight = self.param("weight", nn.initializers.ones, (self.ndim,))
+        weight = self.param(
+            "weight", nn.initializers.ones, (self.ndim,), self._param_dtype
+        )
         x_f32 = x.astype(jnp.float32)
         variance = jnp.mean(jnp.square(x_f32), axis=-1, keepdims=True)
         x_norm = x_f32 * jax.lax.rsqrt(variance + self.eps)

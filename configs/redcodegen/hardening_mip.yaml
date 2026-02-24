@@ -1,0 +1,44 @@
+architecture:
+  backbone:
+    implementation: qwen
+    weights: Qwen/Qwen2.5-Coder-7B-Instruct
+  dtype:
+    param: bfloat16
+    activation: bfloat16
+  block_size: 1024
+eval:
+  evaluations: []
+tokenizer:
+  backend: huggingingface
+  name: Qwen/Qwen2.5-Coder-7B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  dpo:
+    beta: 0.1
+    label_smoothing: 0.0
+  lr: 3.0e-07
+training:
+  batch_size: 32
+  per_device_batch_size: 1
+  tokens: 100000000
+  warmup_pct: 0.01
+  decay_pct: 0.1
+  validation: false
+  evaluate: false
+  dataset:
+  - name: redcodegen__hardening
+    rate: '1.0'
+    style: CONTRASTIVE
+    suffix: qwen2code7b
+  validation_steps: 1
+logging:
+  report_interval: 8
+  checkpoint_interval: 256
+  validation_interval: 2560000
+  wandb: true
+job: redcodegen/train/hardening

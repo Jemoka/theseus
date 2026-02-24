@@ -20,14 +20,12 @@ from theseus.model.axes import Axes
 from theseus.model.module import Module
 from theseus.model.masks import cache_mask
 
-ATTN_DTYPE = jnp.bfloat16
-
 
 class SelfAttention(Module):
-    n_embd: int = field("architecture/n_embd")
-    n_layers: int = field("architecture/n_layers")
-    bias: bool = field("architecture/bias")
-    dropout: float = field("architecture/dropout")
+    n_embd: int = field("architecture/n_embd", default=2048)
+    n_layers: int = field("architecture/n_layers", default=32)
+    bias: bool = field("architecture/bias", default=True)
+    dropout: float = field("architecture/dropout", default=0.0)
 
     n_head: int = field("architecture/n_head", default=16)
     block_size: int = field("architecture/block_size", default=512)
@@ -51,8 +49,8 @@ class SelfAttention(Module):
                 jax.nn.initializers.normal(stddev=0.02),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=jnp.bfloat16,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
 
         self.c_proj = nn.Dense(
@@ -62,8 +60,8 @@ class SelfAttention(Module):
                 jax.nn.initializers.normal(stddev=0.02 / math.sqrt(2 * self.n_layers)),
                 (Axes.N_EMBD_OUT.value, Axes.N_EMBD.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=jnp.bfloat16,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
 
     # ------------------------------------------------------------------
@@ -181,9 +179,9 @@ class SelfAttention(Module):
         # dot_product_attention expects (B, T, H, D) — same as our convention
         # Compute attention in float32 for precision parity between
         # full-sequence and cached single-token paths
-        q = q.astype(jnp.float32)
-        k = k.astype(jnp.float32)
-        v = v.astype(jnp.float32)
+        q = q.astype(self._activation_dtype)
+        k = k.astype(self._activation_dtype)
+        v = v.astype(self._activation_dtype)
 
         if mask is not None:
             # Use additive bias (-inf for masked) instead of boolean mask

@@ -10,9 +10,9 @@ from theseus.model.module import Module
 
 
 class MLP(Module):
-    n_embd: int = field("architecture/n_embd")
-    n_layers: int = field("architecture/n_layers")
-    dropout: float = field("architecture/dropout")
+    n_embd: int = field("architecture/n_embd", default=2048)
+    n_layers: int = field("architecture/n_layers", default=32)
+    dropout: float = field("architecture/dropout", default=0.0)
     intermediate_size: int = field("architecture/intermediate_size", default=-1)
     bias: bool = field("architecture/bias", default=True)
 
@@ -23,10 +23,6 @@ class MLP(Module):
     @property
     def sharding(self) -> List[Tuple[str, Optional[Any]]]:
         return []
-
-    @property
-    def _compute_dtype(self) -> Any:
-        return jnp.bfloat16
 
     @property
     def _intermediate_features(self) -> int:
@@ -45,8 +41,8 @@ class MLP(Module):
                 jax.nn.initializers.normal(stddev=stddev),
                 sharding_axes,
             ),
-            param_dtype=jnp.float32,
-            dtype=self._compute_dtype,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
 
     def setup(self) -> None:
@@ -81,10 +77,6 @@ class QwenMLP(MLP):
     intermediate_size: int = field("architecture/intermediate_size", default=22016)
     dropout: float = field("architecture/dropout", default=0.0)
     bias: bool = field("architecture/bias", default=False)
-
-    @property
-    def _compute_dtype(self) -> Any:
-        return jnp.bfloat16
 
     def setup(self) -> None:
         init_std = 0.02
@@ -122,10 +114,6 @@ class NeoXMLP(MLP):
     intermediate_size: int = field("architecture/intermediate_size", default=8192)
     dropout: float = field("architecture/dropout", default=0.0)
     bias: bool = field("architecture/bias", default=True)
-
-    @property
-    def _compute_dtype(self) -> Any:
-        return jnp.bfloat16
 
     def setup(self) -> None:
         init_std = 0.02

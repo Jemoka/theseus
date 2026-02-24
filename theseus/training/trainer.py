@@ -214,6 +214,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         )
         return variables, var_sharding
 
+    def _cast_params(self, params: PyTree[jax.Array]) -> PyTree[jax.Array]:
+        """Cast all params to the model's configured param dtype."""
+        target = jnp.dtype(self.model.param_dtype)
+        return jax.tree_util.tree_map(lambda x: x.astype(target), params)  # type: ignore[no-any-return]
+
     def _init_model(self) -> PyTree[jax.Array]:
         """Initialize model and random keys, return initial sharded params."""
         # initialize model from the config in thin air
@@ -227,7 +232,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         variables, _ = self.sharded_init(
             self.model, init_key, dummy_input, mesh=self.mesh
         )
-        return variables["params"]  # type: ignore[no-any-return]
+        return self._cast_params(variables["params"])
 
     def _init_state(self, params: PyTree[jax.Array]) -> None:
         """Build optimizer, scheduler, and sharded train state."""
@@ -811,6 +816,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         state, metadata = self.get_tree_and_metadata(suffix, self.state)
 
         self.state = state
+        self.state = self.state.replace(params=self._cast_params(self.state.params))
         self.global_step_counter_ = metadata.get("steps", 0)
         self.best_val_score_ = metadata.get("score", float("-inf"))
 

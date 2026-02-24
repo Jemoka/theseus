@@ -48,7 +48,7 @@ class GPT(Module):
                 (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
-            jnp.float32,
+            self._param_dtype,
         )  # type: ignore
 
         # Positional embedding table (only when not using RoPE)
@@ -60,7 +60,7 @@ class GPT(Module):
                     (Axes.BLOCK_SIZE.value, Axes.N_EMBD.value),
                 ),
                 (self.block_size, self.n_embd),
-                jnp.float32,
+                self._param_dtype,
             )  # type: ignore
 
         self.drop = nn.Dropout(rate=self.dropout)
@@ -73,12 +73,12 @@ class GPT(Module):
         _, t = idx.shape
 
         # Token embeddings
-        x = jnp.take(self.wte, idx, axis=0).astype(jnp.bfloat16)
+        x = jnp.take(self.wte, idx, axis=0).astype(self._activation_dtype)
 
         # Positional embeddings (only when not using RoPE)
         if not self.rope:
             pos = jnp.arange(0, t)
-            x = x + jnp.take(self.wpe, pos, axis=0).astype(jnp.bfloat16)
+            x = x + jnp.take(self.wpe, pos, axis=0).astype(self._activation_dtype)
 
         x = self.drop(x, deterministic=deterministic)
 
@@ -101,7 +101,7 @@ class GPT(Module):
         """Compute output distribution."""
 
         x = self.ln_f(x)
-        logits = jnp.einsum("bth,vh->btv", x, self.wte.astype(jnp.bfloat16))
+        logits = jnp.einsum("bth,vh->btv", x, self.wte.astype(self._activation_dtype))
 
         return logits
 

@@ -21,8 +21,6 @@ from theseus.model.masks import (
     cache_mask,
 )
 
-ATTN_DTYPE = jnp.bfloat16
-
 
 class GroupedSelfAttention(SelfAttention):
     n_embd: int = field("architecture/n_embd", default=4096)
@@ -62,8 +60,8 @@ class GroupedSelfAttention(SelfAttention):
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=ATTN_DTYPE,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
         self.k_proj = nn.Dense(
             n_kv_head * head_dim,
@@ -72,8 +70,8 @@ class GroupedSelfAttention(SelfAttention):
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=ATTN_DTYPE,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
         self.v_proj = nn.Dense(
             n_kv_head * head_dim,
@@ -82,8 +80,8 @@ class GroupedSelfAttention(SelfAttention):
                 jax.nn.initializers.normal(stddev=kernel_init_std),
                 (Axes.N_EMBD.value, Axes.N_ATTN.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=ATTN_DTYPE,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
         self.o_proj = nn.Dense(
             self.n_embd,
@@ -92,8 +90,8 @@ class GroupedSelfAttention(SelfAttention):
                 jax.nn.initializers.normal(stddev=proj_init_std),
                 (Axes.N_ATTN.value, Axes.N_EMBD.value),
             ),
-            param_dtype=jnp.float32,
-            dtype=ATTN_DTYPE,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
         )
 
         self.rope = RotaryPosEncoding(
@@ -158,9 +156,9 @@ class GroupedSelfAttention(SelfAttention):
         b = q.shape[0]
         t_q = q.shape[1]
         t_kv = k.shape[1]
-        qh = q.transpose(0, 2, 1, 3).astype(jnp.float32)
-        kh = k.transpose(0, 2, 1, 3).astype(jnp.float32)
-        vh = v.transpose(0, 2, 1, 3).astype(ATTN_DTYPE)
+        qh = q.transpose(0, 2, 1, 3).astype(self._activation_dtype)
+        kh = k.transpose(0, 2, 1, 3).astype(self._activation_dtype)
+        vh = v.transpose(0, 2, 1, 3).astype(self._activation_dtype)
 
         scores = jnp.einsum("bhtd,bhTd->bhtT", qh, kh)
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)

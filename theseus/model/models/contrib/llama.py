@@ -62,7 +62,7 @@ class Llama(Module):
                 (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
-            jnp.float32,
+            self._param_dtype,
         )
         self.lm_head: Any = self.param(
             "lm_head",
@@ -71,7 +71,7 @@ class Llama(Module):
                 (Axes.VOCAB.value, Axes.N_EMBD.value),
             ),
             (self.vocab_size, self.n_embd),
-            jnp.float32,
+            self._param_dtype,
         )
 
         self.drop = nn.Dropout(rate=self.dropout)
@@ -89,13 +89,20 @@ class Llama(Module):
                 rms_norm_eps=self.rms_norm_eps,
                 bias=self.bias,
                 attention_bias=self.attention_bias,
+                param_dtype=self.param_dtype,
+                activation_dtype=self.activation_dtype,
             )
             for _ in range(self.n_layers)
         ]
-        self.ln_f = RMSNorm(ndim=self.n_embd, eps=self.rms_norm_eps)
+        self.ln_f = RMSNorm(
+            ndim=self.n_embd,
+            eps=self.rms_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
+        )
 
     def embed(self, idx: jax.Array, deterministic: bool = False) -> Any:
-        x = jnp.take(self.wte, idx, axis=0).astype(jnp.float32)
+        x = jnp.take(self.wte, idx, axis=0).astype(self._activation_dtype)
         x = self.drop(x, deterministic=deterministic)
         return x
 

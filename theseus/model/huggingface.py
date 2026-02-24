@@ -85,7 +85,7 @@ except ValueError as e:
 
 
 class HFCompat(Module):
-    id: str
+    id: str = ""
 
     @classmethod
     @abstractmethod

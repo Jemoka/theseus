@@ -36,6 +36,12 @@ class BackboneConfig:
     weights: str = field("architecture/backbone/weights")
 
 
+@dataclass
+class ModelDtypeConfig:
+    param_dtype: str = field("architecture/dtype/param", default="float32")
+    activation_dtype: str = field("architecture/dtype/activation", default="bfloat16")
+
+
 class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
     """Trainer that initializes from a pretrained HuggingFace backbone."""
 
@@ -48,7 +54,12 @@ class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
         from theseus.training.optimizers import OPTIMIZERS
         from theseus.training.schedules import SCHEDULES
 
-        cfg: List[Type[Any]] = [BackboneConfig, EvaluatorConfig, TokenizerConfig]
+        cfg: List[Type[Any]] = [
+            BackboneConfig,
+            ModelDtypeConfig,
+            EvaluatorConfig,
+            TokenizerConfig,
+        ]
 
         optim = cls.optimizer()
         if isinstance(optim, str):
@@ -68,11 +79,18 @@ class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
         from theseus.config import configure
 
         backbone_cfg = configure(BackboneConfig)
+        dtype_cfg = configure(ModelDtypeConfig)
 
         model_cls = BACKBONES[backbone_cfg.implementation]
         self.model, params = model_cls.from_pretrained(backbone_cfg.weights)
 
+        # Apply configured dtype fields to the loaded model
+        self.model = self.model.replace(
+            param_dtype=dtype_cfg.param_dtype,
+            activation_dtype=dtype_cfg.activation_dtype,
+        )
+
         # Still need to split keys for dropout
         self.key, _init_key, self.dropout_key = jax_random.split(self.key, num=3)
 
-        return params
+        return self._cast_params(params)

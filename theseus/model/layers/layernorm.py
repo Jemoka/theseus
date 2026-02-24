@@ -9,10 +9,8 @@ from theseus.model.module import Module
 
 
 class LayerNorm(Module):
-    ndim: int = field("architecture/n_embd")
-    bias: bool = field("architecture/bias")
-    # Use float32 for parity with HF GPT-NeoX/LLaMA style norms
-    dtype: jnp.dtype = jnp.float32
+    ndim: int = field("architecture/n_embd", default=2048)
+    bias: bool = field("architecture/bias", default=True)
     eps: float = field("architecture/layer_norm_eps", default=1e-5)
 
     @property
@@ -25,9 +23,11 @@ class LayerNorm(Module):
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
-        weight = self.param("weight", nn.initializers.ones, (self.ndim,))
+        weight = self.param(
+            "weight", nn.initializers.ones, (self.ndim,), self._param_dtype
+        )
         bias = (
-            self.param("bias", nn.initializers.zeros, (self.ndim,))
+            self.param("bias", nn.initializers.zeros, (self.ndim,), self._param_dtype)
             if self.bias
             else None
         )
@@ -38,12 +38,12 @@ class LayerNorm(Module):
         var = jnp.var(x_f32, axis=-1, keepdims=True)
         x_norm = (x_f32 - mean) / jnp.sqrt(var + self.eps)
 
-        # Cast back to compute dtype
-        x_norm = x_norm.astype(self.dtype)
-        weight_cast = weight.astype(self.dtype)
+        # Cast back to activation dtype
+        x_norm = x_norm.astype(self._activation_dtype)
+        weight_cast = weight.astype(self._activation_dtype)
 
         if bias is not None:
-            bias_cast = bias.astype(self.dtype)
+            bias_cast = bias.astype(self._activation_dtype)
             return weight_cast * x_norm + bias_cast
         else:
             return weight_cast * x_norm

@@ -30,7 +30,12 @@ class LlamaDecoderBlock(Module):
         return []
 
     def setup(self) -> None:
-        self.rms_1 = RMSNorm(ndim=self.n_embd, eps=self.rms_norm_eps)
+        self.rms_1 = RMSNorm(
+            ndim=self.n_embd,
+            eps=self.rms_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
+        )
         self.attn = GroupedSelfAttention(
             n_embd=self.n_embd,
             n_layers=self.n_layers,
@@ -41,14 +46,23 @@ class LlamaDecoderBlock(Module):
             rope_theta=self.rope_theta,
             use_sliding_window=False,
             attn_bias=self.attention_bias,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
-        self.rms_2 = RMSNorm(ndim=self.n_embd, eps=self.rms_norm_eps)
+        self.rms_2 = RMSNorm(
+            ndim=self.n_embd,
+            eps=self.rms_norm_eps,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
+        )
         self.mlp = LlamaMLP(
             n_embd=self.n_embd,
             n_layers=self.n_layers,
             intermediate_size=self.intermediate_size,
             dropout=self.dropout,
             bias=self.bias,
+            param_dtype=self.param_dtype,
+            activation_dtype=self.activation_dtype,
         )
 
     def __call__(
