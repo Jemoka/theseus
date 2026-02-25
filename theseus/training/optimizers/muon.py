@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from theseus.config import field
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -29,10 +29,18 @@ class MuonConfig:
     # LR multipliers relative to the base schedule LR (matrix params define the "1x" baseline)
     # Example raw values: matrix=0.02, embedding=0.3, unembedding=0.004, scalar=0.5
     # → multipliers: matrix=1.0, embedding=15.0, unembedding=0.2, scalar=25.0
-    matrix_lr_multiplier: float = field("optimization/muon/matrix_lr_multiplier", default=1.0)
-    embedding_lr_multiplier: float = field("optimization/muon/embedding_lr_multiplier", default=15.0)
-    unembedding_lr_multiplier: float = field("optimization/muon/unembedding_lr_multiplier", default=0.2)
-    scalar_lr_multiplier: float = field("optimization/muon/scalar_lr_multiplier", default=25.0)
+    matrix_lr_multiplier: float = field(
+        "optimization/muon/matrix_lr_multiplier", default=1.0
+    )
+    embedding_lr_multiplier: float = field(
+        "optimization/muon/embedding_lr_multiplier", default=15.0
+    )
+    unembedding_lr_multiplier: float = field(
+        "optimization/muon/unembedding_lr_multiplier", default=0.2
+    )
+    scalar_lr_multiplier: float = field(
+        "optimization/muon/scalar_lr_multiplier", default=25.0
+    )
 
     # AdamW hyperparameters for embedding / unembedding / scalar params.
     # Share paths with AdamWConfig so old/mixed configs compose without duplication.
@@ -43,9 +51,9 @@ class MuonConfig:
 
 
 class _MuonState(NamedTuple):
-    momentum: Any        # pytree matching params: first-moment buffers
-    second_moment: Any   # pytree matching params: factored second-moment buffers
-    count: Any           # scalar step counter
+    momentum: Any  # pytree matching params: first-moment buffers
+    second_moment: Any  # pytree matching params: factored second-moment buffers
+    count: Any  # scalar step counter
 
 
 def _polar_express(X: jax.Array, num_steps: int) -> jax.Array:
@@ -92,10 +100,10 @@ def scale_by_muon(
         An :class:`optax.GradientTransformation`.
     """
 
-    def init_fn(params):
+    def init_fn(params: Any) -> _MuonState:
         mu = jax.tree.map(jnp.zeros_like, params)
 
-        def _make_nu(p):
+        def _make_nu(p: jax.Array) -> jax.Array:
             if p.ndim >= 2:
                 # Factored second moment: reduce along the smaller dimension
                 if p.shape[-2] >= p.shape[-1]:
@@ -107,21 +115,25 @@ def scale_by_muon(
         nu = jax.tree.map(_make_nu, params)
         return _MuonState(momentum=mu, second_moment=nu, count=jnp.zeros([], jnp.int32))
 
-    def update_fn(updates, state, params=None):
+    def update_fn(
+        updates: Any, state: Any, params: Any = None
+    ) -> tuple[Any, _MuonState]:
         mu, nu, count = state
 
         # --- 1. Nesterov momentum (mirrors PyTorch's lerp_ pair) ---
         new_mu = jax.tree.map(
             lambda m, g: momentum * m + (1 - momentum) * g,
-            mu, updates,
+            mu,
+            updates,
         )
         g = jax.tree.map(
             lambda new_m, orig_g: (1 - momentum) * orig_g + momentum * new_m,
-            new_mu, updates,
+            new_mu,
+            updates,
         )
 
         # --- 2. Polar Express orthogonalization for matrix params ---
-        def _orth(grad):
+        def _orth(grad: jax.Array) -> jax.Array:
             if grad.ndim < 2:
                 return grad
             orig_shape = grad.shape
@@ -134,32 +146,32 @@ def scale_by_muon(
         g = jax.tree.map(_orth, g)
 
         # --- 3. NorMuon variance reduction ---
-        def _update_nu(grad, v):
+        def _update_nu(grad: jax.Array, v: jax.Array) -> jax.Array:
             if grad.ndim < 2:
                 return v
             g_f = grad.astype(jnp.float32)
             if grad.shape[-2] >= grad.shape[-1]:
-                v_mean = jnp.mean(g_f ** 2, axis=-1, keepdims=True)
+                v_mean = jnp.mean(g_f**2, axis=-1, keepdims=True)
             else:
-                v_mean = jnp.mean(g_f ** 2, axis=-2, keepdims=True)
+                v_mean = jnp.mean(g_f**2, axis=-2, keepdims=True)
             return (1 - beta2) * v_mean + beta2 * v
 
         new_nu = jax.tree.map(_update_nu, g, nu)
 
-        def _apply_normuon(grad, new_v):
+        def _apply_normuon(grad: jax.Array, new_v: jax.Array) -> jax.Array:
             if grad.ndim < 2:
                 return grad
             g_f = grad.astype(jnp.float32)
             if grad.shape[-2] >= grad.shape[-1]:
-                v_mean = jnp.mean(g_f ** 2, axis=-1, keepdims=True)
+                v_mean = jnp.mean(g_f**2, axis=-1, keepdims=True)
                 red_dim = grad.shape[-1]
             else:
-                v_mean = jnp.mean(g_f ** 2, axis=-2, keepdims=True)
+                v_mean = jnp.mean(g_f**2, axis=-2, keepdims=True)
                 red_dim = grad.shape[-2]
 
             v_norm = jnp.sqrt(jnp.sum(v_mean * red_dim))
             step_size = jnp.maximum(new_v, 1e-10) ** -0.5
-            scaled_sq = (v_mean * red_dim) * step_size ** 2
+            scaled_sq = (v_mean * red_dim) * step_size**2
             v_norm_new = jnp.sqrt(jnp.sum(scaled_sq))
             final_scale = step_size * (v_norm / jnp.maximum(v_norm_new, 1e-10))
             return (grad * final_scale).astype(grad.dtype)
@@ -178,15 +190,17 @@ def _cautious_weight_decay(weight_decay: float) -> base.GradientTransformation:
       update += weight_decay * param * (sign(update) == sign(param))
     """
 
-    def init_fn(params):
+    def init_fn(params: Any) -> tuple[()]:
         return ()
 
-    def update_fn(updates, state, params=None):
+    def update_fn(updates: Any, state: Any, params: Any = None) -> tuple[Any, Any]:
         if params is None or weight_decay == 0.0:
             return updates, state
-        def _apply(u, p):
+
+        def _apply(u: jax.Array, p: jax.Array) -> jax.Array:
             mask = (u * p >= 0).astype(u.dtype)
             return u + weight_decay * p * mask
+
         return jax.tree.map(_apply, updates, params), state
 
     return base.GradientTransformation(init_fn, update_fn)
@@ -213,7 +227,7 @@ def _label_params(params: Any) -> Any:
     custom ``param_labels`` callable to :func:`muon` for non-standard layouts.
     """
 
-    def _classify(path, leaf):
+    def _classify(path: Any, leaf: jax.Array) -> str:
         path_str = ".".join(
             k.key if hasattr(k, "key") else str(k) for k in path
         ).lower()
@@ -236,7 +250,7 @@ def _label_params(params: Any) -> Any:
 def muon(
     lr: optax._src.base.Schedule | float,
     cfg: MuonConfig,
-    param_labels=None,
+    param_labels: Callable[[Any], Any] | None = None,
 ) -> optax.GradientTransformation:
     """Muon + AdamW mixed optimizer, mirroring the :func:`adamw` API.
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Smoke test for the Muon optimizer wired into gpt/train/pretrain."""
 
-import os
 import numpy as np
 from pathlib import Path
 
@@ -14,8 +13,8 @@ from theseus.experiments.models.gpt import PretrainGPT
 # ---------------------------------------------------------------------------
 
 _OUT_ROOT = Path("/tmp/theseus_muon")
-_VOCAB_SIZE = 50257   # GPT-2 / tiktoken cl100k range
-_NUM_TOKENS  = 2 ** 17  # 128K tokens — plenty for any tiny smoke run
+_VOCAB_SIZE = 50257  # GPT-2 / tiktoken cl100k range
+_NUM_TOKENS = 2**17  # 128K tokens — plenty for any tiny smoke run
 
 
 def _make_synthetic_data(root: Path) -> None:
@@ -27,6 +26,7 @@ def _make_synthetic_data(root: Path) -> None:
         if not p.exists():
             tokens = rng.integers(1, _VOCAB_SIZE, size=_NUM_TOKENS, dtype=np.uint32)
             tokens.tofile(p)
+
 
 _OUT_ROOT.mkdir(parents=True, exist_ok=True)
 _make_synthetic_data(_OUT_ROOT)
@@ -72,10 +72,14 @@ with quick(PretrainGPTMuon, name="smoke_test_muon", out_path="/tmp/theseus_muon"
     print(
         f"  Model: {j.config.architecture.n_layers} layers, {j.config.architecture.n_embd} embd"
     )
-    print(f"  Optimizer: muon  (matrix lr={j.config.optimization.lr}, "
-          f"embedding lr={j.config.optimization.lr * j.config.optimization.muon.matrix_lr_multiplier:.4f} * "
-          f"{j.config.optimization.muon.embedding_lr_multiplier}x)")
-    print(f"  Training: {j.config.training.tokens} tokens, batch {j.config.training.batch_size}")
+    print(
+        f"  Optimizer: muon  (matrix lr={j.config.optimization.lr}, "
+        f"embedding lr={j.config.optimization.lr * j.config.optimization.muon.matrix_lr_multiplier:.4f} * "
+        f"{j.config.optimization.muon.embedding_lr_multiplier}x)"
+    )
+    print(
+        f"  Training: {j.config.training.tokens} tokens, batch {j.config.training.batch_size}"
+    )
     print()
 
     j()

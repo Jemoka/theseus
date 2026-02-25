@@ -142,7 +142,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         optim, cfg = OPTIMIZERS[optim_name]
 
-        return optim(self.scheduler, configure(cfg))
+        return optim(self.scheduler, configure(cfg))  # type: ignore
 
     def __init__(self, spec: ExecutionSpec) -> None:
         """Build a basic trainer
