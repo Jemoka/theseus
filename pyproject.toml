@@ -66,19 +66,21 @@ all = [
 ]
 huggingface = [
     "tokenizers>=0.22.2",
-    "torchax>=0.0.11",
     "transformers>=5.1.0"
 ]
 huggingface-cpu = [
     "torch>=2.9.1",
+    "torchax>=0.0.11",
     {include-group = "huggingface"}
 ]
 huggingface-cuda13 = [
     "torch>=2.9.1",
+    "torchax>=0.0.11",
     {include-group = "huggingface"}
 ]
 huggingface-cuda12 = [
     "torch>=2.9.1",
+    "torchax>=0.0.11",
     {include-group = "huggingface"}
 ]
 
