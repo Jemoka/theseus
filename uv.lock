@@ -106,40 +106,40 @@ conflicts = [[
     { package = "theseus", group = "huggingface-cpu" },
     { package = "theseus", group = "huggingface-cuda13" },
 ], [
-    { package = "theseus", group = "cuda12" },
-    { package = "theseus", group = "cuda13" },
-    { package = "theseus", group = "huggingface-cpu" },
-], [
     { package = "theseus", group = "cpu" },
-    { package = "theseus", group = "cuda" },
-    { package = "theseus", group = "cuda12" },
-], [
-    { package = "theseus", group = "cpu" },
-    { package = "theseus", group = "cuda" },
     { package = "theseus", group = "huggingface-cuda12" },
-], [
-    { package = "theseus", group = "cpu" },
-    { package = "theseus", group = "cuda13" },
-    { package = "theseus", group = "huggingface-cuda12" },
-], [
-    { package = "theseus", group = "cpu" },
-    { package = "theseus", group = "cuda12" },
     { package = "theseus", group = "huggingface-cuda13" },
 ], [
     { package = "theseus", group = "cuda" },
     { package = "theseus", group = "cuda12" },
     { package = "theseus", group = "huggingface-cpu" },
 ], [
+    { package = "theseus", group = "cpu" },
     { package = "theseus", group = "cuda" },
-    { package = "theseus", group = "huggingface-cpu" },
     { package = "theseus", group = "huggingface-cuda12" },
 ], [
     { package = "theseus", group = "cuda13" },
     { package = "theseus", group = "huggingface-cpu" },
     { package = "theseus", group = "huggingface-cuda12" },
 ], [
-    { package = "theseus", group = "cpu" },
+    { package = "theseus", group = "cuda" },
+    { package = "theseus", group = "huggingface-cpu" },
     { package = "theseus", group = "huggingface-cuda12" },
+], [
+    { package = "theseus", group = "cpu" },
+    { package = "theseus", group = "cuda" },
+    { package = "theseus", group = "cuda12" },
+], [
+    { package = "theseus", group = "cpu" },
+    { package = "theseus", group = "cuda13" },
+    { package = "theseus", group = "huggingface-cuda12" },
+], [
+    { package = "theseus", group = "cuda12" },
+    { package = "theseus", group = "cuda13" },
+    { package = "theseus", group = "huggingface-cpu" },
+], [
+    { package = "theseus", group = "cpu" },
+    { package = "theseus", group = "cuda12" },
     { package = "theseus", group = "huggingface-cuda13" },
 ]]
 
