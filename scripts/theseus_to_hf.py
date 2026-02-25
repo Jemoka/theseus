@@ -12,16 +12,13 @@ import numpy as np
 from pathlib import Path
 
 import jax
-import jax.numpy as jnp
-import optax
 import torch
-from flax.training import train_state
 from omegaconf import OmegaConf
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from theseus.base.job import ExecutionSpec
-from theseus.job import CheckpointedJob
-from theseus.training.backbone import BACKBONES
+from theseus.job import CheckpointedJob, RestoreableJob
+from theseus.registry import JOBS
 
 # Per-implementation conversion functions.
 # qwen: (params, n_layers)
@@ -42,25 +39,6 @@ def _call_to_hf(impl: str, params, n_layers: int, hf_cfg):
         raise click.ClickException(f"No _to_hf_state_dict for backbone '{impl}'")
 
 
-class _Loader(CheckpointedJob):
-    """Minimal CheckpointedJob stub: loads a checkpoint without starting a trainer."""
-
-    @classmethod
-    def config(cls):
-        return object  # unused, but required by the ABC
-
-    @property
-    def done(self) -> bool:
-        return False
-
-    def run(self) -> None:
-        raise NotImplementedError
-
-    def __init__(self, spec: ExecutionSpec):  # type: ignore[override]
-        self.spec = spec
-        self.key = jax.random.PRNGKey(0)
-
-
 @click.command()
 @click.argument("suffix")
 @click.option(
@@ -77,74 +55,49 @@ class _Loader(CheckpointedJob):
     "--group", default=None, show_default=True, help="Group name (default: default)"
 )
 @click.option(
-    "--dpo",
-    is_flag=True,
-    default=False,
-    help="Checkpoint is from a BackbonedContrastiveTrainer (DPO). "
-    "Loads ContrastiveTrainState so both policy and reference params are available.",
-)
-@click.option(
     "--export-base",
     is_flag=True,
     default=False,
-    help="DPO only: export the frozen reference (base) model instead of the trained policy.",
+    help="Export the frozen reference (base) model instead of the trained policy (DPO only).",
 )
-def main(suffix, root, name, output, project, group, dpo, export_base):
+def main(suffix, root, name, output, project, group, export_base):
     """Export a Theseus backbone checkpoint to HuggingFace format."""
 
-    if export_base and not dpo:
-        raise click.UsageError("--export-base requires --dpo")
-
-    # Build spec and locate checkpoint
     spec = ExecutionSpec.local(root, name=name, project=project, group=group)
-    ckpt_path = CheckpointedJob._get_checkpoint_path(spec, suffix)
-    click.echo(f"Checkpoint: {ckpt_path}")
 
+    # Pre-load config.yaml to find the concrete job class, since RestoreableJob is abstract
+    ckpt_path = CheckpointedJob._get_checkpoint_path(spec, suffix)
     cfg = OmegaConf.load(ckpt_path / "config.yaml")
+    job_cls = JOBS.get(str(cfg.job)) if "job" in cfg else None
+    if job_cls is None:
+        raise click.ClickException(
+            f"Could not find job class '{cfg.get('job')}' in registry. "
+            f"Available: {list(JOBS.keys())}"
+        )
+    if not issubclass(job_cls, RestoreableJob):
+        raise click.ClickException(
+            f"Job class '{job_cls.__name__}' is not a RestoreableJob."
+        )
+
+    click.echo(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' …")
+    job, cfg = job_cls.from_checkpoint(suffix, spec)
+
     impl = str(cfg.architecture.backbone.implementation)
     weights = str(cfg.architecture.backbone.weights)
     click.echo(f"Backbone : {impl}")
     click.echo(f"Weights  : {weights}")
-
-    # Load model architecture and get initial params (needed as a shape template)
-    click.echo("Loading pretrained model for template state …")
-    model_cls = BACKBONES[impl]
-    model, initial_params = model_cls.from_pretrained(weights)
-
-    # Build template state
-    if dpo:
-        from theseus.training.contrastive import ContrastiveTrainState
-
-        template_state = ContrastiveTrainState.create(  # type: ignore[no-untyped-call]
-            apply_fn=model.apply,
-            params=initial_params,
-            base=jax.tree_util.tree_map(jnp.zeros_like, initial_params),
-            tx=optax.identity(),
-            beta=0.1,
-            label_smooth=0.0,
-        )
-    else:
-        template_state = train_state.TrainState.create(  # type: ignore[no-untyped-call]
-            apply_fn=model.apply,
-            params=initial_params,
-            tx=optax.identity(),
-        )
-
-    # Restore checkpoint
-    click.echo("Restoring checkpoint …")
-    loader = _Loader(spec)
-    restored_state, metadata = loader.get_tree_and_metadata(suffix, template_state)
-    click.echo(
-        f"Loaded   : step={metadata.get('steps', '?')}  "
-        f"score={metadata.get('score', float('nan')):.4f}"
-    )
+    click.echo(f"Step     : {job.state.step}")
 
     # Select which params to export
     if export_base:
-        params = restored_state.base  # type: ignore[attr-defined]
+        if not hasattr(job.state, "base"):
+            raise click.UsageError(
+                "--export-base requires a DPO checkpoint (ContrastiveTrainState)"
+            )
+        params = job.state.base
         click.echo("Exporting: reference (base) model")
     else:
-        params = restored_state.params
+        params = job.state.params
         click.echo("Exporting: trained policy model")
 
     # Convert to HF state dict
