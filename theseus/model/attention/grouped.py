@@ -38,7 +38,7 @@ class GroupedSelfAttention(SelfAttention):
         "architecture/sliding_window", default=-1
     )  # -1 -> no sliding
     bias: bool = field("architecture/bias", default=True)
-    attn_bias: bool = field("architecture/attn_bias", default=True)
+    attn_bias: bool = field("architecture/attention_bias", default=True)
 
     def setup(self) -> None:
         assert self.n_embd % self.n_head == 0

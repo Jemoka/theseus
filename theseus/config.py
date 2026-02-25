@@ -252,3 +252,45 @@ def current_config() -> DictConfig | ListConfig | None:
         OmegaConf | None: Current configuration or None if not in context.
     """
     return _current_config.get()
+
+
+@contextmanager
+def patch() -> Generator[DictConfig, None, None]:
+    """Context manager that opens the current config for free-form mutation.
+
+    If a config context is already active, temporarily disables struct mode so
+    arbitrary keys can be added. Mutations persist into the outer context after
+    the block — this is intentional so that callers like from_pretrained() can
+    enrich a sparse backbone config with architecture fields that remain
+    available for the rest of the job lifecycle.
+
+    If no context is active, creates a fresh empty config that lives only for
+    the duration of the block.
+
+    Usage::
+
+        with patch() as cfg:
+            cfg.architecture.n_layers = 32
+            cfg.architecture.attention_bias = False
+            model.init(
+                jax.random.PRNGKey(
+                    0
+                ),
+                dummy,
+            )
+    """
+    current = _current_config.get()
+    if current is not None:
+        OmegaConf.set_struct(current, False)
+        try:
+            yield current
+        finally:
+            OmegaConf.set_struct(current, True)
+    else:
+        cfg = OmegaConf.create({})
+        token = _current_config.set(cfg)
+        try:
+            yield cfg
+        finally:
+            OmegaConf.set_struct(cfg, True)
+            _current_config.reset(token)

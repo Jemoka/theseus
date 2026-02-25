@@ -54,13 +54,11 @@ with quick(Hardening, "test") as j:
             "name": "redcodegen__hardening",
             "suffix": "qwen2code7b",
             "style": "CONTRASTIVE",
-            "rate": "1.0"
+            "rate": "1.0",
         }
     ]
     # j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
     j()
-
-
 
 
 # torch_dtype = torch.float32
@@ -116,7 +114,6 @@ with quick(Hardening, "test") as j:
 # model
 
 
-
 # # with quick(PretrainGPT, "test") as j:
 # #     j.oco gtgr
 # # from theseus.experiments.forking import PretrainThoughtbubbles
@@ -159,7 +156,6 @@ with quick(Hardening, "test") as j:
 # # j.config.training.dataset
 
 # #     j.config
-
 
 
 # #     j.config.architecture.n_head = 16
