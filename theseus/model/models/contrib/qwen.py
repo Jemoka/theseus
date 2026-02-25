@@ -6,7 +6,8 @@ import jax.numpy as jnp
 import jax.nn as jnn
 import flax.linen as nn
 
-from theseus.config import field
+from theseus.config import field, configure, patch
+from omegaconf import OmegaConf
 from theseus.model.axes import Axes
 from theseus.model.module import Module
 from theseus.model.block.qwen import QwenDecoderBlock
@@ -54,7 +55,6 @@ class Qwen(Module):
     def setup(self) -> None:
         assert self.vocab_size is not None
         assert self.block_size is not None
-        n_kv_head = self.n_head if self.n_kv_head == -1 else self.n_kv_head
 
         self.wte: Any = self.param(
             "wte",
@@ -68,7 +68,6 @@ class Qwen(Module):
 
         self.drop = nn.Dropout(rate=self.dropout)
 
-        n_kv_head = self.n_head if self.n_kv_head == -1 else self.n_kv_head
         self.layer_types = [
             "sliding"
             if (
@@ -80,31 +79,8 @@ class Qwen(Module):
             for i in range(self.n_layers)
         ]
 
-        self.blocks = [
-            QwenDecoderBlock(
-                n_layers=self.n_layers,
-                n_embd=self.n_embd,
-                n_head=self.n_head,
-                n_kv_head=n_kv_head,
-                intermediate_size=self.intermediate_size,
-                dropout=self.dropout,
-                attn_dropout=self.attn_dropout,
-                rope_theta=self.rope_theta,
-                rms_norm_eps=self.rms_norm_eps,
-                use_sliding_window=self.use_sliding_window,
-                sliding_window=self.sliding_window,
-                bias=self.bias,
-                param_dtype=self.param_dtype,
-                activation_dtype=self.activation_dtype,
-            )
-            for _ in range(self.n_layers)
-        ]
-        self.ln_f = RMSNorm(
-            ndim=self.n_embd,
-            eps=self.rms_norm_eps,
-            param_dtype=self.param_dtype,
-            activation_dtype=self.activation_dtype,
-        )
+        self.blocks = [configure(QwenDecoderBlock) for _ in range(self.n_layers)]
+        self.ln_f = configure(RMSNorm)
 
     def embed(self, idx: jax.Array, deterministic: bool = False) -> Any:
         x = jnp.take(self.wte, idx, axis=0).astype(self._activation_dtype)
@@ -194,26 +170,33 @@ class Qwen(Module):
         if cfg.rope_parameters is not None and "rope_theta" in cfg.rope_parameters:
             rope_theta = cfg.rope_parameters["rope_theta"]
 
-        model = cls(
-            n_layers=cfg.num_hidden_layers,
-            n_embd=cfg.hidden_size,
-            n_head=cfg.num_attention_heads,
-            n_kv_head=cfg.num_key_value_heads,
-            intermediate_size=cfg.intermediate_size,
-            block_size=cfg.max_position_embeddings,
-            vocab_size=cfg.vocab_size,
-            dropout=0.0,
-            attn_dropout=cfg.attention_dropout,
-            rope_theta=rope_theta,
-            rms_norm_eps=cfg.rms_norm_eps,
-            use_sliding_window=cfg.use_sliding_window,
-            sliding_window=cfg.sliding_window,
-            max_window_layers=cfg.max_window_layers,
-            bias=False,
-            param_dtype=param_dtype,
-            activation_dtype=activation_dtype,
-        )
+        with patch() as th_cfg:
+            th_cfg.architecture = OmegaConf.create(
+                {
+                    "n_layers": cfg.num_hidden_layers,
+                    "n_embd": cfg.hidden_size,
+                    "n_head": cfg.num_attention_heads,
+                    "n_kv_head": cfg.num_key_value_heads,
+                    "intermediate_size": cfg.intermediate_size,
+                    "block_size": cfg.max_position_embeddings,
+                    "vocab_size": cfg.vocab_size,
+                    "dropout": 0.0,
+                    "attn_dropout": float(cfg.attention_dropout),
+                    "rope_theta": float(rope_theta),
+                    "rms_norm_eps": float(cfg.rms_norm_eps),
+                    "use_sliding_window": bool(cfg.use_sliding_window),
+                    "sliding_window": int(cfg.sliding_window)
+                    if cfg.sliding_window is not None
+                    else -1,
+                    "max_window_layers": int(cfg.max_window_layers),
+                    "bias": False,
+                    "attention_bias": True,
+                    "partial_rotary_factor": 1.0,
+                    "dtype": {"param": param_dtype, "activation": activation_dtype},
+                }
+            )
 
+        model = configure(cls)
         dummy = jnp.zeros((1, 1), dtype=jnp.int32)
         abstract = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
         params = jax.tree_util.tree_map(

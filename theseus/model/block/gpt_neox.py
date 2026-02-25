@@ -3,30 +3,17 @@ from typing import Optional, List, Type, Any, Tuple
 import jax
 import flax.linen as nn
 
-from theseus.config import field
+from theseus.config import field, configure
 from theseus.model.module import Module
 from theseus.model.layers import LayerNorm, NeoXMLP
 from theseus.model.attention.grouped import GroupedSelfAttention
 
 
 class GPTNeoXDecoderBlock(Module):
-    n_layers: int = field("architecture/n_layers", default=24)
-    n_embd: int = field("architecture/n_embd", default=2048)
-    n_head: int = field("architecture/n_head", default=32)
-    n_kv_head: int = field("architecture/n_kv_head", default=-1)
-    intermediate_size: int = field("architecture/intermediate_size", default=8192)
     dropout: float = field("architecture/dropout", default=0.0)
-    attn_dropout: float = field("architecture/attn_dropout", default=0.0)
-    rope_theta: float = field("architecture/rope_theta", default=10000.0)
-    partial_rotary_factor: float = field(
-        "architecture/partial_rotary_factor", default=1.0
-    )
-    layer_norm_eps: float = field("architecture/layer_norm_eps", default=1e-5)
     use_parallel_residual: bool = field(
         "architecture/use_parallel_residual", default=True
     )
-    bias: bool = field("architecture/bias", default=True)
-    attention_bias: bool = field("architecture/attention_bias", default=True)
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
@@ -37,43 +24,10 @@ class GPTNeoXDecoderBlock(Module):
         return []
 
     def setup(self) -> None:
-        self.ln_1 = LayerNorm(
-            ndim=self.n_embd,
-            bias=self.bias,
-            eps=self.layer_norm_eps,
-            param_dtype=self.param_dtype,
-            activation_dtype=self.activation_dtype,
-        )
-        self.attn = GroupedSelfAttention(
-            n_embd=self.n_embd,
-            n_layers=self.n_layers,
-            n_head=self.n_head,
-            n_kv_head=self.n_kv_head,
-            dropout=self.dropout,
-            attn_dropout=self.attn_dropout,
-            rope_theta=self.rope_theta,
-            partial_rotary_factor=self.partial_rotary_factor,
-            use_sliding_window=False,
-            attn_bias=self.attention_bias,
-            param_dtype=self.param_dtype,
-            activation_dtype=self.activation_dtype,
-        )
-        self.ln_2 = LayerNorm(
-            ndim=self.n_embd,
-            bias=self.bias,
-            eps=self.layer_norm_eps,
-            param_dtype=self.param_dtype,
-            activation_dtype=self.activation_dtype,
-        )
-        self.mlp = NeoXMLP(
-            n_embd=self.n_embd,
-            n_layers=self.n_layers,
-            intermediate_size=self.intermediate_size,
-            dropout=self.dropout,
-            bias=self.bias,
-            param_dtype=self.param_dtype,
-            activation_dtype=self.activation_dtype,
-        )
+        self.ln_1 = configure(LayerNorm)
+        self.attn = configure(GroupedSelfAttention)
+        self.ln_2 = configure(LayerNorm)
+        self.mlp = configure(NeoXMLP)
         self.dropout_layer = nn.Dropout(rate=self.dropout)
 
     def __call__(
