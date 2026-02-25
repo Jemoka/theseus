@@ -70,11 +70,11 @@ def main(suffix, root, name, output, project, group, export_base):
 
     # Pre-load config.yaml to find the concrete job class, since RestoreableJob is abstract
     ckpt_path = CheckpointedJob._get_checkpoint_path(spec, suffix)
-    cfg = OmegaConf.load(ckpt_path / "config.yaml")
-    job_cls = JOBS.get(str(cfg.job)) if "job" in cfg else None
+    raw_cfg = OmegaConf.load(ckpt_path / "config.yaml")
+    job_cls = JOBS.get(str(raw_cfg.job)) if "job" in raw_cfg else None
     if job_cls is None:
         logger.error(
-            f"Could not find job class '{cfg.get('job')}' in registry. "
+            f"Could not find job class '{raw_cfg.get('job')}' in registry. "
             f"Available: {list(JOBS.keys())}"
         )
         sys.exit(1)
@@ -82,11 +82,12 @@ def main(suffix, root, name, output, project, group, export_base):
         logger.error(f"Job class '{job_cls.__name__}' is not a RestoreableJob.")
         sys.exit(1)
 
-    logger.info(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' …")
-    job, cfg = job_cls.from_checkpoint(suffix, spec)
+    # Extract backbone info from the plain YAML cfg before struct mode kicks in
+    impl = str(OmegaConf.select(raw_cfg, "architecture.backbone.implementation"))
+    weights = str(OmegaConf.select(raw_cfg, "architecture.backbone.weights"))
 
-    impl = str(job.args.implementation)
-    weights = str(job.args.weights)
+    logger.info(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' …")
+    job, _ = job_cls.from_checkpoint(suffix, spec)
 
     # Select which params to export
     if export_base:
