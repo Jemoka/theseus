@@ -1,7 +1,7 @@
 site_name: theseus
 site_description: Train, evaluate, and dispatch language model jobs with minimal boilerplate.
 site_dir: site
-docs_dir: doc
+docs_dir: docs
 
 theme:
   name: material
@@ -20,8 +20,11 @@ theme:
     - content.code.copy
     - content.code.annotate
 
+extra:
+  generator: false
+
 extra_css:
-  - assets/stylesheets/theseus.css
+  - assets/theseus.css
 
 plugins:
   - search
@@ -60,36 +63,3 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Getting Started:
-      - Installation: getting-started/installation.md
-      - First Local Run: getting-started/first-run.md
-      - CLI Workflow: getting-started/cli.md
-      - Python Quick API: getting-started/quick.md
-  - Tutorials:
-      - CLI End to End: tutorials/cli-end-to-end.md
-      - Quick API Iteration: tutorials/quick-api-iteration.md
-      - Extend a Model and Trainer: tutorials/extend-model-trainer.md
-  - User Guide:
-      - Configuration: user-guide/configuration.md
-      - Data and Tokenization: user-guide/data-tokenization.md
-      - Writing Datasets and Evals: user-guide/writing-datasets-evals.md
-      - Training: user-guide/training.md
-      - Evaluation and Inference: user-guide/evaluation-inference.md
-      - Dispatch and Remote Runs: user-guide/dispatch.md
-      - Web UI: user-guide/web-ui.md
-      - Customization Patterns: user-guide/customization-patterns.md
-  - Architecture:
-      - Philosophy: architecture/philosophy.md
-      - Core Concepts: architecture/core.md
-      - Model System: architecture/model.md
-      - Flywheel Data Pipeline: architecture/flywheel.md
-      - Checkpointing and Recovery: architecture/checkpointing.md
-  - API Reference:
-      - CLI: api/cli.md
-      - Configuration: api/config.md
-      - Jobs and Specs: api/jobs.md
-      - Data: api/data.md
-      - Training: api/training.md
-      - Model: api/model.md
-      - Dispatch: api/dispatch.md
-      - Registry: api/registry.md
