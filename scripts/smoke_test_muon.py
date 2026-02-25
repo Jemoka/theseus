@@ -52,7 +52,7 @@ with quick(PretrainGPTMuon, name="smoke_test_muon", out_path="/tmp/theseus_muon"
     #   unembedding = lr * 0.20  → 0.004
     #   scalar      = lr * 25.0  → 0.50
     j.config.optimization.lr = 0.02
-    j.config.optimization.muon_weight_decay = 0.1
+    j.config.optimization.weight_decay = 0.1
 
     # Minimal training run
     j.config.training.batch_size = 8
@@ -73,8 +73,8 @@ with quick(PretrainGPTMuon, name="smoke_test_muon", out_path="/tmp/theseus_muon"
         f"  Model: {j.config.architecture.n_layers} layers, {j.config.architecture.n_embd} embd"
     )
     print(f"  Optimizer: muon  (matrix lr={j.config.optimization.lr}, "
-          f"embedding lr={j.config.optimization.lr * j.config.optimization.matrix_lr_multiplier:.4f} * "
-          f"{j.config.optimization.embedding_lr_multiplier}x)")
+          f"embedding lr={j.config.optimization.lr * j.config.optimization.muon.matrix_lr_multiplier:.4f} * "
+          f"{j.config.optimization.muon.embedding_lr_multiplier}x)")
     print(f"  Training: {j.config.training.tokens} tokens, batch {j.config.training.batch_size}")
     print()
 

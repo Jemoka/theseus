@@ -21,24 +21,25 @@ _POLAR_COEFFS = [
 
 @dataclass
 class MuonConfig:
-    # Muon hyperparameters
-    momentum: float = field("optimization/muon_momentum", default=0.95)
-    ns_steps: int = field("optimization/muon_ns_steps", default=5)
-    muon_beta2: float = field("optimization/muon_beta2", default=0.95)
-    weight_decay: float = field("optimization/muon_weight_decay", default=0.0)
+    # Muon-specific hyperparameters
+    momentum: float = field("optimization/muon/momentum", default=0.95)
+    ns_steps: int = field("optimization/muon/ns_steps", default=5)
+    muon_beta2: float = field("optimization/muon/beta2", default=0.95)
 
     # LR multipliers relative to the base schedule LR (matrix params define the "1x" baseline)
     # Example raw values: matrix=0.02, embedding=0.3, unembedding=0.004, scalar=0.5
     # → multipliers: matrix=1.0, embedding=15.0, unembedding=0.2, scalar=25.0
-    matrix_lr_multiplier: float = field("optimization/matrix_lr_multiplier", default=1.0)
-    embedding_lr_multiplier: float = field("optimization/embedding_lr_multiplier", default=15.0)
-    unembedding_lr_multiplier: float = field("optimization/unembedding_lr_multiplier", default=0.2)
-    scalar_lr_multiplier: float = field("optimization/scalar_lr_multiplier", default=25.0)
+    matrix_lr_multiplier: float = field("optimization/muon/matrix_lr_multiplier", default=1.0)
+    embedding_lr_multiplier: float = field("optimization/muon/embedding_lr_multiplier", default=15.0)
+    unembedding_lr_multiplier: float = field("optimization/muon/unembedding_lr_multiplier", default=0.2)
+    scalar_lr_multiplier: float = field("optimization/muon/scalar_lr_multiplier", default=25.0)
 
-    # AdamW hyperparameters for embedding / unembedding / scalar params
-    adam_beta1: float = field("optimization/adam_beta1", default=0.8)
-    adam_beta2: float = field("optimization/adam_beta2", default=0.95)
-    adam_eps: float = field("optimization/adam_eps", default=1e-10)
+    # AdamW hyperparameters for embedding / unembedding / scalar params.
+    # Share paths with AdamWConfig so old/mixed configs compose without duplication.
+    weight_decay: float = field("optimization/weight_decay", default=0.0)
+    beta1: float = field("optimization/beta1", default=0.8)
+    beta2: float = field("optimization/beta2", default=0.95)
+    adam_eps: float = field("optimization/eps", default=1e-10)
 
 
 class _MuonState(NamedTuple):
@@ -271,7 +272,7 @@ def muon(
     def _adamw_tx(multiplier: float) -> optax.GradientTransformation:
         return optax.chain(
             optax.clip_by_global_norm(1.0),
-            optax.scale_by_adam(b1=cfg.adam_beta1, b2=cfg.adam_beta2, eps=cfg.adam_eps),
+            optax.scale_by_adam(b1=cfg.beta1, b2=cfg.beta2, eps=cfg.adam_eps),
             optax.scale_by_learning_rate(_scaled(multiplier)),
         )
 
