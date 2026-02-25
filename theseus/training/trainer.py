@@ -174,7 +174,6 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         self._init_data(spec)
         logger.debug("TRAINER | Initializing Evaluations")
         self._init_counters_and_eval()
-        logger.debug("TRAINER | running...")
 
     def _init_topology(self, spec: ExecutionSpec) -> Topology:
         """Initialize topology, mesh, and compute total steps."""

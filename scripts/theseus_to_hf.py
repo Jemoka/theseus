@@ -7,12 +7,14 @@ Usage:
 SUFFIX is the checkpoint suffix, e.g. 'final/9216', 'best', or 'boundary_0_1'.
 """
 
+import sys
 import click
 import numpy as np
 from pathlib import Path
 
 import jax
 import torch
+from loguru import logger
 from omegaconf import OmegaConf
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
@@ -36,7 +38,8 @@ def _call_to_hf(impl: str, params, n_layers: int, hf_cfg):
     elif impl == "gpt_neox":
         return _gpt_neox_to_hf(params, n_layers, hf_cfg)
     else:
-        raise click.ClickException(f"No _to_hf_state_dict for backbone '{impl}'")
+        logger.error(f"No _to_hf_state_dict for backbone '{impl}'")
+        sys.exit(1)
 
 
 @click.command()
@@ -70,40 +73,38 @@ def main(suffix, root, name, output, project, group, export_base):
     cfg = OmegaConf.load(ckpt_path / "config.yaml")
     job_cls = JOBS.get(str(cfg.job)) if "job" in cfg else None
     if job_cls is None:
-        raise click.ClickException(
+        logger.error(
             f"Could not find job class '{cfg.get('job')}' in registry. "
             f"Available: {list(JOBS.keys())}"
         )
+        sys.exit(1)
     if not issubclass(job_cls, RestoreableJob):
-        raise click.ClickException(
-            f"Job class '{job_cls.__name__}' is not a RestoreableJob."
-        )
+        logger.error(f"Job class '{job_cls.__name__}' is not a RestoreableJob.")
+        sys.exit(1)
 
-    click.echo(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' …")
+    logger.info(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' …")
     job, cfg = job_cls.from_checkpoint(suffix, spec)
 
-    impl = str(cfg.architecture.backbone.implementation)
-    weights = str(cfg.architecture.backbone.weights)
-    click.echo(f"Backbone : {impl}")
-    click.echo(f"Weights  : {weights}")
-    click.echo(f"Step     : {job.state.step}")
+    impl = str(job.args.implementation)
+    weights = str(job.args.weights)
 
     # Select which params to export
     if export_base:
         if not hasattr(job.state, "base"):
-            raise click.UsageError(
+            logger.error(
                 "--export-base requires a DPO checkpoint (ContrastiveTrainState)"
             )
+            sys.exit(1)
         params = job.state.base
-        click.echo("Exporting: reference (base) model")
+        logger.info("Exporting: reference (base) model")
     else:
         params = job.state.params
-        click.echo("Exporting: trained policy model")
+        logger.info("Exporting: trained policy model")
 
     # Convert to HF state dict
     hf_cfg = AutoConfig.from_pretrained(weights)
     n_layers = hf_cfg.num_hidden_layers
-    click.echo(f"Converting {n_layers}-layer {impl} params to HF state dict …")
+    logger.info(f"Converting {n_layers}-layer {impl} params to HF state dict …")
     sd = _call_to_hf(impl, params, n_layers, hf_cfg)
 
     # Load into HF model
@@ -112,16 +113,10 @@ def main(suffix, root, name, output, project, group, export_base):
     missing, unexpected = hf_model.load_state_dict(torch_sd, strict=False)
     if missing:
         n = len(missing)
-        click.echo(
-            f"Warning: {n} missing key(s): {missing[:3]}{'…' if n > 3 else ''}",
-            err=True,
-        )
+        logger.warning(f"{n} missing key(s): {missing[:3]}{'…' if n > 3 else ''}")
     if unexpected:
         n = len(unexpected)
-        click.echo(
-            f"Warning: {n} unexpected key(s): {unexpected[:3]}{'…' if n > 3 else ''}",
-            err=True,
-        )
+        logger.warning(f"{n} unexpected key(s): {unexpected[:3]}{'…' if n > 3 else ''}")
 
     # Save model + tokenizer
     out = Path(output)
@@ -131,7 +126,7 @@ def main(suffix, root, name, output, project, group, export_base):
     tok = AutoTokenizer.from_pretrained(weights)
     tok.save_pretrained(out)
 
-    click.echo(f"Saved to : {out}")
+    logger.info(f"Saved to : {out}")
 
 
 if __name__ == "__main__":
