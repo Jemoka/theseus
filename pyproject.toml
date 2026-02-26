@@ -86,10 +86,12 @@ huggingface-cuda12 = [
 
 cuda13 = [
     "jax[cuda13]>=0.4.23",
+    "torch>=2.9.1",
     {include-group = "huggingface-cuda13"}
 ]
 cuda12 = [
     "jax[cuda12]>=0.4.23",
+    "torch>=2.9.1",
     {include-group = "huggingface-cuda12"}
 ]
 tpu = [
@@ -97,6 +99,7 @@ tpu = [
 ]
 cpu = [
     "jax>=0.4.23",
+    "torch>=2.9.1",
     {include-group = "huggingface-cpu"}
 ]
 
@@ -124,6 +127,9 @@ torch = [
   { index = "pytorch-cpu", group = "huggingface-cpu" },
   { index = "pytorch-cu128", group = "huggingface-cuda12" },
   { index = "pytorch-cu130", group = "huggingface-cuda13" },
+  { index = "pytorch-cpu", group = "cpu" },
+  { index = "pytorch-cu128", group = "cuda12" },
+  { index = "pytorch-cu130", group = "cuda13" },
 ]
 
 [[tool.uv.index]]
