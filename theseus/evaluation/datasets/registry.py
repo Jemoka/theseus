@@ -1,5 +1,6 @@
 from typing import Callable
 
+from theseus.evaluation.datasets.bbq import BBQEval
 from theseus.evaluation.datasets.blimp import Blimp
 from theseus.evaluation.datasets.ccaligned import CCAlignedEval
 from theseus.evaluation.datasets.cfq import CFQEval
@@ -14,6 +15,7 @@ from theseus.evaluation.datasets.pg19 import PG19Eval
 from theseus.evaluation.datasets.pile import PileEval
 from theseus.evaluation.datasets.qqp import QQPEval
 from theseus.evaluation.datasets.siqa import SIQAEval
+from theseus.evaluation.datasets.squad import SQuADEval
 from theseus.evaluation.datasets.sst2 import SST2Eval
 from theseus.evaluation.datasets.tinystories import TinyStoriesEval
 from theseus.evaluation.datasets.winogrande import WinograndeEval
@@ -28,6 +30,7 @@ from theseus.evaluation.datasets.perplexity_evals import (
 from theseus.evaluation.base import Evaluation
 
 DATASETS: dict[str, Callable[[], Evaluation]] = {
+    "bbq": BBQEval,
     "blimp": Blimp,
     "ccaligned": CCAlignedEval,
     "cfq": CFQEval,
@@ -46,6 +49,7 @@ DATASETS: dict[str, Callable[[], Evaluation]] = {
     "qqp_ppl": QQPPerplexityEval,
     "siqa": SIQAEval,
     "siqa_ppl": SIQAPerplexityEval,
+    "squad": SQuADEval,
     "sst2": SST2Eval,
     "sst2_ppl": SST2PerplexityEval,
     "tinystories": TinyStoriesEval,

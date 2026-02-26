@@ -14,9 +14,7 @@ class PG19Eval(PerplexityEvaluation):
     """Perplexity evaluation on Project Gutenberg books."""
 
     def __init__(self, num_samples: int = 100) -> None:
-        ds = load_dataset(
-            "sedthh/gutenberg_english", split="train", streaming=True
-        )
+        ds = load_dataset("sedthh/gutenberg_english", split="train", streaming=True)
         self.items: list[str] = []
         for item in ds:
             text = item.get("TEXT", "")

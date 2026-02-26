@@ -15,7 +15,11 @@ class Pes2OEval(PerplexityEvaluation):
 
     def __init__(self, num_samples: int = 500) -> None:
         ds = load_dataset(
-            "BEE-spoke-data/peS2o-100k_en-xlong",
+            "parquet",
+            data_files=(
+                "hf://datasets/allenai/peS2o@refs/convert/parquet/"
+                "v2/partial-train/*.parquet"
+            ),
             split="train",
             streaming=True,
         )

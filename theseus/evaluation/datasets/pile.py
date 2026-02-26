@@ -11,11 +11,17 @@ from theseus.evaluation import PerplexityEvaluation
 
 
 class PileEval(PerplexityEvaluation):
-    """Perplexity evaluation on the Pile (uncopyrighted)."""
+    """Perplexity evaluation on the Pile (EleutherAI)."""
 
     def __init__(self, num_samples: int = 500) -> None:
         ds = load_dataset(
-            "monology/pile-uncopyrighted", split="train", streaming=True
+            "parquet",
+            data_files=(
+                "hf://datasets/EleutherAI/pile@refs/convert/parquet/"
+                "all/partial-train/*.parquet"
+            ),
+            split="train",
+            streaming=True,
         )
         self.items: list[str] = []
         for item in ds:

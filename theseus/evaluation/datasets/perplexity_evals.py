@@ -36,7 +36,7 @@ class MNLIPerplexityEval(PerplexityEvaluation):
             ChatTurn(
                 role="user",
                 message=(
-                    'Does the hypothesis entail the premise? Please respond '
+                    "Does the hypothesis entail the premise? Please respond "
                     'only with "entailment", "contradiction", or "neutral", '
                     "not including quotes.\n\n"
                     f"premise: {item['premise']}\n"
@@ -45,7 +45,8 @@ class MNLIPerplexityEval(PerplexityEvaluation):
             ),
             ChatTurn(role="assistant", message=labels.get(item["label"], "neutral")),
         ]
-        return encode_chat_template(chat, self.encoder, tokenize=False)  
+        return encode_chat_template(chat, self.encoder, tokenize=False)
+
 
 class QQPPerplexityEval(PerplexityEvaluation):
     """Perplexity on QQP validation split."""
@@ -77,7 +78,8 @@ class QQPPerplexityEval(PerplexityEvaluation):
             ),
             ChatTurn(role="assistant", message=label),
         ]
-        return encode_chat_template(chat, self.encoder, tokenize=False)  
+        return encode_chat_template(chat, self.encoder, tokenize=False)
+
 
 class SST2PerplexityEval(PerplexityEvaluation):
     """Perplexity on SST-2 validation split."""
@@ -108,7 +110,8 @@ class SST2PerplexityEval(PerplexityEvaluation):
             ),
             ChatTurn(role="assistant", message=label),
         ]
-        return encode_chat_template(chat, self.encoder, tokenize=False)  
+        return encode_chat_template(chat, self.encoder, tokenize=False)
+
 
 class SIQAPerplexityEval(PerplexityEvaluation):
     """Perplexity on Social IQa validation split."""
@@ -145,7 +148,8 @@ class SIQAPerplexityEval(PerplexityEvaluation):
                 message=answers.get(int(item["label"]), "A"),
             ),
         ]
-        return encode_chat_template(chat, self.encoder, tokenize=False)  
+        return encode_chat_template(chat, self.encoder, tokenize=False)
+
 
 class WinograndePerplexityEval(PerplexityEvaluation):
     """Perplexity on Winogrande validation split."""
@@ -178,7 +182,8 @@ class WinograndePerplexityEval(PerplexityEvaluation):
             ),
             ChatTurn(role="assistant", message=answer),
         ]
-        return encode_chat_template(chat, self.encoder, tokenize=False)  
+        return encode_chat_template(chat, self.encoder, tokenize=False)
+
 
 class FineWebPerplexityEval(PerplexityEvaluation):
     """Perplexity on a sample from FineWeb."""

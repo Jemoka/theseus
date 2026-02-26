@@ -189,8 +189,14 @@ def test_registry() -> bool:
     from theseus.data.datasets.registry import DATASETS
 
     expected = [
-        "ccaligned", "cfq", "clutrr", "longhealth",
-        "mtob", "pes2o", "pg19", "pile",
+        "ccaligned",
+        "cfq",
+        "clutrr",
+        "longhealth",
+        "mtob",
+        "pes2o",
+        "pg19",
+        "pile",
     ]
     for name in expected:
         assert name in DATASETS, f"  FAIL: '{name}' not in DATASETS registry"
@@ -206,10 +212,20 @@ def test_eval_registry() -> bool:
     from theseus.evaluation.datasets.registry import DATASETS
 
     expected = [
-        "ccaligned", "cfq", "clutrr", "longhealth", "mtob",
-        "pes2o", "pg19", "pile",
-        "mnli_ppl", "qqp_ppl", "sst2_ppl", "siqa_ppl",
-        "winogrande_ppl", "fineweb_ppl",
+        "ccaligned",
+        "cfq",
+        "clutrr",
+        "longhealth",
+        "mtob",
+        "pes2o",
+        "pg19",
+        "pile",
+        "mnli_ppl",
+        "qqp_ppl",
+        "sst2_ppl",
+        "siqa_ppl",
+        "winogrande_ppl",
+        "fineweb_ppl",
     ]
     for name in expected:
         assert name in DATASETS, f"  FAIL: '{name}' not in eval DATASETS registry"

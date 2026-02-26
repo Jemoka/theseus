@@ -1,9 +1,13 @@
 # Safety fine-tuning continual learning
-# Paradigm: Safety (from "Learning and Forgetting Unsafe Examples in LLMs")
+# Paradigm: Safety (from "Learning and Forgetting Unsafe Examples in LLMs",
+#   Zhao et al. 2024, arXiv:2312.12736)
 #
-# A(clean Pile pretraining) -> B(new task knowledge) -> C(safety fine-tuning)
-# Tests whether safety alignment survives knowledge acquisition and vice versa
-# Evaluates: does new knowledge get associated with harmful capabilities?
+# Phase 0: Pile pretraining (general knowledge baseline)
+# Phase 1: Noisy downstream finetuning (Alpaca + SQuAD + HarmfulQA red convos)
+# Phase 2: Safety finetuning (BBQ unbiased + HarmfulQA blue convos)
+#
+# Evaluates: Does safety alignment survive mixed unsafe/safe finetuning?
+# Key metrics: BBQ bias score (lower=better), SQuAD F1 (higher=better)
 
 architecture:
   n_embd: 2048
@@ -17,9 +21,9 @@ architecture:
   vram_calib_factor: 1.0
 eval:
   evaluations:
+  - bbq
+  - squad
   - pile
-  - mnli
-  - sst2
   - mnli_ppl
   - sst2_ppl
   - fineweb_ppl
@@ -42,8 +46,8 @@ training:
   per_device_batch_size: -1
   tokens:
   - 20000000000   # Phase 0: Pile pretraining (clean, general knowledge)
-  - 2000000000    # Phase 1: new task knowledge (Pes2O scientific)
-  - 500000000     # Phase 2: safety fine-tuning (MNLI + SST2 as proxy alignment)
+  - 2000000000    # Phase 1: Noisy downstream (Alpaca + SQuAD + HarmfulQA unsafe)
+  - 500000000     # Phase 2: Safety finetuning (BBQ unbiased + HarmfulQA safe)
   validation: false
   evaluate: true
   dataset:
@@ -51,18 +55,28 @@ training:
       rate: 1.0
       style: PMD
       suffix: ''
-  - - name: pes2o
-      rate: 1.0
-      style: PMD
+  - - name: alpaca
+      rate: 0.4
+      style: PADDED
       suffix: ''
-  - - name: mnli
+    - name: squad
+      rate: 0.3
+      style: PADDED
+      suffix: ''
+    - name: harmfulqa
+      rate: 0.3
+      style: PADDED
+      suffix: ''
+      config: red
+  - - name: bbq
       rate: 0.5
       style: PADDED
       suffix: ''
-    - name: sst2
+    - name: harmfulqa
       rate: 0.5
       style: PADDED
       suffix: ''
+      config: blue
   validation_steps: 2048
   fade:
     overlap: 0.0

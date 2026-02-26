@@ -6,8 +6,7 @@ from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
 
 
 _BENCHMARK_URL = (
-    "https://raw.githubusercontent.com/kbressem/LongHealth/"
-    "main/data/benchmark_v5.json"
+    "https://raw.githubusercontent.com/kbressem/LongHealth/main/data/benchmark_v5.json"
 )
 
 
@@ -45,7 +44,9 @@ def _build_context(patient: dict[str, object]) -> str:
     return "\n\n".join(parts)
 
 
-def template(context: str, question: str, choices: dict[str, str], answer: str) -> ChatTemplate:
+def template(
+    context: str, question: str, choices: dict[str, str], answer: str
+) -> ChatTemplate:
     choices_text = "\n".join(f"{k}: {v}" for k, v in sorted(choices.items()))
     return [
         ChatTurn(
@@ -88,12 +89,14 @@ class LongHealth(ChatTemplateDataset):
                     "D": str(q.get("answer_d", "")),
                     "E": str(q.get("answer_e", "")),
                 }
-                self.items.append((
-                    context,
-                    str(q.get("question", "")),
-                    choices,
-                    str(q.get("correct", "")),
-                ))
+                self.items.append(
+                    (
+                        context,
+                        str(q.get("question", "")),
+                        choices,
+                        str(q.get("correct", "")),
+                    )
+                )
 
     def __len__(self) -> int:
         return len(self.items)

@@ -9,8 +9,8 @@ class Pes2O(StreamingPretrainingDataset):
     """Scientific papers from the peS2o corpus (AllenAI).
 
     Streams full-text academic papers derived from the Semantic Scholar
-    Open Research Corpus.  Uses ``BEE-spoke-data/peS2o-100k_en-xlong``
-    which is a cleaned English subset in standard parquet format.
+    Open Research Corpus.  Uses ``allenai/peS2o`` via parquet auto-convert
+    to bypass deprecated custom loading scripts.
     """
 
     def __init__(
@@ -18,8 +18,13 @@ class Pes2O(StreamingPretrainingDataset):
         config: str | None = None,
         split: str = "train",
     ) -> None:
+        version = config or "v2"
         self.ds = load_dataset(
-            "BEE-spoke-data/peS2o-100k_en-xlong",
+            "parquet",
+            data_files=(
+                f"hf://datasets/allenai/peS2o@refs/convert/parquet/"
+                f"{version}/partial-train/*.parquet"
+            ),
             split="train",
             streaming=True,
         )

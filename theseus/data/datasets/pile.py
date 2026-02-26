@@ -6,10 +6,11 @@ from theseus.data.datasets import StreamingPretrainingDataset
 
 
 class Pile(StreamingPretrainingDataset):
-    """The Pile (uncopyrighted mirror) for general pretraining.
+    """The Pile (EleutherAI) for general pretraining.
 
-    Streams text from ``monology/pile-uncopyrighted``, an 825 GiB diverse
-    open-source language modelling dataset with copyrighted subsets removed.
+    Streams text from ``EleutherAI/pile``, an 825 GiB diverse
+    open-source language modelling dataset.  Uses parquet auto-convert
+    to bypass deprecated custom loading scripts.
     """
 
     def __init__(
@@ -18,7 +19,11 @@ class Pile(StreamingPretrainingDataset):
         split: str = "train",
     ) -> None:
         self.ds = load_dataset(
-            "monology/pile-uncopyrighted",
+            "parquet",
+            data_files=(
+                "hf://datasets/EleutherAI/pile@refs/convert/parquet/"
+                "all/partial-train/*.parquet"
+            ),
             split="train",
             streaming=True,
         )

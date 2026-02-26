@@ -13,8 +13,7 @@ from theseus.data.tokenizer import (
 
 
 _BENCHMARK_URL = (
-    "https://raw.githubusercontent.com/kbressem/LongHealth/"
-    "main/data/benchmark_v5.json"
+    "https://raw.githubusercontent.com/kbressem/LongHealth/main/data/benchmark_v5.json"
 )
 
 
@@ -85,12 +84,14 @@ class LongHealthEval(RolloutEvaluation):
                     "D": str(q.get("answer_d", "")),
                     "E": str(q.get("answer_e", "")),
                 }
-                self.items.append((
-                    context,
-                    str(q.get("question", "")),
-                    choices,
-                    str(q.get("correct", "")),
-                ))
+                self.items.append(
+                    (
+                        context,
+                        str(q.get("question", "")),
+                        choices,
+                        str(q.get("correct", "")),
+                    )
+                )
         self.encoder = get_tokenizer()
 
     @property

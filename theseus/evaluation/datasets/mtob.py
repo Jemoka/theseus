@@ -24,20 +24,20 @@ def template_kgv_to_en(kalamang: str) -> ChatTemplate:
 
 
 class MTOBEval(RolloutEvaluation):
-    """MTOB Grammar-Book translation evaluation (Kalamang -> English)."""
+    """MTOB Grammar-Book translation evaluation (Kalamang -> English).
+
+    Uses the test split with ground truth translations.
+    """
 
     def __init__(self) -> None:
-        ds = MTOB(split="train", config="kgv-en")
-        # Collect all items: each is a ChatTemplate [user_turn, assistant_turn]
+        ds = MTOB(split="test", config="kgv-en")
         self.items: list[tuple[str, str]] = []
         for i in range(len(ds)):
             chat = ds[i]
-            # Extract kalamang from user message and english from assistant
             kalamang = ""
             english = ""
             for turn in chat:
                 if turn.role == "user":
-                    # Extract after "Kalamang: "
                     msg = turn.message
                     if "Kalamang: " in msg:
                         kalamang = msg.split("Kalamang: ", 1)[1]
