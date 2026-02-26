@@ -342,25 +342,36 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         if n_gen <= 0:
             return out_buf
 
-        # Step 2: Decode loop — one token at a time with cached KV
-        def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
-            cache_state, last_tok, out, offset, key = carry
-            token_input = last_tok[:, None]  # (B, 1)
+        # Step 2: Decode loop — one token at a time with cached KV.
+        # state is passed explicitly so jit traces it as an input rather than
+        # capturing the full params pytree as a 14GB constant.
+        def _run_scan(
+            state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
+        ) -> Any:
+            def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
+                cache_state, last_tok, out, offset, key = carry
+                token_input = last_tok[:, None]  # (B, 1)
 
-            (logits, _, _), new_cache = forward_fn(
-                state,
-                state.params,
-                (token_input, None, None),  # type: ignore[arg-type]
-                deterministic=True,
-                mutable=("cache",),
-                extra_variables=cache_state,
+                (logits, _, _), new_cache = forward_fn(
+                    state,
+                    state.params,
+                    (token_input, None, None),  # type: ignore[arg-type]
+                    deterministic=True,
+                    mutable=("cache",),
+                    extra_variables=cache_state,
+                )
+
+                next_logits = logits[:, -1, :]
+                next_token, key = sample_token(next_logits, key)
+
+                out = out.at[:, offset].set(next_token)
+                return (new_cache, next_token, out, offset + 1, key), None
+
+            carry = (cache, first_token, out_buf, T_in + 1, key)
+            (_, _, final_out, _, _), _ = jax.lax.scan(
+                decode_step, carry, jnp.arange(n_gen)
             )
-
-            next_logits = logits[:, -1, :]
-            next_token, key = sample_token(next_logits, key)
-
-            out = out.at[:, offset].set(next_token)
-            return (new_cache, next_token, out, offset + 1, key), None
+            return final_out
 
         # Put non-sharded carry elements onto the mesh (replicated) so jit
         # can reconcile shardings with the cache that came out of prefill_fn.
@@ -369,11 +380,4 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         out_buf = jax.device_put(out_buf, replicated)
         key = jax.device_put(key, replicated)
 
-        def _run_scan(cache: Any, first_token: Any, out_buf: Any, key: Any) -> Any:
-            carry = (cache, first_token, out_buf, T_in + 1, key)
-            (_, _, final_out, _, _), _ = jax.lax.scan(
-                decode_step, carry, jnp.arange(n_gen)
-            )
-            return final_out
-
-        return jax.jit(_run_scan)(cache, first_token, out_buf, key)  # type: ignore[no-any-return]
+        return jax.jit(_run_scan)(state, cache, first_token, out_buf, key)  # type: ignore[no-any-return]
