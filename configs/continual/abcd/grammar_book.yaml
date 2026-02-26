@@ -1,8 +1,9 @@
 # Grammar-Book compositional generalization: MTOB
 # Paradigm: Bridging learning
 #
-# A(grammar book) -> B(translation examples) -> eval(A+B: translate from grammar)
+# A(FineWeb pretraining) -> B(grammar book + dictionary) -> C(translation pairs)
 # Tests whether a model can learn a new language from grammar reference materials
+# and then compose that knowledge into translation ability.
 # Based on "A Benchmark for Learning to Translate a New Language from One Grammar Book"
 
 architecture:
@@ -18,8 +19,8 @@ architecture:
 eval:
   evaluations:
   - mtob
+  - fineweb_ppl
   - tinystories
-  - mnli_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
@@ -39,8 +40,8 @@ training:
   per_device_batch_size: -1
   tokens:
   - 10000000000   # Phase 0: general pretraining on FineWeb
-  - 50000000      # Phase 1: grammar book content (MTOB grammar)
-  - 50000000      # Phase 2: translation pairs (MTOB en-kgv)
+  - 50000000      # Phase 1: grammar book + dictionary (reference materials)
+  - 50000000      # Phase 2: translation pairs (en-kgv)
   validation: false
   evaluate: true
   dataset:
@@ -49,10 +50,15 @@ training:
       style: PMD
       suffix: ''
   - - name: mtob
-      rate: 1.0
+      rate: 0.6
       style: PADDED
       suffix: ''
-      config: 'grammar'
+      config: 'grammar-long'
+    - name: mtob
+      rate: 0.4
+      style: PADDED
+      suffix: ''
+      config: 'dictionary'
   - - name: mtob
       rate: 1.0
       style: PADDED

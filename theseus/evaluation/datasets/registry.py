@@ -2,7 +2,11 @@ from typing import Callable
 
 from theseus.evaluation.datasets.bbq import BBQEval
 from theseus.evaluation.datasets.blimp import Blimp
-from theseus.evaluation.datasets.ccaligned import CCAlignedEval
+from theseus.evaluation.datasets.ccaligned import (
+    CCAlignedFrEval,
+    CCAlignedDeEval,
+    CCAlignedZhEval,
+)
 from theseus.evaluation.datasets.cfq import CFQEval
 from theseus.evaluation.datasets.clutrr import CLUTRREval
 from theseus.evaluation.datasets.fever import FEVEREval
@@ -32,7 +36,9 @@ from theseus.evaluation.base import Evaluation
 DATASETS: dict[str, Callable[[], Evaluation]] = {
     "bbq": BBQEval,
     "blimp": Blimp,
-    "ccaligned": CCAlignedEval,
+    "ccaligned_fr": CCAlignedFrEval,
+    "ccaligned_de": CCAlignedDeEval,
+    "ccaligned_zh": CCAlignedZhEval,
     "cfq": CFQEval,
     "clutrr": CLUTRREval,
     "fever": FEVEREval,

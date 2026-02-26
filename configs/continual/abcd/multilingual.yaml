@@ -1,8 +1,9 @@
 # Multilingual continual learning: CCAligned language shift
 # Paradigm: Standard CL — sequential shift across languages
 #
-# A(en) -> B(fr) -> C(de) -> D(zh)
-# Evaluates forgetting (earlier languages degrade) and plasticity (later languages improve)
+# A(en-fr) -> B(en-de) -> C(en-zh)
+# Each phase trains on sentence-aligned bilingual text for one language pair.
+# Evals track per-language perplexity to measure forgetting and plasticity.
 
 architecture:
   n_embd: 2048
@@ -16,9 +17,10 @@ architecture:
   vram_calib_factor: 1.0
 eval:
   evaluations:
-  - ccaligned
-  - mnli_ppl
-  - qqp_ppl
+  - ccaligned_fr
+  - ccaligned_de
+  - ccaligned_zh
+  - fineweb_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
@@ -37,18 +39,12 @@ training:
   batch_size: 512
   per_device_batch_size: -1
   tokens:
-  - 5000000000    # Phase 0: English CCAligned (5B tokens)
-  - 2000000000    # Phase 1: French CCAligned (2B tokens)
-  - 2000000000    # Phase 2: German CCAligned (2B tokens)
-  - 2000000000    # Phase 3: Chinese CCAligned (2B tokens)
+  - 5000000000    # Phase 0: English-French CCAligned (5B tokens)
+  - 2000000000    # Phase 1: English-German CCAligned (2B tokens)
+  - 2000000000    # Phase 2: English-Chinese CCAligned (2B tokens)
   validation: false
   evaluate: true
   dataset:
-  - - name: ccaligned
-      rate: 1.0
-      style: PMD
-      suffix: ''
-      config: 'fr_XX'
   - - name: ccaligned
       rate: 1.0
       style: PMD

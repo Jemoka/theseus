@@ -1,8 +1,9 @@
-# Compositional generalization: CFQ templates -> SPARQL queries
+# Compositional generalization: CFQ question -> SPARQL query
 # Paradigm: Bridging learning
 #
-# A(templates/questions) -> B(SPARQL queries) -> eval(A+B: question->query mapping)
-# Tests whether a model can learn to compose questions with query patterns
+# A(FineWeb general pretraining) -> B(CFQ question->SPARQL) -> C(MNLI)
+# Tests whether compositional question->query mapping survives further finetuning
+# on a different NLU task.
 
 architecture:
   n_embd: 2048
@@ -17,8 +18,9 @@ architecture:
 eval:
   evaluations:
   - cfq
+  - mnli
+  - fineweb_ppl
   - mnli_ppl
-  - sst2_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base

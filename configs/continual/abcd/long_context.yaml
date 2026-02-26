@@ -1,8 +1,10 @@
 # Long context continual learning: PG19 books -> LongBench/LongHealth
 # Paradigm: Long context
 #
-# Pretrain on books (long documents), then adapt to long-context QA tasks
-# Evaluates whether long-context pretraining helps downstream QA
+# A(PG19 Gutenberg books) -> B(LongBench long-context QA) -> C(LongHealth clinical QA)
+# Pretrain on books (long documents), then adapt to long-context QA tasks.
+# Evaluates whether long-context pretraining helps downstream QA,
+# and whether earlier QA knowledge is retained.
 
 architecture:
   n_embd: 2048
@@ -19,7 +21,7 @@ eval:
   - longbench
   - longhealth
   - pg19
-  - tinystories
+  - fineweb_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
@@ -46,7 +48,7 @@ training:
   dataset:
   - - name: pg19
       rate: 1.0
-      style: PADDED
+      style: PMD
       suffix: ''
   - - name: longbench
       rate: 1.0

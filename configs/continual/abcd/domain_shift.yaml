@@ -3,6 +3,7 @@
 #
 # A(FineWeb) -> B(Pes2O)
 # Evaluates how well the model adapts from general web text to scientific domain
+# and whether general knowledge is retained.
 
 architecture:
   n_embd: 2048
@@ -18,6 +19,7 @@ eval:
   evaluations:
   - fineweb_ppl
   - pes2o
+  - pile
   - tinystories
 tokenizer:
   backend: tiktoken

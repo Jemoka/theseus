@@ -1,8 +1,8 @@
 # Compositional generalization: CLUTRR relational reasoning
 # Paradigm: Bridging learning
 #
-# A(relations/names) -> B(story templates) -> eval(A+B: story->relationship)
-# Tests whether a model can compose relational knowledge with story comprehension
+# A(FineWeb general pretraining) -> B(CLUTRR story->relationship) -> C(MNLI)
+# Tests whether relational reasoning ability survives further finetuning.
 
 architecture:
   n_embd: 2048
@@ -17,8 +17,9 @@ architecture:
 eval:
   evaluations:
   - clutrr
+  - mnli
+  - fineweb_ppl
   - mnli_ppl
-  - sst2_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
