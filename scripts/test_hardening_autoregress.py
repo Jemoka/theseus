@@ -60,10 +60,18 @@ PROMPTS = [
 )
 @click.option("--name", required=True, help="Job name (subfolder inside project/group)")
 @click.option(
-    "-p", "--project", default=None, show_default=True, help="Project name (default: general)"
+    "-p",
+    "--project",
+    default=None,
+    show_default=True,
+    help="Project name (default: general)",
 )
 @click.option(
-    "-g", "--group", default=None, show_default=True, help="Group name (default: default)"
+    "-g",
+    "--group",
+    default=None,
+    show_default=True,
+    help="Group name (default: default)",
 )
 @click.option(
     "--num-tokens",
@@ -129,6 +137,8 @@ def main(suffix, root, name, project, group, num_tokens, temperature, top_p):
             return_tensors=None,
             add_generation_prompt=True,
         )
+        if hasattr(input_ids, "input_ids"):
+            input_ids = input_ids["input_ids"]
         if hasattr(input_ids, "tolist"):
             input_ids = input_ids.tolist()
 
