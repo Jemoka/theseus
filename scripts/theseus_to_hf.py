@@ -23,8 +23,7 @@ from theseus.job import CheckpointedJob, RestoreableJob
 from theseus.registry import JOBS
 
 # Per-implementation conversion functions.
-# qwen: (params, n_layers)
-# llama / gpt_neox: (params, n_layers, hf_cfg)
+# All take (params, n_layers, hf_cfg) — Qwen ignores hf_cfg for now.
 from theseus.model.models.contrib.qwen import _to_hf_state_dict as _qwen_to_hf
 from theseus.model.models.contrib.llama import _to_hf_state_dict as _llama_to_hf
 from theseus.model.models.contrib.gpt_neox import _to_hf_state_dict as _gpt_neox_to_hf
@@ -106,21 +105,11 @@ def main(suffix, root, name, output, project, group, export_base):
     hf_cfg = AutoConfig.from_pretrained(weights)
     n_layers = hf_cfg.num_hidden_layers
 
-    # Theseus always ties embed/unembed weights, so force the HF config to match.
-    if not hf_cfg.tie_word_embeddings:
-        logger.info(
-            "Original HF config has tie_word_embeddings=False, "
-            "but Theseus ties embed/unembed — overriding to True."
-        )
-        hf_cfg.tie_word_embeddings = True
-
     logger.info(f"Converting {n_layers}-layer {impl} params to HF state dict …")
     sd = _call_to_hf(impl, params, n_layers, hf_cfg)
 
     # Load into HF model
     torch_sd = {k: torch.from_numpy(np.array(jax.device_get(v))) for k, v in sd.items()}
-    # Remove lm_head.weight when tying — HF derives it from embed_tokens.
-    torch_sd.pop("lm_head.weight", None)
     hf_model = AutoModelForCausalLM.from_config(hf_cfg)
     missing, unexpected = hf_model.load_state_dict(torch_sd, strict=False)
     if missing:
