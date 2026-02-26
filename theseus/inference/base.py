@@ -315,8 +315,13 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         B, T_in = input.shape
         forward_fn = self.forward
 
+        # Jit forward so XLA/GSPMD distributes sharded params across devices
+        # rather than all-gathering them onto a single device (which OOMs for
+        # large vocab/embedding matrices).
+        prefill_fn = jax.jit(forward_fn, static_argnames=("deterministic", "mutable"))
+
         # Step 1: Prefill — initialize cache with full prompt
-        (prefill_logits, _, _), cache = forward_fn(
+        (prefill_logits, _, _), cache = prefill_fn(
             state,
             state.params,
             (input, None, input_mask),
@@ -357,8 +362,9 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             out = out.at[:, offset].set(next_token)
             return (new_cache, next_token, out, offset + 1, key), None
 
+        # Wrap scan in jit so the decode body also sees GSPMD-optimised sharding
         init_carry = (cache, first_token, out_buf, T_in + 1, key)
-        (_, _, final_out, _, _), _ = jax.lax.scan(
-            decode_step, init_carry, jnp.arange(n_gen)
-        )
-        return final_out
+        (_, _, final_out, _, _), _ = jax.jit(
+            lambda carry, xs: jax.lax.scan(decode_step, carry, xs)
+        )(init_carry, jnp.arange(n_gen))
+        return final_out  # type: ignore[no-any-return]

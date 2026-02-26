@@ -22,7 +22,7 @@ from omegaconf import OmegaConf
 from theseus.base.job import ExecutionSpec
 from theseus.config import configuration
 from theseus.data.tokenizer import HuggingFaceTokenizer, get_tokenizer
-from theseus.inference.huggingface import HFInferenceJob
+from theseus.inference.base import InferenceJob
 from theseus.job import CheckpointedJob, RestoreableJob
 from theseus.registry import JOBS
 
@@ -107,8 +107,7 @@ def main(suffix, root, name, project, group, num_tokens, temperature, top_p):
     logger.info(f"Restoring {job_cls.__name__} from checkpoint '{suffix}' ...")
     job, cfg = job_cls.from_checkpoint(suffix, spec)
 
-    # Wrap as an HFInferenceJob so we get the right forward() for backbone models
-    inference = HFInferenceJob.from_trainer(job)
+    inference = InferenceJob.from_trainer(job)
 
     # Load tokenizer from the checkpoint's config
     with configuration(cfg):
