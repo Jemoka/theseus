@@ -334,8 +334,8 @@ def _to_hf_state_dict(
         for key in path:
             cur = cur[key]
         if isinstance(cur, nn.Partitioned):
-            return cur.value
-        return cur
+            cur = cur.value
+        return np.array(jax.device_get(cur))
 
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
     head = torch.tensor(grab(["lm_head"]), dtype=torch.float32)
