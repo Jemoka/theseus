@@ -109,8 +109,8 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
                 (e.g. {'cache': cache_state} for decode steps).
 
         Returns:
-            (logits, loss) when mutable is None.
-            ((logits, loss), mutated_variables) when mutable is provided.
+            (logits, loss, meta) when mutable is None.
+            ((logits, loss, meta), mutated_variables) when mutable is provided.
         """
         x, y, padding_mask = batch  # (B, T)
 
@@ -133,10 +133,10 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             (logits, loss), mutated = state.apply_fn(
                 variables, x, y, mutable=mutable, **kwargs
             )
-            return (logits, loss), mutated
+            return (logits, loss, {}), mutated
         else:
             logits, loss = state.apply_fn(variables, x, y, **kwargs)
-            return logits, loss
+            return logits, loss, {}
 
     @staticmethod
     def _init_template_state(model: M, block_size: int) -> train_state.TrainState:
@@ -316,7 +316,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         forward_fn = self.forward
 
         # Step 1: Prefill — initialize cache with full prompt
-        (prefill_logits, _), cache = forward_fn(
+        (prefill_logits, _, _), cache = forward_fn(
             state,
             state.params,
             (input, None, input_mask),
@@ -342,7 +342,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             cache_state, last_tok, out, offset, key = carry
             token_input = last_tok[:, None]  # (B, 1)
 
-            (logits, _), new_cache = forward_fn(
+            (logits, _, _), new_cache = forward_fn(
                 state,
                 state.params,
                 (token_input, None, None),  # type: ignore[arg-type]

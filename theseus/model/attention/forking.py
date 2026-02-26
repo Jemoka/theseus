@@ -7,6 +7,7 @@ from typing import Tuple, Any, Optional
 
 import jax
 import jax.numpy as jnp
+import flax.linen as nn
 
 from theseus.config import field
 from theseus.model.attention.rope import RopeAttention
@@ -92,7 +93,7 @@ class ForkingAttention(RopeAttention):
 
         # Build attention bias/mask
         if mask is not None:
-            padding_mask = mask[:, 0, 0, :]
+            padding_mask = mask[:, None, None, :]
             padding_bias = key_padding_bias(padding_mask)
             padding_bias = jnp.take_along_axis(
                 padding_bias, token_index[:, None, None, :], axis=-1
@@ -119,6 +120,18 @@ class ForkingAttention(RopeAttention):
 
         return y
 
+    @nn.compact
+    def _cached_kv(
+        self, k: jax.Array, v: jax.Array
+    ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
+        """Update KV cache if active. k, v: (B, T, H, D).
+
+        Returns (k, v, cache_index_after_update) where cache_index is None
+        when cache is not active (training mode).
+        """
+
+        return k, v, None
+
     def postprocess_attn(
         self,
         y: jax.Array,
@@ -132,3 +145,33 @@ class ForkingAttention(RopeAttention):
             padding_mask = jnp.take_along_axis(padding_mask, token_index, axis=-1)
 
         return super().postprocess_attn(y, padding_mask, deterministic, **kwargs)
+
+    @nn.compact
+    def __call__(
+        self,
+        x: jax.Array,
+        padding_mask: Optional[jax.Array] = None,
+        deterministic: bool = False,
+        **kwargs: Any,
+    ) -> jax.Array:
+        B, T, C = x.shape
+
+        q, k, v = self.project(x)
+
+        # For decode steps with cache, inject correct RoPE positions
+        if self.has_variable("cache", "cache_index"):
+            ci: Any = self.get_variable("cache", "cache_index")
+            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+
+        q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
+
+        y = self.attn(q, k, v, padding_mask, **kwargs)
+        y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
+
+        y = y.reshape(B, T, C)
+        y = self.output_proj(y)
+
+        if not deterministic and self.dropout > 0:
+            y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
+
+        return y

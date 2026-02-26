@@ -4,7 +4,8 @@ Evaluation framework for theseus trainers.
 Provides abstract base classes for different evaluation types:
 - RolloutEvaluation: Autoregressive generation tasks
 - EncodingEvaluation: Next-token prediction accuracy
-- PerplexityEvaluation: Multiple-choice via perplexity comparison
+- PerplexityEvaluation: Dataset perplexity (returns 1/ppl, higher is better)
+- PerplexityComparisonEvaluation: Multiple-choice via perplexity comparison
 
 Also provides:
 - Evaluator: InferenceJob subclass that runs multiple evaluations
@@ -477,6 +478,168 @@ class EncodingEvaluation(Evaluation):
 
 
 class PerplexityEvaluation(Evaluation):
+    """Evaluation that computes dataset perplexity and returns 1/ppl (higher is better).
+
+    Runs a blockwise forward pass like EncodingEvaluation, computes the mean
+    negative log-likelihood over all non-padding tokens, and returns 1/perplexity.
+    """
+
+    @abstractmethod
+    def get(self, indx: int) -> str:
+        """Get input string at index."""
+        ...
+
+    def __call__(
+        self,
+        inference: "InferenceJob[Any, M]",
+        encoding: Any,
+        chunk_size: int = 200,
+        **kwargs: Any,
+    ) -> float:
+        """Run evaluation.
+
+        Args:
+            inference: InferenceJob instance for running inference
+            encoding: Tokenizer with encode_batch methods
+            chunk_size: Number of batches per JIT chunk (default 200)
+
+        Returns:
+            1/perplexity (higher is better)
+        """
+        eval_data = self
+
+        # Gather and encode all data on main process
+        multihost_utils.sync_global_devices("eval_gather_all:pre")
+        if jax.process_index() == 0:
+            x = [eval_data.get(i) for i in range(len(eval_data))]
+            encoded = encoding.encode_batch(x, allowed_special="all")
+            encoded = [seq[: inference.block_size] for seq in encoded]
+            xs, masks = inference.pad(encoded)
+        else:
+            x = None
+            xs, masks = None, None
+        xs = multihost_utils.broadcast_one_to_all(xs)
+        masks = multihost_utils.broadcast_one_to_all(masks)
+        multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        # Truncate to valid batch size
+        valid_size = (
+            xs.shape[0]
+            // (inference.replicas * inference.per_device_batch_size)
+            * (inference.replicas * inference.per_device_batch_size)
+        )
+        xs = xs[:valid_size]
+        masks = masks[:valid_size]
+
+        # Divide across processes
+        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        xs = pieces_xs[jax.process_index()]
+        masks = pieces_masks[jax.process_index()]
+
+        # Reshape into (accumulate_steps, per_device_batch_size, T)
+        xs = xs.reshape(
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
+        )
+        masks = masks.reshape(
+            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
+        )
+
+        # Create global arrays
+        data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
+        xs = multihost_utils.host_local_array_to_global_array(
+            xs, inference.mesh, data_pspec
+        )
+        masks = multihost_utils.host_local_array_to_global_array(
+            masks, inference.mesh, data_pspec
+        )
+
+        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
+            """Compute total NLL and token count for a chunk of batches."""
+
+            def reduce(_: Any, batch: Any) -> Any:
+                x_batch, mask_batch = batch
+
+                # Compute next-token targets: shift x left by 1
+                y_batch = jnp.roll(x_batch, -1, axis=-1)
+                y_batch = y_batch.at[:, -1].set(-1)  # last position has no target
+                y_batch = jnp.where(mask_batch == 0, -1, y_batch)  # mask padding
+
+                logits, _, _ = inference.forward(
+                    state,
+                    state.params,
+                    (x_batch, None, mask_batch),
+                    None,
+                    deterministic=True,
+                )
+
+                logits_f32 = logits.astype(jnp.float32)
+                log_probs = jax.nn.log_softmax(logits_f32, axis=-1)
+
+                token_mask = y_batch != -1
+                y_safe = jnp.where(token_mask, y_batch, 0)
+
+                token_nll = -jnp.take_along_axis(
+                    log_probs, y_safe[..., None], axis=-1
+                ).squeeze(-1)
+                token_nll = jnp.where(token_mask, token_nll, 0.0)
+
+                # Return (sum_nll, token_count) as a 2-element array
+                return None, jnp.array(
+                    [jnp.sum(token_nll), jnp.sum(token_mask).astype(jnp.float32)]
+                )
+
+            _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+            # stats shape: (chunk_steps, 2)
+            return stats
+
+        # JIT compile chunk function once
+        data_sharding = NamedSharding(inference.mesh, data_pspec)
+        wrapped_evaluate_chunk = jax.jit(
+            evaluate_chunk,
+            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
+            out_shardings=None,
+        )
+
+        # Process in chunks with progress logging
+        num_batches = xs.shape[0]
+        all_stats = []
+
+        for chunk_start in range(0, num_batches, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_batches)
+            xs_chunk = xs[chunk_start:chunk_end]
+            masks_chunk = masks[chunk_start:chunk_end]
+
+            if jax.process_index() == 0:
+                progress = (chunk_end / num_batches) * 100
+                logger.info(
+                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                )
+
+            chunk_stats = wrapped_evaluate_chunk(inference.state, xs_chunk, masks_chunk)
+            all_stats.append(chunk_stats)
+
+        # Concatenate all chunk stats: shape (total_local_batches, 2)
+        stats = jnp.concatenate(all_stats, axis=0)
+
+        # Gather across hosts
+        multihost_utils.sync_global_devices("eval_gather_all:pre")
+        stats = multihost_utils.process_allgather(stats)
+        multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        # Flatten process dimension (process_allgather prepends a process axis)
+        stats = jnp.reshape(stats, (-1, 2))
+
+        # Compute global perplexity and return 1/ppl
+        total_nll = jnp.sum(stats[:, 0])
+        total_count = jnp.sum(stats[:, 1])
+        mean_nll = total_nll / jnp.maximum(total_count, 1.0)
+        ppl = jnp.exp(mean_nll)
+        score = multihost_utils.broadcast_one_to_all(1.0 / ppl)
+        return float(score)
+
+
+class PerplexityComparisonEvaluation(Evaluation):
     """Evaluation using perplexity comparison for multiple-choice tasks."""
 
     @abstractmethod

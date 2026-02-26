@@ -3,6 +3,7 @@ from .base import (
     RolloutEvaluation,
     EncodingEvaluation,
     PerplexityEvaluation,
+    PerplexityComparisonEvaluation,
     Evaluator,
 )
 
@@ -14,5 +15,6 @@ __all__ = [
     "RolloutEvaluation",
     "EncodingEvaluation",
     "PerplexityEvaluation",
+    "PerplexityComparisonEvaluation",
     "Evaluator",
 ]
