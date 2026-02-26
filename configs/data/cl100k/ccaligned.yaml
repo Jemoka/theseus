@@ -1,0 +1,7 @@
+data:
+  dataset: ccaligned
+  suffix: ''
+  val_pct: 0.05
+  seed: 2357
+  max_samples: -1
+job: data/tokenize_variable_dataset

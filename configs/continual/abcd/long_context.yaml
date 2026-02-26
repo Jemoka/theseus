@@ -1,0 +1,73 @@
+# Long context continual learning: PG19 books -> LongBench/LongHealth
+# Paradigm: Long context
+#
+# Pretrain on books (long documents), then adapt to long-context QA tasks
+# Evaluates whether long-context pretraining helps downstream QA
+
+architecture:
+  n_embd: 2048
+  n_layers: 16
+  bias: true
+  dropout: 0.0
+  n_head: 16
+  rope: true
+  block_size: 2048
+  vocab_size: 100288
+  vram_calib_factor: 1.0
+eval:
+  evaluations:
+  - longbench
+  - longhealth
+  - pg19
+  - tinystories
+tokenizer:
+  backend: tiktoken
+  name: cl100k_base
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+  warmup_pct: 0.05
+  decay_pct: 0.10
+  constant_pct: 0.02
+training:
+  batch_size: 128
+  per_device_batch_size: -1
+  tokens:
+  - 10000000000   # Phase 0: PG19 Gutenberg books (10B tokens)
+  - 500000000     # Phase 1: LongBench long-context QA (500M tokens)
+  - 500000000     # Phase 2: LongHealth clinical QA (500M tokens)
+  validation: false
+  evaluate: true
+  dataset:
+  - - name: pg19
+      rate: 1.0
+      style: PADDED
+      suffix: ''
+  - - name: longbench
+      rate: 1.0
+      style: PADDED
+      suffix: ''
+  - - name: longhealth
+      rate: 1.0
+      style: PADDED
+      suffix: ''
+  validation_steps: 2048
+  fade:
+    overlap: 0.05
+    curve: cosine
+    steepness: 10.0
+logging:
+  report_interval: 32
+  checkpoint_interval: 4096
+  validation_interval: 1024
+  wandb: true
+job: continual/train/abcd
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1
