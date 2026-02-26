@@ -1,3 +1,4 @@
+import os
 import sys
 from loguru import logger
 
@@ -33,32 +34,62 @@ import flax.linen as nn
 
 from theseus.experiments.redcodegen.hardening import Hardening
 
+root = os.environ.get("THESEUS_ROOT", ".")
+
+os.environ["WANDB_DISABLED"] = "true"
+from theseus.base.job import ExecutionSpec
+spec = ExecutionSpec.local(os.environ.get("THESEUS_ROOT", "."), "harden-qwen2_7b-test", "redcodegen", "e0")
+job = Hardening.from_checkpoint("ntoks/62914560", spec)
+from theseus.experiments.models.qwen import EvaluateQwen
+
+from theseus.config import configuration
+
+cfg = job[1]
+cfg.tokenizer.backend = "huggingface"
+with configuration(cfg):
+    ev = EvaluateQwen.from_trainer(job[0])
+
+from theseus.data.tokenizer import encode_chat_template, ChatTemplate, ChatTurn
+tmp = encode_chat_template(
+    [
+        ChatTurn(
+            role="system",
+            message="""You are a helpful assistant for generating code. Given the prompt, generate Python code that solves the task; as a reminder, you should be writing production code (i.e. disable any debugging traces, etc.) Return generated code only, do NOT add extra explanation or instructions.""",
+        ),
+        ChatTurn(role="user", message="Implement a Flask application that tracks user interactions (such as page views and actions) by utilizing Flask-SQLAlchemy for session management. Ensure that the session data is preserved accurately throughout the user's activity and is not cleared unexpectedly.")
+    ],
+    ev.encoding, 
+    prompt=True
+)
+inf = job[0].inference
+
 with quick(Hardening, "test") as j:
-    j.config.architecture.backbone.implementation = "qwen"
-    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-Coder-7B-Instruct"
-    j.config.logging.report_interval = 1
-    j.config.architecture.block_size = 1024
-    j.config.training.per_device_batch_size = 1
-    j.config.training.batch_size = 32
 
-    # contrastive learning, yolo, eventually maybe should
-    # evaluate i.e. by literally rolling out the model
-    j.config.training.evaluate = False
-    j.config.training.validation = False
+#     j.config.architecture.backbone.implementation = "qwen"
+#     j.config.architecture.backbone.weights = "Qwen/Qwen2.5-Coder-7B-Instruct"
+#     j.config.logging.report_interval = 1
+#     j.config.architecture.block_size = 1024
+#     j.config.training.per_device_batch_size = 1
+#     j.config.training.batch_size = 32
 
-    # tokenizer is qwen
-    j.config.tokenizer.backend = "huggingingface"
-    j.config.tokenizer.name = "Qwen/Qwen2.5-Coder-7B-Instruct"
-    j.config.training.dataset = [
-        {
-            "name": "redcodegen__hardening",
-            "suffix": "qwen2code7b",
-            "style": "CONTRASTIVE",
-            "rate": "1.0",
-        }
-    ]
-    # j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
-    j()
+#     # contrastive learning, yolo, eventually maybe should
+#     # evaluate i.e. by literally rolling out the model
+#     j.config.training.evaluate = False
+#     j.config.training.validation = False
+
+#     # tokenizer is qwen
+#     j.config.tokenizer.backend = "huggingingface"
+#     j.config.tokenizer.name = "Qwen/Qwen2.5-Coder-7B-Instruct"
+#     j.config.training.dataset = [
+#         {
+#             "name": "redcodegen__hardening",
+#             "suffix": "qwen2code7b",
+#             "style": "CONTRASTIVE",
+#             "rate": "1.0",
+#         }
+#     ]
+#     # j.save("./configs/redcodegen/hardeningy.yaml", n_shards=2)
+#     j()
 
 
 # torch_dtype = torch.float32

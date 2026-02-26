@@ -171,7 +171,16 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         loss_base_neg = jax.lax.stop_gradient(loss_base_neg)
 
         # compute DPO loss and rewards
-        logits = -((loss_pos - loss_neg) - (loss_base_pos - loss_base_neg))
+        # model.loss() returns per-token-averaged NLL; standard DPO needs total
+        # (summed) log-probs.  Recover total NLL by multiplying back by the
+        # number of real target tokens (positions where target != -1).
+        n_pos = padding_mask_pos[:, 1:].sum()
+        n_neg = padding_mask_neg[:, 1:].sum()
+
+        logits = -(
+            (loss_pos * n_pos - loss_neg * n_neg)
+            - (loss_base_pos * n_pos - loss_base_neg * n_neg)
+        )
 
         beta = cstate.beta
         label_smooth = cstate.label_smooth
@@ -182,8 +191,12 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         )
 
         # reward sign fix
-        chosen_rewards = jax.lax.stop_gradient(-beta * (loss_pos - loss_base_pos))
-        rejected_rewards = jax.lax.stop_gradient(-beta * (loss_neg - loss_base_neg))
+        chosen_rewards = jax.lax.stop_gradient(
+            -beta * (loss_pos - loss_base_pos) * n_pos
+        )
+        rejected_rewards = jax.lax.stop_gradient(
+            -beta * (loss_neg - loss_base_neg) * n_neg
+        )
 
         metrics = {
             "rewards/chosen": chosen_rewards,

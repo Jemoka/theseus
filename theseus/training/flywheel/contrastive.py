@@ -151,7 +151,10 @@ class ContrastivePaddedDataset(Dataset):
         mask_pos = pos_mask_sel.astype(np.bool_)
         mask_neg = neg_mask_sel.astype(np.bool_)
 
-        # pad up to block size if needed
+        # set padding tokens to -1 so model.loss() masks them correctly
+        x_pos[~mask_pos] = -1
+        y_neg[~mask_neg] = -1
+
         # pad up to block size if needed (should already be exact, but keep safety)
         def pad_arr(
             arr: np.ndarray, m_arr: np.ndarray
@@ -159,7 +162,8 @@ class ContrastivePaddedDataset(Dataset):
             if arr.shape[-1] < block_size:
                 pad_len = block_size - arr.shape[-1]
                 arr = np.concatenate(
-                    (np.zeros((arr.shape[0], pad_len), dtype=np.int64), arr), axis=-1
+                    (np.full((arr.shape[0], pad_len), -1, dtype=np.int64), arr),
+                    axis=-1,
                 )
                 m_arr = np.concatenate(
                     (
