@@ -308,7 +308,7 @@ def _to_hf_state_dict(
             cur = cur[key]
         if isinstance(cur, nn.Partitioned):
             cur = cur.value
-        return np.array(jax.device_get(cur))
+        return np.array(jax.device_get(cur), dtype=np.float32)
 
     attn_has_bias = getattr(cfg, "attention_bias", False)
     mlp_has_bias = getattr(cfg, "mlp_bias", False)

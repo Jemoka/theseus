@@ -302,7 +302,7 @@ def _to_hf_state_dict(params: Any, n_layers: int) -> dict[str, "torch.Tensor"]:
             cur = cur[key]
         if isinstance(cur, nn.Partitioned):
             cur = cur.value
-        return np.array(jax.device_get(cur))
+        return np.array(jax.device_get(cur), dtype=np.float32)
 
     # Embeddings
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
