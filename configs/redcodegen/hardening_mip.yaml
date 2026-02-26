@@ -9,7 +9,7 @@ architecture:
 eval:
   evaluations: []
 tokenizer:
-  backend: huggingingface
+  backend: huggingface
   name: Qwen/Qwen2.5-Coder-7B-Instruct
   huggingface:
     use_fast: true
