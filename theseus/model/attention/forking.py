@@ -7,6 +7,7 @@ from typing import Tuple, Any, Optional
 
 import jax
 import jax.numpy as jnp
+import flax.linen as nn
 
 from theseus.config import field
 from theseus.model.attention.rope import RopeAttention
@@ -118,6 +119,18 @@ class ForkingAttention(RopeAttention):
             y = jax.nn.dot_product_attention(q, k, v, bias=attn_bias)
 
         return y
+
+    @nn.compact
+    def _cached_kv(
+        self, k: jax.Array, v: jax.Array
+    ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
+        """Update KV cache if active. k, v: (B, T, H, D).
+
+        Returns (k, v, cache_index_after_update) where cache_index is None
+        when cache is not active (training mode).
+        """
+
+        return k, v, None
 
     def postprocess_attn(
         self,

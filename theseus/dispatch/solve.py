@@ -230,6 +230,14 @@ def solve(
                 # Get the GRES type name for this chip (None => any GPU type)
                 gres_type = config.gres_mapping.get(chip_name) if chip_name else None
 
+                # If a specific chip was requested but has no gres_mapping entry,
+                # this SLURM host can't fulfill it (no way to request it via GRES).
+                if chip_name and gres_type is None:
+                    logger.debug(
+                        f"SOLVE | skipping SLURM host '{host_name}': chip '{chip_name}' not in gres_mapping"
+                    )
+                    continue
+
                 # Query GPU types for all partitions on this host (single SSH call)
                 from theseus.dispatch.slurm import partition_gpu_types
 

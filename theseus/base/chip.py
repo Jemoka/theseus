@@ -91,4 +91,9 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         display_name="Google TPU v5p",
         memory=int(95 * 1024**3),
     ),
+    "drive-pg199": Chip(
+        name="drive-pg199",
+        display_name="Nvidia Drive PG199",
+        memory=int(32 * 1024**3),
+    ),
 }

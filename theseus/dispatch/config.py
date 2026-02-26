@@ -348,6 +348,8 @@ def _match_gpu_to_chip(gpu_name: str, mem_mb: int) -> str | None:
         return "l40s"
     if "l40" in gpu_lower:
         return "l40"
+    if "drive-pg199" in gpu_lower:
+        return "drive-pg199"
 
     return None
 

@@ -164,7 +164,13 @@ class SelfAttention(Module):
         if ci is not None:
             return cache_mask(t, ci)
         if padding_mask is not None:
-            return padding_mask[:, None, None, :]  # (B, 1, 1, T)
+            # Combine causal mask with padding mask so future tokens AND
+            # padding tokens are both blocked.
+            causal = jnp.tril(jnp.ones((t, t), dtype=jnp.bool_))[
+                None, None, :, :
+            ]  # (1, 1, T, T)
+            pad = padding_mask[:, None, None, :]  # (B, 1, 1, T)
+            return causal & pad
         return None
 
     def attn(
