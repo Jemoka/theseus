@@ -7,6 +7,7 @@ from theseus.evaluation.datasets.mnli import MNLIEval
 from theseus.evaluation.datasets.qqp import QQPEval
 from theseus.evaluation.datasets.siqa import SIQAEval
 from theseus.evaluation.datasets.sst2 import SST2Eval
+from theseus.evaluation.datasets.tinystories import TinyStoriesEval
 from theseus.evaluation.datasets.winogrande import WinograndeEval
 from theseus.evaluation.base import Evaluation
 
@@ -18,5 +19,6 @@ DATASETS: dict[str, Callable[[], Evaluation]] = {
     "qqp": QQPEval,
     "siqa": SIQAEval,
     "sst2": SST2Eval,
+    "tinystories": TinyStoriesEval,
     "winogrande": WinograndeEval,
 }

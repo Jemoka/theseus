@@ -10,10 +10,10 @@ from typing import Tuple
 import datasets
 from datasets import load_dataset, get_dataset_config_names
 
-from theseus.evaluation import PerplexityEvaluation
+from theseus.evaluation import PerplexityComparisonEvaluation
 
 
-class Blimp(PerplexityEvaluation):
+class Blimp(PerplexityComparisonEvaluation):
     """BLiMP evaluation using perplexity comparison.
 
     Each sample contains a grammatically correct and incorrect sentence.
