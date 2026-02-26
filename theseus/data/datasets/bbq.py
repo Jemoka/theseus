@@ -3,7 +3,9 @@ from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
 
 
-def template(context: str, question: str, choices: list[str], answer: str) -> ChatTemplate:
+def template(
+    context: str, question: str, choices: list[str], answer: str
+) -> ChatTemplate:
     choices_text = "\n".join(f"{chr(65 + i)}: {c}" for i, c in enumerate(choices))
     return [
         ChatTurn(
