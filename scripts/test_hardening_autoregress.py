@@ -149,15 +149,16 @@ def main(suffix, root, name, project, group, num_tokens, temperature, top_p):
         total_tokens = min(prompt_len + num_tokens, inference.block_size)
 
         key, subkey = jax.random.split(key)
-        result = inference._autoregress(
-            inference.state,
-            subkey,
-            xs,
-            masks,
-            total_tokens,
-            temperature,
-            top_p,
-        )
+        with configuration(cfg):
+            result = inference._autoregress(
+                inference.state,
+                subkey,
+                xs,
+                masks,
+                total_tokens,
+                temperature,
+                top_p,
+            )
 
         # Decode only the newly generated tokens
         generated_ids = result[0, prompt_len:].tolist()
