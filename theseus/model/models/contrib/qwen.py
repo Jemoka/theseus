@@ -198,14 +198,14 @@ class Qwen(Module):
                 }
             )
 
-        model = configure(cls)
-        dummy = jnp.zeros((1, 1), dtype=jnp.int32)
-        abstract = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
-        params = jax.tree_util.tree_map(
-            lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
-        )
-        params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
-        return model, params
+            model = configure(cls)
+            dummy = jnp.zeros((1, 1), dtype=jnp.int32)
+            abstract = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
+            params = jax.tree_util.tree_map(
+                lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
+            )
+            params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
+            return model, params
 
 
 def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int) -> Any:
