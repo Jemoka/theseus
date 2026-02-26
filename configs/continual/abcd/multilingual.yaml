@@ -48,18 +48,15 @@ training:
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: ''
-      config: 'fr_XX'
+      suffix: 'fr'
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: ''
-      config: 'de_DE'
+      suffix: 'de'
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: ''
-      config: 'zh_CN'
+      suffix: 'zh'
   validation_steps: 2048
   fade:
     overlap: 0.0

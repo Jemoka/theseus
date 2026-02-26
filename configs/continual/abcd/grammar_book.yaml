@@ -52,18 +52,15 @@ training:
   - - name: mtob
       rate: 0.6
       style: PADDED
-      suffix: ''
-      config: 'grammar-long'
+      suffix: 'grammar'
     - name: mtob
       rate: 0.4
       style: PADDED
-      suffix: ''
-      config: 'dictionary'
+      suffix: 'dictionary'
   - - name: mtob
       rate: 1.0
       style: PADDED
-      suffix: ''
-      config: 'en-kgv'
+      suffix: 'enkgv'
   validation_steps: 2048
   fade:
     overlap: 0.0

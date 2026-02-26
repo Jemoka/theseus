@@ -66,8 +66,7 @@ training:
     - name: harmfulqa
       rate: 0.3
       style: PADDED
-      suffix: ''
-      config: red
+      suffix: 'red'
   - - name: bbq
       rate: 0.5
       style: PADDED
@@ -75,8 +74,7 @@ training:
     - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: ''
-      config: blue
+      suffix: 'blue'
   validation_steps: 2048
   fade:
     overlap: 0.0

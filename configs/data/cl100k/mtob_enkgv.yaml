@@ -1,0 +1,14 @@
+data:
+  dataset: mtob
+  config: 'en-kgv'
+  suffix: 'enkgv'
+  val_pct: 0.05
+  seed: 2357
+  split: train
+  pad_token: 0
+  system_prompt: ''
+architecture:
+  block_size: 512
+system:
+  num_proc: 8
+job: data/tokenize_blockwise_dataset
