@@ -93,8 +93,8 @@ class ForkingAttention(RopeAttention):
 
         # Build attention bias/mask
         if mask is not None:
-            padding_mask = mask[:, None, None, :]
-            padding_bias = key_padding_bias(padding_mask)
+            # padding_mask = mask[:, None, None, :]
+            padding_bias = key_padding_bias(mask)
             padding_bias = jnp.take_along_axis(
                 padding_bias, token_index[:, None, None, :], axis=-1
             )
