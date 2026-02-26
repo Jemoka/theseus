@@ -3,7 +3,7 @@ import wandb
 import numpy as np
 from pathlib import Path
 
-from typing import List, Generic, TypeVar, Callable, Optional
+from typing import Any, List, Generic, TypeVar, Callable
 from loguru import logger
 from jax.experimental import multihost_utils
 
@@ -42,7 +42,7 @@ class FadeConfig:
     overlap: float = field("training/fade/overlap", default=0.0)
     curve: str = field("training/fade/curve", default="linear")
     steepness: float = field("training/fade/steepness", default=10.0)
-    per_boundary_overlap: List[float] = field(  # type: ignore
+    per_boundary_overlap: List[float] = field(
         "training/fade/per_boundary_overlap",
         default_factory=list,
     )
@@ -134,8 +134,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
             k = fade.steepness
             return lambda t: float(1.0 / (1.0 + np.exp(-k * (t - 0.5))))
         raise ValueError(
-            f"Unknown fade curve '{fade.curve}'. "
-            f"Choose from: linear, cosine, sigmoid"
+            f"Unknown fade curve '{fade.curve}'. Choose from: linear, cosine, sigmoid"
         )
 
     def _compute_fade_weights(self, current_ntok: int) -> List[float]:
@@ -211,9 +210,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
             # Fade-out ramp
             if fade_out_end > fade_out_start and current_ntok >= fade_out_start:
-                t = (current_ntok - fade_out_start) / (
-                    fade_out_end - fade_out_start
-                )
+                t = (current_ntok - fade_out_start) / (fade_out_end - fade_out_start)
                 w = min(w, 1.0 - curve_fn(t))
 
             weights.append(max(0.0, w))
@@ -300,9 +297,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         # Start async batch workers for every strategy immediately
         self._train_batch_rows = (
-            self.per_device_batch_size
-            * self.local_replicas
-            * self.accumulate_steps
+            self.per_device_batch_size * self.local_replicas * self.accumulate_steps
         )
         self.train_dls = [
             s.get_async_batches(self._train_batch_rows, split="train")
@@ -336,8 +331,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
                 self._segment_starts[-1] + self.args.total_tokens[i]
             )
         self._segment_ends: List[int] = [
-            self._segment_starts[i] + self.args.total_tokens[i]
-            for i in range(n)
+            self._segment_starts[i] + self.args.total_tokens[i] for i in range(n)
         ]
 
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
@@ -376,8 +370,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
                 )
 
             logger.info(
-                "DATASET | switching primary from {} to {} at {} tokens "
-                "(weights: {})",
+                "DATASET | switching primary from {} to {} at {} tokens (weights: {})",
                 self._current_dl_idx,
                 primary_idx,
                 current_ntok,
@@ -402,20 +395,16 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
         )
         counts = self._distribute_batch(weights, total_rows)
 
-        batch_parts: List[dict] = []
+        batch_parts: List[dict[str, Any]] = []
         for i, count in enumerate(counts):
             if count > 0:
                 batch_data = dls[i].get_batch()
-                batch_parts.append(
-                    {k: v[:count] for k, v in batch_data.items()}
-                )
+                batch_parts.append({k: v[:count] for k, v in batch_data.items()})
 
         # Concatenate all parts
-        combined: dict = {}
+        combined: dict[str, Any] = {}
         for key in batch_parts[0]:
-            combined[key] = np.concatenate(
-                [p[key] for p in batch_parts], axis=0
-            )
+            combined[key] = np.concatenate([p[key] for p in batch_parts], axis=0)
 
         # Shuffle so micro-batches see a uniform mix
         n = combined[next(iter(combined))].shape[0]
