@@ -14,8 +14,6 @@ from theseus.base import Topology, ExecutionSpec, PyTree
 from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
-from theseus.evaluation.base import Evaluator
-from theseus.experiments.models.gpt import EvaluateGPT
 
 
 @dataclass
@@ -196,6 +194,3 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 class ABCDTrainer(ABCDBaseTrainer[ABCDConfig, GPT]):
     MODEL = GPT
     CONFIG = ABCDConfig
-
-    def evaluator(self) -> Evaluator[GPT]:
-        return EvaluateGPT.from_trainer(self)

@@ -67,7 +67,7 @@ with quick(Hardening, "test") as j:
 
 #     j.config.architecture.backbone.implementation = "qwen"
 #     j.config.architecture.backbone.weights = "Qwen/Qwen2.5-Coder-7B-Instruct"
-#     j.config.logging.report_interval = 1
+#     j.config.logging.report_interval = 
 #     j.config.architecture.block_size = 1024
 #     j.config.training.per_device_batch_size = 1
 #     j.config.training.batch_size = 32

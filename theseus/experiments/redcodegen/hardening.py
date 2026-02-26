@@ -1,5 +1,4 @@
 import optax
-from typing import Optional, Any
 from theseus.training.contrastive import BackbonedContrastiveTrainer
 
 
@@ -11,7 +10,4 @@ class Hardening(BackbonedContrastiveTrainer):
 
     @classmethod
     def schedule(cls) -> optax._src.base.Schedule:
-        return None
-
-    def evaluator(self) -> Optional[Any]:
         return None

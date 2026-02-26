@@ -27,6 +27,7 @@ from theseus.base import Axis, ExecutionSpec
 
 from theseus.config import field, configure, configuration
 from theseus.inference import InferenceJob, M
+from theseus.model.module import Module
 from theseus.data.tokenizer import Tokenizer, TokenizerConfig, get_tokenizer
 
 if TYPE_CHECKING:
@@ -770,7 +771,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         evaluator()  # Runs evaluations and saves results
     """
 
-    MODEL: type[M]  # Set by subclass (e.g., EvaluatorGPT)
+    MODEL: type[M] = Module  # type: ignore[assignment]
     evaluations: List[Evaluation]
     encoding: Tokenizer
 

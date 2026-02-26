@@ -368,7 +368,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     def evaluator(self) -> Optional[Evaluator[M]]:
         """define what evaluator to use"""
-        return None
+        return Evaluator.from_trainer(self)
 
     @classmethod
     def optimizer(cls) -> str | optax.GradientTransformation:
