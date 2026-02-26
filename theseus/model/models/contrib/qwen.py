@@ -173,7 +173,7 @@ class Qwen(Module):
             rope_theta = cfg.rope_parameters["rope_theta"]
 
         with patch() as th_cfg:
-            th_cfg.architecture = OmegaConf.create(
+            new_arch = OmegaConf.create(
                 {
                     "n_layers": cfg.num_hidden_layers,
                     "n_embd": cfg.hidden_size,
@@ -197,6 +197,10 @@ class Qwen(Module):
                     "dtype": {"param": param_dtype, "activation": activation_dtype},
                 }
             )
+            if "architecture" in th_cfg:
+                th_cfg.architecture = OmegaConf.merge(th_cfg.architecture, new_arch)
+            else:
+                th_cfg.architecture = new_arch
 
             model = configure(cls)
             dummy = jnp.zeros((1, 1), dtype=jnp.int32)
