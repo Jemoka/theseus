@@ -13,6 +13,8 @@ from theseus.model.module import Module
 from theseus.model.block.gpt_neox import GPTNeoXDecoderBlock
 from theseus.model.layers import LayerNorm
 
+from loguru import logger
+
 try:
     import torch  # optional, for HF weight export
 except Exception:
@@ -223,6 +225,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             cur[path[-1]] = array
 
     # Embeddings (tied)
+    logger.debug("loading embedding weights...")
     embed = state_dict["gpt_neox.embed_in.weight"].cpu().float().numpy()
     assign(["wte"], embed)
     if "embed_out.weight" in state_dict:
@@ -231,9 +234,11 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         assign(["lm_head"], embed)
 
     for i in range(n_layers):
+        logger.debug(f"loading block {i} weights...")
         prefix = f"gpt_neox.layers.{i}."
         block_key = f"blocks_{i}"
         # Norms
+        logger.debug(f"  loading block {i} norm weights...")
         assign(
             [block_key, "ln_1", "weight"],
             state_dict[prefix + "input_layernorm.weight"].cpu().float().numpy(),
@@ -242,6 +247,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             [block_key, "ln_1", "bias"],
             state_dict[prefix + "input_layernorm.bias"].cpu().float().numpy(),
         )
+        logger.debug(f"  loading block {i} post-attention norm weights...")
         assign(
             [block_key, "ln_2", "weight"],
             state_dict[prefix + "post_attention_layernorm.weight"]
@@ -274,6 +280,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         q_w = qkv_r[:, 0, :, :].reshape(hidden, hidden).T  # (in, out) for JAX
         k_w = qkv_r[:, 1, :, :].reshape(hidden, hidden).T
         v_w = qkv_r[:, 2, :, :].reshape(hidden, hidden).T
+        logger.debug(f"  loading block {i} attention weights...")
         assign([block_key, "attn", "q_proj", "kernel"], q_w)
         assign([block_key, "attn", "k_proj", "kernel"], k_w)
         assign([block_key, "attn", "v_proj", "kernel"], v_w)
@@ -295,6 +302,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             )
 
         # MLP
+        logger.debug(f"  loading block {i} MLP weights...")
         h4_w = state_dict[prefix + "mlp.dense_h_to_4h.weight"].cpu().float().numpy().T
         h4_b = state_dict[prefix + "mlp.dense_h_to_4h.bias"].cpu().float().numpy()
         back_w = state_dict[prefix + "mlp.dense_4h_to_h.weight"].cpu().float().numpy().T
@@ -305,6 +313,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         assign([block_key, "mlp", "dense_4h_to_h", "bias"], back_b)
 
     # Final norm
+    logger.debug("  loading final norm weights...")
     assign(
         ["ln_f", "weight"],
         state_dict["gpt_neox.final_layer_norm.weight"].cpu().float().numpy(),
@@ -315,6 +324,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             state_dict["gpt_neox.final_layer_norm.bias"].cpu().float().numpy(),
         )
 
+    logger.debug("model loading complete.")
     return freeze(p)
 
 
@@ -337,6 +347,8 @@ def _to_hf_state_dict(
             cur = cur.value
         return np.array(jax.device_get(cur), dtype=np.float32)
 
+    logger.debug("exporting embedding weights...")
+    logger.debug("  loading embedding weights...")
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
     head = torch.tensor(grab(["lm_head"]), dtype=torch.float32)
     sd["gpt_neox.embed_in.weight"] = embed
@@ -347,9 +359,11 @@ def _to_hf_state_dict(
     head_dim = hidden // num_heads
 
     for i in range(n_layers):
+        logger.debug(f"exporting block {i} weights...")
         prefix = f"gpt_neox.layers.{i}."
         block_key = f"blocks_{i}"
 
+        logger.debug(f"  loading block {i} norm weights...")
         sd[prefix + "input_layernorm.weight"] = torch.tensor(
             grab([block_key, "ln_1", "weight"]), dtype=torch.float32
         )
@@ -357,6 +371,7 @@ def _to_hf_state_dict(
             sd[prefix + "input_layernorm.bias"] = torch.tensor(
                 grab([block_key, "ln_1", "bias"]), dtype=torch.float32
             )
+        logger.debug(f"  loading block {i} post-attention norm weights...")
         sd[prefix + "post_attention_layernorm.weight"] = torch.tensor(
             grab([block_key, "ln_2", "weight"]), dtype=torch.float32
         )
@@ -366,6 +381,7 @@ def _to_hf_state_dict(
             )
 
         # Re-interleave QKV weights per head for HF format
+        logger.debug(f"  loading block {i} attention weights...")
         q_w = grab([block_key, "attn", "q_proj", "kernel"])  # (in, hidden)
         k_w = grab([block_key, "attn", "k_proj", "kernel"])
         v_w = grab([block_key, "attn", "v_proj", "kernel"])
@@ -396,6 +412,7 @@ def _to_hf_state_dict(
                 grab([block_key, "attn", "o_proj", "bias"]), dtype=torch.float32
             )
 
+        logger.debug(f"  loading block {i} MLP weights...")
         h4_w = grab([block_key, "mlp", "dense_h_to_4h", "kernel"])
         h4_b = grab([block_key, "mlp", "dense_h_to_4h", "bias"])
         back_w = grab([block_key, "mlp", "dense_4h_to_h", "kernel"])
@@ -411,6 +428,7 @@ def _to_hf_state_dict(
             back_b, dtype=torch.float32
         )
 
+    logger.debug("  loading final norm weights...")
     sd["gpt_neox.final_layer_norm.weight"] = torch.tensor(
         grab(["ln_f", "weight"]), dtype=torch.float32
     )
@@ -418,6 +436,7 @@ def _to_hf_state_dict(
         sd["gpt_neox.final_layer_norm.bias"] = torch.tensor(
             grab(["ln_f", "bias"]), dtype=torch.float32
         )
+    logger.debug("export complete.")
     return sd
 
 

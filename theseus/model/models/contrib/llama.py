@@ -13,6 +13,8 @@ from theseus.model.module import Module
 from theseus.model.block.llama import LlamaDecoderBlock
 from theseus.model.layers import RMSNorm
 
+from loguru import logger
+
 try:
     import torch  # optional, for HF weight export
 except Exception:
@@ -211,6 +213,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             cur[path[-1]] = array
 
     # Embeddings and head
+    logger.debug("loading embedding weights...")
     assign(["wte"], state_dict["model.embed_tokens.weight"].cpu().float().numpy())
     if "lm_head.weight" in state_dict:
         assign(["lm_head"], state_dict["lm_head.weight"].cpu().float().numpy())
@@ -223,13 +226,16 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
     mlp_has_bias = getattr(cfg, "mlp_bias", False)
 
     for i in range(n_layers):
+        logger.debug(f"loading block {i} weights...")
         prefix = f"model.layers.{i}."
         block_key = f"blocks_{i}"
         # Norms
+        logger.debug(f"  loading block {i} norm weights...")
         assign(
             [block_key, "rms_1", "weight"],
             state_dict[prefix + "input_layernorm.weight"].cpu().float().numpy(),
         )
+        logger.debug(f"  loading block {i} post-attention norm weights...")
         assign(
             [block_key, "rms_2", "weight"],
             state_dict[prefix + "post_attention_layernorm.weight"]
@@ -244,6 +250,7 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         v_w = state_dict[prefix + "self_attn.v_proj.weight"].cpu().float().numpy().T
         o_w = state_dict[prefix + "self_attn.o_proj.weight"].cpu().float().numpy().T
 
+        logger.debug(f"  loading block {i} attention weights...")
         assign([block_key, "attn", "q_proj", "kernel"], q_w)
         assign([block_key, "attn", "k_proj", "kernel"], k_w)
         assign([block_key, "attn", "v_proj", "kernel"], v_w)
@@ -267,8 +274,11 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         gate_w = state_dict[prefix + "mlp.gate_proj.weight"].cpu().float().numpy().T
         up_w = state_dict[prefix + "mlp.up_proj.weight"].cpu().float().numpy().T
         down_w = state_dict[prefix + "mlp.down_proj.weight"].cpu().float().numpy().T
+        logger.debug(f"  loading block {i} MLP gate weights...")
         assign([block_key, "mlp", "gate", "kernel"], gate_w)
+        logger.debug(f"  loading block {i} MLP up weights...")
         assign([block_key, "mlp", "up", "kernel"], up_w)
+        logger.debug(f"  loading block {i} MLP down weights...")
         assign([block_key, "mlp", "down", "kernel"], down_w)
 
         if mlp_has_bias:
@@ -286,8 +296,10 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             )
 
     # Final norm
+    logger.debug("  loading final norm weights...")
     assign(["ln_f", "weight"], state_dict["model.norm.weight"].cpu().float().numpy())
 
+    logger.debug("model loading complete.")
     return freeze(p)
 
 
@@ -314,22 +326,28 @@ def _to_hf_state_dict(
     mlp_has_bias = getattr(cfg, "mlp_bias", False)
 
     # Embeddings
+    logger.debug("exporting embedding weights...")
+    logger.debug("  loading embedding weights...")
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
     head = torch.tensor(grab(["lm_head"]), dtype=torch.float32)
     sd["model.embed_tokens.weight"] = embed
     sd["lm_head.weight"] = head
 
     for i in range(n_layers):
+        logger.debug(f"exporting block {i} weights...")
         prefix = f"model.layers.{i}."
         block_key = f"blocks_{i}"
 
+        logger.debug(f"  loading block {i} norm weights...")
         sd[prefix + "input_layernorm.weight"] = torch.tensor(
             grab([block_key, "rms_1", "weight"]), dtype=torch.float32
         )
+        logger.debug(f"  loading block {i} post-attention norm weights...")
         sd[prefix + "post_attention_layernorm.weight"] = torch.tensor(
             grab([block_key, "rms_2", "weight"]), dtype=torch.float32
         )
 
+        logger.debug(f"  loading block {i} attention weights...")
         q_w = grab([block_key, "attn", "q_proj", "kernel"]).T
         k_w = grab([block_key, "attn", "k_proj", "kernel"]).T
         v_w = grab([block_key, "attn", "v_proj", "kernel"]).T
@@ -350,8 +368,11 @@ def _to_hf_state_dict(
                 grab([block_key, "attn", "v_proj", "bias"]), dtype=torch.float32
             )
 
+        logger.debug(f"  loading block {i} MLP weights...")
         gate_w = grab([block_key, "mlp", "gate", "kernel"]).T
+        logger.debug(f"  loading block {i} MLP up weights...")
         up_w = grab([block_key, "mlp", "up", "kernel"]).T
+        logger.debug(f"  loading block {i} MLP down weights...")
         down_w = grab([block_key, "mlp", "down", "kernel"]).T
         sd[prefix + "mlp.gate_proj.weight"] = torch.tensor(gate_w, dtype=torch.float32)
         sd[prefix + "mlp.up_proj.weight"] = torch.tensor(up_w, dtype=torch.float32)
@@ -368,9 +389,11 @@ def _to_hf_state_dict(
                 grab([block_key, "mlp", "down", "bias"]), dtype=torch.float32
             )
 
+    logger.debug("  loading final norm weights...")
     sd["model.norm.weight"] = torch.tensor(
         grab(["ln_f", "weight"]), dtype=torch.float32
     )
+    logger.debug("export complete.")
     return sd
 
 
