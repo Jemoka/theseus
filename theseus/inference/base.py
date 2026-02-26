@@ -12,7 +12,7 @@ from typing_extensions import Self
 import jax
 import jax.numpy as jnp
 from jax import random as jax_random
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, PartitionSpec as P
 from flax.training import train_state
 import flax
 
@@ -362,9 +362,18 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             out = out.at[:, offset].set(next_token)
             return (new_cache, next_token, out, offset + 1, key), None
 
-        # Wrap scan in jit so the decode body also sees GSPMD-optimised sharding
-        init_carry = (cache, first_token, out_buf, T_in + 1, key)
-        (_, _, final_out, _, _), _ = jax.jit(
-            lambda carry, xs: jax.lax.scan(decode_step, carry, xs)
-        )(init_carry, jnp.arange(n_gen))
-        return final_out  # type: ignore[no-any-return]
+        # Put non-sharded carry elements onto the mesh (replicated) so jit
+        # can reconcile shardings with the cache that came out of prefill_fn.
+        replicated = NamedSharding(self.mesh, P())  # type: ignore[no-untyped-call]
+        first_token = jax.device_put(first_token, replicated)
+        out_buf = jax.device_put(out_buf, replicated)
+        key = jax.device_put(key, replicated)
+
+        def _run_scan(cache: Any, first_token: Any, out_buf: Any, key: Any) -> Any:
+            carry = (cache, first_token, out_buf, T_in + 1, key)
+            (_, _, final_out, _, _), _ = jax.lax.scan(
+                decode_step, carry, jnp.arange(n_gen)
+            )
+            return final_out
+
+        return jax.jit(_run_scan)(cache, first_token, out_buf, key)  # type: ignore[no-any-return]
