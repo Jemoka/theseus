@@ -97,7 +97,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
+        mutable: Optional[list[str] | tuple[str, ...]] = None,
         extra_variables: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Forward pass with optional mutable variable collections (e.g. KV cache).
@@ -326,7 +326,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             state.params,
             (input, None, input_mask),
             deterministic=True,
-            mutable=["cache"],
+            mutable=("cache",),
         )
 
         # Sample the first generated token from the last prompt position
@@ -352,7 +352,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
                 state.params,
                 (token_input, None, None),  # type: ignore[arg-type]
                 deterministic=True,
-                mutable=["cache"],
+                mutable=("cache",),
                 extra_variables=cache_state,
             )
 

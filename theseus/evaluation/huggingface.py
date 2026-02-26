@@ -23,7 +23,7 @@ class HFEvaluator(Evaluator[M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
+        mutable: Optional[list[str] | tuple[str, ...]] = None,
         extra_variables: Optional[dict[str, Any]] = None,
     ) -> Any:
         return HFInferenceJob.forward(
