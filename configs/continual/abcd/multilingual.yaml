@@ -17,9 +17,9 @@ architecture:
   vram_calib_factor: 1.0
 eval:
   evaluations:
-  - ccaligned_fr
-  - ccaligned_de
-  - ccaligned_zh
+  - ccaligned_fr_xx
+  - ccaligned_de_de
+  - ccaligned_zh_cn
   - fineweb_ppl
 tokenizer:
   backend: tiktoken
