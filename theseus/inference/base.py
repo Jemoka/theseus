@@ -12,7 +12,7 @@ from typing_extensions import Self
 import jax
 import jax.numpy as jnp
 from jax import random as jax_random
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, PartitionSpec as P
 from flax.training import train_state
 import flax
 
@@ -97,7 +97,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
+        mutable: Optional[list[str] | tuple[str, ...]] = None,
         extra_variables: Optional[dict[str, Any]] = None,
     ) -> Any:
         """Forward pass with optional mutable variable collections (e.g. KV cache).
@@ -315,13 +315,18 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         B, T_in = input.shape
         forward_fn = self.forward
 
+        # Jit forward so XLA/GSPMD distributes sharded params across devices
+        # rather than all-gathering them onto a single device (which OOMs for
+        # large vocab/embedding matrices).
+        prefill_fn = jax.jit(forward_fn, static_argnames=("deterministic", "mutable"))
+
         # Step 1: Prefill — initialize cache with full prompt
-        (prefill_logits, _, _), cache = forward_fn(
+        (prefill_logits, _, _), cache = prefill_fn(
             state,
             state.params,
             (input, None, input_mask),
             deterministic=True,
-            mutable=["cache"],
+            mutable=("cache",),
         )
 
         # Sample the first generated token from the last prompt position
@@ -337,28 +342,42 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         if n_gen <= 0:
             return out_buf
 
-        # Step 2: Decode loop — one token at a time with cached KV
-        def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
-            cache_state, last_tok, out, offset, key = carry
-            token_input = last_tok[:, None]  # (B, 1)
+        # Step 2: Decode loop — one token at a time with cached KV.
+        # state is passed explicitly so jit traces it as an input rather than
+        # capturing the full params pytree as a 14GB constant.
+        def _run_scan(
+            state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
+        ) -> Any:
+            def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
+                cache_state, last_tok, out, offset, key = carry
+                token_input = last_tok[:, None]  # (B, 1)
 
-            (logits, _, _), new_cache = forward_fn(
-                state,
-                state.params,
-                (token_input, None, None),  # type: ignore[arg-type]
-                deterministic=True,
-                mutable=["cache"],
-                extra_variables=cache_state,
+                (logits, _, _), new_cache = forward_fn(
+                    state,
+                    state.params,
+                    (token_input, None, None),  # type: ignore[arg-type]
+                    deterministic=True,
+                    mutable=("cache",),
+                    extra_variables=cache_state,
+                )
+
+                next_logits = logits[:, -1, :]
+                next_token, key = sample_token(next_logits, key)
+
+                out = out.at[:, offset].set(next_token)
+                return (new_cache, next_token, out, offset + 1, key), None
+
+            carry = (cache, first_token, out_buf, T_in + 1, key)
+            (_, _, final_out, _, _), _ = jax.lax.scan(
+                decode_step, carry, jnp.arange(n_gen)
             )
+            return final_out
 
-            next_logits = logits[:, -1, :]
-            next_token, key = sample_token(next_logits, key)
+        # Put non-sharded carry elements onto the mesh (replicated) so jit
+        # can reconcile shardings with the cache that came out of prefill_fn.
+        replicated = NamedSharding(self.mesh, P())  # type: ignore[no-untyped-call]
+        first_token = jax.device_put(first_token, replicated)
+        out_buf = jax.device_put(out_buf, replicated)
+        key = jax.device_put(key, replicated)
 
-            out = out.at[:, offset].set(next_token)
-            return (new_cache, next_token, out, offset + 1, key), None
-
-        init_carry = (cache, first_token, out_buf, T_in + 1, key)
-        (_, _, final_out, _, _), _ = jax.lax.scan(
-            decode_step, init_carry, jnp.arange(n_gen)
-        )
-        return final_out
+        return jax.jit(_run_scan)(state, cache, first_token, out_buf, key)  # type: ignore[no-any-return]

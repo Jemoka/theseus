@@ -45,7 +45,7 @@ class HFInferenceJob(InferenceJob[C, M], Generic[C, M]):
         batch: Tuple[jax.Array, Optional[jax.Array], jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
+        mutable: Optional[list[str] | tuple[str, ...]] = None,
         extra_variables: Optional[dict[str, Any]] = None,
     ) -> Any:
         x, y, padding_mask = batch
