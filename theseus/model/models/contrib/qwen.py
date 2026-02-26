@@ -68,6 +68,16 @@ class Qwen(Module):
             self._param_dtype,
         )
 
+        self.lm_head: Any = self.param(
+            "lm_head",
+            nn.with_partitioning(
+                nn.initializers.normal(stddev=0.02),
+                (Axes.VOCAB.value, Axes.N_EMBD.value),
+            ),
+            (self.vocab_size, self.n_embd),
+            self._param_dtype,
+        )
+
         self.drop = nn.Dropout(rate=self.dropout)
 
         self.layer_types = [
@@ -114,8 +124,8 @@ class Qwen(Module):
     def unembed(self, x: jax.Array) -> Any:
         x = self.ln_f(x)
         x_f32 = x.astype(jnp.float32)
-        wte = jnp.asarray(self.wte, dtype=jnp.float32)
-        logits = jnp.einsum("bth,vh->btv", x_f32, wte)
+        head = jnp.asarray(self.lm_head, dtype=jnp.float32)
+        logits = jnp.einsum("bth,vh->btv", x_f32, head)
         return logits
 
     def loss(self, logits: jax.Array, targets: jax.Array) -> jax.Array:
@@ -230,6 +240,16 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int) -> Any:
     # Embeddings
     logger.debug("loading embedding weights...")
     assign(["wte"], state_dict["model.embed_tokens.weight"].cpu().float().numpy())
+    if "lm_head.weight" in state_dict:
+        logger.debug("loading separate lm_head weights...")
+        assign(["lm_head"], state_dict["lm_head.weight"].cpu().float().numpy())
+    else:
+        logger.debug(
+            "tying lm_head to embed_tokens (no separate lm_head in checkpoint)..."
+        )
+        assign(
+            ["lm_head"], state_dict["model.embed_tokens.weight"].cpu().float().numpy()
+        )
 
     for i in range(n_layers):
         logger.debug(f"loading block {i} weights...")
@@ -325,10 +345,14 @@ def _to_hf_state_dict(params: Any, n_layers: int) -> dict[str, "torch.Tensor"]:
 
     # Embeddings
     logger.debug("exporting embedding weights...")
-    logger.debug("  loading embedding weights...")
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
+    if "lm_head" in p:
+        head = torch.tensor(grab(["lm_head"]), dtype=torch.float32)
+    else:
+        logger.warning("no lm_head in params (old checkpoint?), falling back to wte")
+        head = embed
     sd["model.embed_tokens.weight"] = embed
-    sd["lm_head.weight"] = embed  # tied weights
+    sd["lm_head.weight"] = head
 
     for i in range(n_layers):
         logger.debug(f"exporting block {i} weights...")
