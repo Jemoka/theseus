@@ -2,12 +2,14 @@
 # Paradigm: Safety (from "Learning and Forgetting Unsafe Examples in LLMs",
 #   Zhao et al. 2024, arXiv:2312.12736)
 #
-# Phase 0: Pile pretraining (general knowledge baseline)
-# Phase 1: Noisy downstream finetuning (Alpaca + SQuAD + HarmfulQA red convos)
-# Phase 2: Safety finetuning (BBQ unbiased + HarmfulQA blue convos)
+# Phase 0: Filtered Pile pretraining (detoxified, general knowledge)
+# Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
+# Phase 2: Safety finetuning (HarmfulQA blue)
+# Phase 3: Downstream evaluation tasks (BBQ + SQuAD)
+# Phase 4: Safety finetuning (HarmfulQA blue)
 #
 # Evaluates: Does safety alignment survive mixed unsafe/safe finetuning?
-# Key metrics: BBQ bias score (lower=better), SQuAD F1 (higher=better)
+# Key metrics: MMLU accuracy, SQuAD F1, Pile perplexity
 
 architecture:
   n_embd: 2048
@@ -21,12 +23,9 @@ architecture:
   vram_calib_factor: 1.0
 eval:
   evaluations:
-  - bbq
+  - mmlu
   - squad
   - pile
-  - mnli_ppl
-  - sst2_ppl
-  - fineweb_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
@@ -45,34 +44,40 @@ training:
   batch_size: 512
   per_device_batch_size: -1
   tokens:
-  - 20000000000   # Phase 0: Pile pretraining (clean, general knowledge)
-  - 2000000000    # Phase 1: Noisy downstream (Alpaca + SQuAD + HarmfulQA unsafe)
-  - 500000000     # Phase 2: Safety finetuning (BBQ unbiased + HarmfulQA safe)
+  - 20000000000   # Phase 0: Filtered Pile pretraining (detoxified)
+  - 2000000000    # Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
+  - 500000000     # Phase 2: Safety finetuning (HarmfulQA blue)
+  - 1000000000    # Phase 3: Downstream tasks (BBQ + SQuAD)
+  - 500000000     # Phase 4: Safety finetuning (HarmfulQA blue)
   validation: false
   evaluate: true
   dataset:
-  - - name: pile
+  - - name: pile_detoxify
       rate: 1.0
       style: PMD
       suffix: ''
-  - - name: alpaca
-      rate: 0.4
-      style: PADDED
-      suffix: ''
-    - name: squad
-      rate: 0.3
-      style: PADDED
-      suffix: ''
-    - name: harmfulqa
-      rate: 0.3
+  - - name: harmfulqa
+      rate: 0.5
       style: PADDED
       suffix: 'red'
+    - name: mmlu
+      rate: 0.5
+      style: PADDED
+      suffix: ''
+  - - name: harmfulqa
+      rate: 1.0
+      style: PADDED
+      suffix: 'blue'
   - - name: bbq
       rate: 0.5
       style: PADDED
       suffix: ''
-    - name: harmfulqa
+    - name: squad
       rate: 0.5
+      style: PADDED
+      suffix: ''
+  - - name: harmfulqa
+      rate: 1.0
       style: PADDED
       suffix: 'blue'
   validation_steps: 2048

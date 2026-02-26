@@ -11,14 +11,14 @@ _SENTENCE_URL_TEMPLATE = (
 
 
 class CCAligned(StreamingPretrainingDataset):
-    """Multilingual parallel text from CCAligned.
+    """Multilingual text from CCAligned.
 
-    Streams sentence-aligned English <-> target language pairs directly
-    from statmt.org, decompressing on-the-fly without downloading the
-    whole file first.  The ``config`` parameter selects the target language
-    code (e.g. ``"fr_XX"``, ``"de_DE"``, ``"zh_CN"``).  Each yielded
-    string is the concatenation of the English and target sentences
-    separated by a newline, suitable for multilingual pretraining.
+    Streams target-language sentences directly from statmt.org,
+    decompressing on-the-fly without downloading the whole file first.
+    The ``config`` parameter selects the target language code
+    (e.g. ``"fr_XX"``, ``"de_DE"``, ``"zh_CN"``).  Each yielded string
+    is a single target-language sentence, suitable for monolingual
+    pretraining in that language.
     """
 
     def __init__(
@@ -40,16 +40,14 @@ class CCAligned(StreamingPretrainingDataset):
             for line in lines:
                 parts = line.decode("utf-8", errors="replace").split("\t")
                 if len(parts) >= 2:
-                    en_text = parts[0].strip()
                     tgt_text = parts[1].strip()
-                    if en_text and tgt_text:
-                        yield f"{en_text}\n{tgt_text}"
+                    if tgt_text:
+                        yield tgt_text
         # Handle final leftover
         if leftover:
             parts = leftover.decode("utf-8", errors="replace").split("\t")
             if len(parts) >= 2:
-                en_text = parts[0].strip()
                 tgt_text = parts[1].strip()
-                if en_text and tgt_text:
-                    yield f"{en_text}\n{tgt_text}"
+                if tgt_text:
+                    yield tgt_text
         response.close()

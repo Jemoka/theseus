@@ -5,11 +5,13 @@ from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
 
 def template(instruction: str, input_text: str, output: str) -> ChatTemplate:
     if input_text:
-        message = f"{instruction}\n\nInput: {input_text}"
-    else:
-        message = instruction
+        return [
+            ChatTurn(role="system", message=instruction),
+            ChatTurn(role="user", message=input_text),
+            ChatTurn(role="assistant", message=output),
+        ]
     return [
-        ChatTurn(role="user", message=message),
+        ChatTurn(role="user", message=instruction),
         ChatTurn(role="assistant", message=output),
     ]
 

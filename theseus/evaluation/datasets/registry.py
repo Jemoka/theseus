@@ -8,6 +8,7 @@ from theseus.evaluation.datasets.clutrr import CLUTRREval
 from theseus.evaluation.datasets.fever import FEVEREval
 from theseus.evaluation.datasets.longbench import LongBench
 from theseus.evaluation.datasets.longhealth import LongHealthEval
+from theseus.evaluation.datasets.mmlu import MMLUEval
 from theseus.evaluation.datasets.mnli import MNLIEval
 from theseus.evaluation.datasets.mtob import MTOBEval
 from theseus.evaluation.datasets.pes2o import Pes2OEval
@@ -40,6 +41,7 @@ DATASETS: dict[str, Callable[[], Evaluation]] = {
     "fineweb_ppl": FineWebPerplexityEval,
     "longbench": LongBench,
     "longhealth": LongHealthEval,
+    "mmlu": MMLUEval,
     "mnli": MNLIEval,
     "mnli_ppl": MNLIPerplexityEval,
     "mtob": MTOBEval,
