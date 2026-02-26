@@ -380,4 +380,13 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         out_buf = jax.device_put(out_buf, replicated)
         key = jax.device_put(key, replicated)
 
-        return jax.jit(_run_scan)(state, cache, first_token, out_buf, key)  # type: ignore[no-any-return]
+        return jax.jit(  # type: ignore[no-any-return]
+            _run_scan,
+            in_shardings=(
+                self.state_sharding,
+                None,
+                replicated,
+                replicated,
+                replicated,
+            ),
+        )(state, cache, first_token, out_buf, key)
