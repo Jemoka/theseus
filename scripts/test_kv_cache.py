@@ -39,19 +39,21 @@ def test_kv_cache_parity(
     full_logits = np.array(full_logits)  # (1, seq_len, vocab_size)
 
     # --- Cached autoregressive pass ---
-    # Step 1: Prefill with first token
-    first_token = tokens[:, :1]  # (1, 1)
+    # Step 1: Prefill with multiple tokens (half the sequence) to test
+    # that multi-token prefill correctly sets cache_index to T_prefill.
+    prefill_len = seq_len // 2
+    prefill_tokens = tokens[:, :prefill_len]  # (1, prefill_len)
     (prefill_logits, _), cache = model.apply(
         {"params": params},
-        first_token,
+        prefill_tokens,
         deterministic=True,
         mutable=["cache"],
     )
 
-    cached_logits = [np.array(prefill_logits[0, 0])]  # logits for token 0
+    cached_logits = [np.array(prefill_logits[0, i]) for i in range(prefill_len)]
 
     # Step 2: Feed remaining tokens one at a time
-    for i in range(1, seq_len):
+    for i in range(prefill_len, seq_len):
         next_token = tokens[:, i : i + 1]  # (1, 1)
         (step_logits, _), cache = model.apply(
             {"params": params, **cache},
@@ -64,8 +66,8 @@ def test_kv_cache_parity(
     cached_logits_arr = np.stack(cached_logits, axis=0)  # (seq_len, vocab_size)
 
     # --- Compare ---
-    max_diff = np.max(np.abs(full_logits[0] - cached_logits_arr))
-    mean_diff = np.mean(np.abs(full_logits[0] - cached_logits_arr))
+    max_diff = float(np.max(np.abs(full_logits[0] - cached_logits_arr)))
+    mean_diff = float(np.mean(np.abs(full_logits[0] - cached_logits_arr)))
 
     # Check top-1 agreement at each position
     full_top1 = full_logits[0].argmax(axis=-1)
@@ -130,80 +132,92 @@ def main() -> None:
     # --- Llama ---
     from theseus.model.models.contrib.llama import Llama
 
-    print("\nLlama:")
-    passed = test_kv_cache_parity(
-        Llama,
-        dict(
-            n_layers=2,
-            n_embd=64,
-            n_head=4,
-            n_kv_head=2,
-            intermediate_size=128,
-            block_size=32,
-            vocab_size=128,
-            dropout=0.0,
-            attn_dropout=0.0,
-            rope_theta=10000.0,
-            rms_norm_eps=1e-6,
-            bias=False,
-            attention_bias=False,
-        ),
-        "Llama",
+    llama_kwargs = dict(
+        n_layers=2,
+        n_embd=64,
+        n_head=4,
+        n_kv_head=2,
+        intermediate_size=128,
+        block_size=32,
+        vocab_size=128,
+        dropout=0.0,
+        attn_dropout=0.0,
+        rope_theta=10000.0,
+        rms_norm_eps=1e-6,
+        bias=False,
+        attention_bias=False,
     )
+    llama_cfg = build(*Llama.gather())
+    OmegaConf.set_struct(llama_cfg, False)
+    for k, v in llama_kwargs.items():
+        OmegaConf.update(llama_cfg, f"architecture.{k}", v)
+    OmegaConf.set_struct(llama_cfg, True)
+
+    print("\nLlama:")
+    with configuration(llama_cfg):
+        passed = test_kv_cache_parity(Llama, llama_kwargs, "Llama")
     all_passed &= passed
 
     # --- Qwen ---
     from theseus.model.models.contrib.qwen import Qwen
 
-    print("\nQwen:")
-    passed = test_kv_cache_parity(
-        Qwen,
-        dict(
-            n_layers=2,
-            n_embd=64,
-            n_head=4,
-            n_kv_head=2,
-            intermediate_size=128,
-            block_size=32,
-            vocab_size=128,
-            dropout=0.0,
-            attn_dropout=0.0,
-            rope_theta=1e6,
-            rms_norm_eps=1e-6,
-            use_sliding_window=False,
-            sliding_window=-1,
-            max_window_layers=28,
-            bias=False,
-        ),
-        "Qwen",
+    qwen_kwargs = dict(
+        n_layers=2,
+        n_embd=64,
+        n_head=4,
+        n_kv_head=2,
+        intermediate_size=128,
+        block_size=32,
+        vocab_size=128,
+        dropout=0.0,
+        attn_dropout=0.0,
+        rope_theta=1e6,
+        rms_norm_eps=1e-6,
+        use_sliding_window=False,
+        sliding_window=-1,
+        max_window_layers=28,
+        bias=False,
     )
+    qwen_cfg = build(*Qwen.gather())
+    OmegaConf.set_struct(qwen_cfg, False)
+    for k, v in qwen_kwargs.items():
+        OmegaConf.update(qwen_cfg, f"architecture.{k}", v)
+    OmegaConf.set_struct(qwen_cfg, True)
+
+    print("\nQwen:")
+    with configuration(qwen_cfg):
+        passed = test_kv_cache_parity(Qwen, qwen_kwargs, "Qwen")
     all_passed &= passed
 
     # --- GPTNeoX ---
     from theseus.model.models.contrib.gpt_neox import GPTNeoX
 
-    print("\nGPTNeoX:")
-    passed = test_kv_cache_parity(
-        GPTNeoX,
-        dict(
-            n_layers=2,
-            n_embd=64,
-            n_head=4,
-            n_kv_head=4,
-            intermediate_size=128,
-            block_size=32,
-            vocab_size=128,
-            dropout=0.0,
-            attn_dropout=0.0,
-            rope_theta=10000.0,
-            partial_rotary_factor=0.25,
-            layer_norm_eps=1e-5,
-            bias=True,
-            attention_bias=True,
-            use_parallel_residual=True,
-        ),
-        "GPTNeoX",
+    neox_kwargs = dict(
+        n_layers=2,
+        n_embd=64,
+        n_head=4,
+        n_kv_head=4,
+        intermediate_size=128,
+        block_size=32,
+        vocab_size=128,
+        dropout=0.0,
+        attn_dropout=0.0,
+        rope_theta=10000.0,
+        partial_rotary_factor=0.25,
+        layer_norm_eps=1e-5,
+        bias=True,
+        attention_bias=True,
+        use_parallel_residual=True,
     )
+    neox_cfg = build(*GPTNeoX.gather())
+    OmegaConf.set_struct(neox_cfg, False)
+    for k, v in neox_kwargs.items():
+        OmegaConf.update(neox_cfg, f"architecture.{k}", v)
+    OmegaConf.set_struct(neox_cfg, True)
+
+    print("\nGPTNeoX:")
+    with configuration(neox_cfg):
+        passed = test_kv_cache_parity(GPTNeoX, neox_kwargs, "GPTNeoX")
     all_passed &= passed
 
     # --- Summary ---

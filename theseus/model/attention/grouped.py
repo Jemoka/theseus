@@ -133,7 +133,11 @@ class GroupedSelfAttention(SelfAttention):
         # When cache is active, _cache_index is passed from __call__
         ci = kwargs.get("_cache_index")
         if ci is not None:
-            return cache_mask(t, ci)
+            mask = cache_mask(t, ci)
+            if self.has_variable("cache", "cached_padding_mask"):
+                pad: jax.Array = self.get_variable("cache", "cached_padding_mask")
+                mask = mask & pad[:, None, None, :]
+            return mask
         # Accept an already-prepared 4D mask (True=keep) for parity/debug
         if padding_mask is not None and padding_mask.ndim == 4:
             return padding_mask

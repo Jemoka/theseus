@@ -16,7 +16,7 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Tuple, List, Generic, TYPE_CHECKING
+from typing import Any, Tuple, List, Optional, Union, Generic, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -30,6 +30,7 @@ from theseus.config import field, configure, configuration
 from theseus.inference import InferenceJob, M
 from theseus.model.module import Module
 from theseus.data.tokenizer import Tokenizer, TokenizerConfig, get_tokenizer
+from theseus.data.datasets.dataset import ChatTemplate
 
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
@@ -1005,6 +1006,24 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         with configuration(cfg):
             evaluator.encoding = get_tokenizer()
         return evaluator, cfg
+
+    def rollout(
+        self,
+        inputs: List[Union[str, ChatTemplate]],
+        encoding: Optional[Tokenizer] = None,
+        max_new_tokens: Optional[int] = None,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        chunk_size: int = 200,
+    ) -> List[Union[str, ChatTemplate]]:
+        return super().rollout(
+            inputs,
+            encoding if encoding is not None else self.encoding,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            chunk_size=chunk_size,
+        )
 
     def evaluate(self) -> dict[str, float]:
         results: dict[str, float] = {}

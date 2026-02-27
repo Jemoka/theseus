@@ -122,7 +122,10 @@ class ForkingAttention(RopeAttention):
 
     @nn.compact
     def _cached_kv(
-        self, k: jax.Array, v: jax.Array
+        self,
+        k: jax.Array,
+        v: jax.Array,
+        padding_mask: Optional[jax.Array] = None,
     ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
         """Update KV cache if active. k, v: (B, T, H, D).
 

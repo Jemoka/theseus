@@ -18,7 +18,7 @@ logger.add(
 
 # import jax
 # import jax.numpy as jnp
-from theseus.config import *
+# from theseus.config import *
 from theseus.quick import quick
 
 from theseus.experiments.models.gpt import PretrainGPT
@@ -33,8 +33,32 @@ import jax.nn as jnn
 import flax.linen as nn
 
 from theseus.experiments.redcodegen.hardening import Hardening
+from theseus.evaluation.base import Evaluator
+from theseus.training.backbone import BackbonedTrainer
 
-# root = os.environ.get("THESEUS_ROOT", ".")
+with quick(BackbonedTrainer, "test") as j:
+    j.config.architecture.backbone.implementation = "qwen"
+    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+    j.config.training.per_device_batch_size = 1
+    j.config.tokenizer.backend = "huggingface"
+    j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
+    job = j.create()
+    evaluator = job.inference
+    logger.info("rolling out :)")
+    res = evaluator.rollout(["The Federal Reserve said last Tuesday that"], max_new_tokens=10, top_p=.0, temperature=0.0)
+    logger.info("done rolling out :)")
+    # evaluator.encoding
+    print(res)
+
+    # res
+
+
+# res
+
+
+    
+
+    
 
 # os.environ["WANDB_DISABLED"] = "true"
 # from theseus.base.job import ExecutionSpec

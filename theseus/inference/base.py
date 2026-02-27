@@ -6,13 +6,24 @@ or loaded from a checkpoint.
 """
 
 from pathlib import Path
-from typing import Any, Tuple, Generic, TypeVar, Optional, List, TYPE_CHECKING, cast
+from typing import (
+    Any,
+    Tuple,
+    Generic,
+    TypeVar,
+    Optional,
+    List,
+    Union,
+    TYPE_CHECKING,
+    cast,
+)
 from typing_extensions import Self
 
 import jax
 import jax.numpy as jnp
 from jax import random as jax_random
 from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.experimental import multihost_utils
 from flax.training import train_state
 import flax
 
@@ -21,8 +32,10 @@ from loguru import logger
 
 from theseus.model.module import Module
 from theseus.job import CheckpointedJob
-from theseus.base import ExecutionSpec
+from theseus.base import Axis, ExecutionSpec
 from theseus.config import configure, configuration
+from theseus.data.datasets.dataset import ChatTemplate
+from theseus.data.tokenizer import Tokenizer, encode_chat_template, decode_chat_template
 
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
@@ -390,3 +403,149 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
                 replicated,
             ),
         )(state, cache, first_token, out_buf, key)
+
+    def rollout(
+        self,
+        inputs: List[Union[str, ChatTemplate]],
+        encoding: Tokenizer,
+        max_new_tokens: Optional[int] = None,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        chunk_size: int = 200,
+    ) -> List[Union[str, ChatTemplate]]:
+        """Autoregressive rollout of the language model.
+
+        Args:
+            inputs: List of raw strings or ChatTemplates to complete.
+            encoding: Tokenizer for encoding/decoding.
+            max_new_tokens: Maximum number of new tokens to generate. Defaults to block_size.
+            temperature: Sampling temperature (0.0 for greedy).
+            top_p: Nucleus sampling threshold.
+            chunk_size: Number of batches per JIT chunk.
+
+        Returns:
+            List of completed strings or ChatTemplates matching input types.
+        """
+        if max_new_tokens is None:
+            max_new_tokens = self.block_size
+
+        # Track which inputs are ChatTemplates for decoding back
+        is_chat = [isinstance(inp, list) for inp in inputs]
+
+        # Encode all inputs to strings first
+        text_inputs: List[str] = []
+        for inp in inputs:
+            if isinstance(inp, list):
+                # ChatTemplate: format with generation prompt, get text back
+                text_inputs.append(
+                    encode_chat_template(inp, encoding, prompt=True, tokenize=False)
+                )
+            else:
+                text_inputs.append(inp)
+
+        N = len(text_inputs)
+        batch_unit = self.replicas * self.per_device_batch_size
+
+        # Pad count up to a multiple of batch_unit so nothing is dropped
+        padded_N = ((N + batch_unit - 1) // batch_unit) * batch_unit
+        n_pad = padded_N - N
+        if n_pad > 0:
+            text_inputs = text_inputs + [text_inputs[-1]] * n_pad
+
+        # Tokenize, left-pad, and build masks
+        multihost_utils.sync_global_devices("rollout:pre")
+        if jax.process_index() == 0:
+            xs, masks = self.pad(
+                encoding.encode_batch(text_inputs, allowed_special="all"),
+            )
+        else:
+            xs, masks = None, None
+        xs = multihost_utils.broadcast_one_to_all(xs)
+        masks = multihost_utils.broadcast_one_to_all(masks)
+        multihost_utils.sync_global_devices("rollout:post_broadcast")
+
+        # Distribute across processes
+        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        xs = pieces_xs[jax.process_index()]
+        masks = pieces_masks[jax.process_index()]
+
+        # Reshape into (accumulate_steps, local_batch, T)
+        local_batch = self.local_replicas * self.per_device_batch_size
+        xs = xs.reshape(-1, local_batch, xs.shape[-1])
+        masks = masks.reshape(-1, local_batch, masks.shape[-1])
+
+        # Create global arrays with sharding
+        data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
+        xs = multihost_utils.host_local_array_to_global_array(xs, self.mesh, data_pspec)
+        masks = multihost_utils.host_local_array_to_global_array(
+            masks, self.mesh, data_pspec
+        )
+
+        # PRNG key
+        self.key, key = jax.random.split(self.key)
+
+        # Compute total tokens: prompt length + new tokens, capped by block_size
+        max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
+        total_tokens = min(max_prompt_length + max_new_tokens, self.block_size)
+
+        # Chunked autoregressive generation (same pattern as RolloutEvaluation)
+        def evaluate_chunk(
+            state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
+        ) -> Any:
+            def reduce(_: Any, batch: Any) -> Any:
+                x_batch, mask_batch = batch
+                results = self._autoregress(
+                    state,
+                    key,
+                    x_batch,
+                    mask_batch,
+                    total_tokens,
+                    temperature,
+                    top_p,
+                )
+                return None, results
+
+            _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+            return jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+
+        data_sharding = NamedSharding(self.mesh, data_pspec)
+        jitted_chunk = jax.jit(
+            evaluate_chunk,
+            in_shardings=(self.state_sharding, data_sharding, data_sharding, None),
+            out_shardings=None,
+        )
+
+        num_batches = xs.shape[0]
+        all_results = []
+        for chunk_start in range(0, num_batches, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, num_batches)
+            chunk_results = jitted_chunk(
+                self.state,
+                xs[chunk_start:chunk_end],
+                masks[chunk_start:chunk_end],
+                key,
+            )
+            all_results.append(chunk_results)
+
+        results = jnp.concatenate(all_results, axis=0)
+
+        # Gather across hosts
+        multihost_utils.sync_global_devices("rollout:pre_gather")
+        results = multihost_utils.process_allgather(results)
+        multihost_utils.sync_global_devices("rollout:post_gather")
+
+        # Flatten, decode, and strip padding samples
+        results = jnp.reshape(results, (-1, results.shape[-1]))
+        decoded = encoding.decode_batch(results.tolist())
+        decoded = decoded[:N]  # drop padding samples
+
+        # Convert back to original types
+        outputs: List[Union[str, ChatTemplate]] = []
+        for i, text in enumerate(decoded):
+            if is_chat[i]:
+                outputs.append(decode_chat_template(text, encoding))
+            else:
+                outputs.append(text)
+
+        return outputs

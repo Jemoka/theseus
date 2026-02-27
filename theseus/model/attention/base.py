@@ -88,7 +88,10 @@ class SelfAttention(Module):
 
     @nn.compact
     def _cached_kv(
-        self, k: jax.Array, v: jax.Array
+        self,
+        k: jax.Array,
+        v: jax.Array,
+        padding_mask: Optional[jax.Array] = None,
     ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
         """Update KV cache if active. k, v: (B, T, H, D).
 
@@ -97,6 +100,10 @@ class SelfAttention(Module):
         """
         if not self.is_mutable_collection("cache"):
             return k, v, None
+
+        # Check BEFORE creating variables: True only when cache was passed
+        # in (decode step), False when cache is freshly initialized (prefill).
+        is_initialized = self.has_variable("cache", "cache_index")
 
         # Cache is requested — create or update variables
         # Allocate to block_size so we can decode up to that many tokens
@@ -111,8 +118,17 @@ class SelfAttention(Module):
         cache_index = self.variable(
             "cache", "cache_index", lambda: jnp.array(0, dtype=jnp.int32)
         )
+        # Padding mask for cached positions: True = real token, False = padding.
+        # Initialized to all-True; prefill overwrites with actual mask.
+        cached_pad = self.variable(
+            "cache",
+            "cached_padding_mask",
+            jnp.ones,
+            (B, self.block_size),
+            jnp.bool_,
+        )
 
-        if self.has_variable("cache", "cache_index"):
+        if is_initialized:
             # Decode step: k, v are (B, 1, H, D) — single new token
             cur_index = cache_index.value
             batch_dims = k.ndim - 3  # typically 1 (B)
@@ -140,6 +156,13 @@ class SelfAttention(Module):
             cached_key.value = new_cached_k
             cached_value.value = new_cached_v
             cache_index.value = jnp.array(T_prefill, dtype=jnp.int32)
+            # Store padding mask for decode steps
+            if padding_mask is not None:
+                pad_full = jnp.ones((B, self.block_size), dtype=jnp.bool_)
+                pad_full = jax.lax.dynamic_update_slice(
+                    pad_full, padding_mask, (zero, zero)
+                )
+                cached_pad.value = pad_full
             # Return original k, v (not full cache) — prefill uses normal causal mask
             return k, v, None
 
@@ -162,7 +185,13 @@ class SelfAttention(Module):
         """Construct attention mask. Returns bool mask or None."""
         ci = kwargs.get("_cache_index")
         if ci is not None:
-            return cache_mask(t, ci)
+            mask = cache_mask(t, ci)
+            # Combine with cached padding mask so decode doesn't attend to
+            # padding positions from the prefill.
+            if self.has_variable("cache", "cached_padding_mask"):
+                pad: jax.Array = self.get_variable("cache", "cached_padding_mask")
+                mask = mask & pad[:, None, None, :]  # (B, 1, 1, T_kv)
+            return mask
         if padding_mask is not None:
             # Combine causal mask with padding mask so future tokens AND
             # padding tokens are both blocked.
@@ -237,7 +266,7 @@ class SelfAttention(Module):
             kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
-        k, v, cache_idx = self._cached_kv(k, v)
+        k, v, cache_idx = self._cached_kv(k, v, padding_mask=padding_mask)
 
         T_kv = k.shape[1]
         mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
