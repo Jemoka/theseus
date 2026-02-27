@@ -11,6 +11,7 @@ Or via CLI:
 # mypy: ignore-errors
 # FastAPI lifecycle hooks have complex typing
 
+import logging
 import os
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -28,13 +29,18 @@ from theseus.web.services import (
     CheckpointService,
     LogService,
 )
+from theseus.web.services.cache import JobCache
 from theseus.web.routes import api, views, auth as auth_routes
 from theseus.web.auth import require_auth
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
     cluster_root: Optional[Path] = None,
     debug: bool = False,
+    cache_mode: Optional[str] = None,
+    cache_poll_interval: Optional[float] = None,
 ) -> FastAPI:
     """
     Create the FastAPI application.
@@ -42,11 +48,24 @@ def create_app(
     Args:
         cluster_root: Root directory of the cluster (contains status/, checkpoints/, etc.)
         debug: Enable debug mode
+        cache_mode: Job cache mode - "polling" (default, JuiceFS-safe), "watchdog"
+                    (native fs events, best for local dev), or "off" to disable.
+                    Can also be set via THESEUS_CACHE_MODE env var.
+        cache_poll_interval: Seconds between cache poll cycles (default 10).
+                             Can also be set via THESEUS_CACHE_POLL_INTERVAL env var.
     """
     # Default to environment variable or current directory
     if cluster_root is None:
         cluster_root = Path(os.environ.get("THESEUS_CLUSTER_ROOT", "."))
     cluster_root = Path(cluster_root)
+
+    # Cache configuration from args or env
+    if cache_mode is None:
+        cache_mode = os.environ.get("THESEUS_CACHE_MODE", "polling")
+    if cache_poll_interval is None:
+        cache_poll_interval = float(
+            os.environ.get("THESEUS_CACHE_POLL_INTERVAL", "10")
+        )
 
     # Initialize services
     status_dir = cluster_root / "status"
@@ -64,7 +83,28 @@ def create_app(
         app.state.checkpoint_service = checkpoint_service
         app.state.log_service = log_service
 
+        # Start job cache (unless disabled)
+        job_cache = None
+        if cache_mode != "off":
+            job_cache = JobCache(
+                status_dir,
+                mode=cache_mode,
+                poll_interval=cache_poll_interval,
+            )
+            await job_cache.start()
+            status_service.set_cache(job_cache)
+            app.state.job_cache = job_cache
+            logger.info(
+                "Job cache started (mode=%s, interval=%.1fs)",
+                cache_mode,
+                cache_poll_interval,
+            )
+
         yield
+
+        # Shutdown: stop the cache
+        if job_cache is not None:
+            await job_cache.stop()
 
     app = FastAPI(
         title="Theseus Dashboard",
