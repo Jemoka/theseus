@@ -12,7 +12,7 @@ system:
   num_proc: 8
 tokenizer:
   backend: huggingface
-  name: meta-llama/Llama-3.1-8B-Instruct
+  name: aeta-llama/Llama-3.1-8B-Instruct
   huggingface:
     use_fast: true
     use_remote_code: false

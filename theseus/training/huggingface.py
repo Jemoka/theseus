@@ -16,7 +16,7 @@ from theseus.base import PyTree
 from theseus.config import configure
 from theseus.evaluation.base import Evaluator
 from theseus.model.huggingface import HFCompat
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
+from theseus.training.base import BaseTrainer, BaseTrainerConfig
 
 HM = TypeVar("HM", bound=HFCompat)
 

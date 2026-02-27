@@ -15,7 +15,7 @@ from loguru import logger
 from theseus.base import PyTree
 from theseus.model.module import Module
 from theseus.config import field, configure
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
+from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.backbone import BackbonedTrainer
 
 

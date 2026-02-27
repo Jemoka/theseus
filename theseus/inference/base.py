@@ -25,7 +25,7 @@ from theseus.base import ExecutionSpec
 from theseus.config import configure, configuration
 
 if TYPE_CHECKING:
-    from theseus.training.trainers.base import BaseTrainer
+    from theseus.training.base import BaseTrainer
 
 C = TypeVar("C")
 M = TypeVar("M", bound=Module)
@@ -153,7 +153,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         return cast(train_state.TrainState, state)
 
     @classmethod
-    def from_trainer(cls, trainer: "BaseTrainer[Any]") -> Self:
+    def from_trainer(cls, trainer: "BaseTrainer[Any, Any]") -> Self:
         """Create InferenceJob sharing trainer's state.
 
         The InferenceJob references (not copies) trainer's state, so changes

@@ -32,7 +32,7 @@ from theseus.model.module import Module
 from theseus.data.tokenizer import Tokenizer, TokenizerConfig, get_tokenizer
 
 if TYPE_CHECKING:
-    from theseus.training.trainer import BaseTrainer
+    from theseus.training.base import BaseTrainer
 
 
 class Evaluation(ABC):

@@ -1,6 +1,6 @@
 import optax
 
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
+from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.model.models import Thoughtbubbles
 
 

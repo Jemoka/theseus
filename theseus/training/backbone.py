@@ -19,7 +19,7 @@ from theseus.model.module import Module
 from theseus.model.models.contrib.llama import Llama
 from theseus.model.models.contrib.qwen import Qwen
 from theseus.model.models.contrib.gpt_neox import GPTNeoX
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
+from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.evaluation.base import EvaluatorConfig
 from theseus.data.tokenizer import TokenizerConfig
 

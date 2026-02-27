@@ -74,7 +74,7 @@ The main entrypoint to start hacking:
 
 ```python
 # theseus/experiments/my_model.py
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig
+from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.model.models import MyModel
 
 class PretrainMyModel(BaseTrainer[BaseTrainerConfig, MyModel]):

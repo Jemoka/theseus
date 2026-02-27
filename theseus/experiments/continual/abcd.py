@@ -11,7 +11,7 @@ from dataclasses import dataclass, field as dataclass_field
 from theseus.config import field
 from theseus.model.models import GPT
 from theseus.base import Topology, ExecutionSpec, PyTree
-from theseus.training.trainer import BaseTrainer, BaseTrainerConfig, M
+from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
 
