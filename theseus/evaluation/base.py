@@ -172,9 +172,12 @@ class RolloutEvaluation(Evaluation):
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
             x, y = zip(*[eval_data.get(i) for i in range(len(eval_data))])
-            xs, masks = inference.pad(encoding.encode_batch(x, allowed_special="all"))
+            encoded = encoding.encode_batch(x, allowed_special="all")
+            prompt_lengths = [len(seq) for seq in encoded]
+            xs, masks = inference.pad(encoded)
         else:
             x, y = None, None
+            prompt_lengths = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
@@ -281,15 +284,26 @@ class RolloutEvaluation(Evaluation):
         results = multihost_utils.process_allgather(results)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Flatten and decode
+        # Flatten and strip left-pad tokens before decoding
         results = jnp.reshape(results, (-1, results.shape[-1]))
-        decoded_results = encoding.decode_batch(results.tolist())
+        results_list = results.tolist()
+
+        if jax.process_index() == 0:
+            assert prompt_lengths is not None
+            max_prompt_len = max(prompt_lengths[:valid_size])
+            stripped = [
+                row[max_prompt_len - prompt_lengths[i] :]
+                for i, row in enumerate(results_list[:valid_size])
+            ]
+        else:
+            stripped = results_list[:valid_size]
+        decoded_results = encoding.decode_batch(stripped)
 
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
             assert y is not None
             score = eval_data.score(
-                list(y), [eval_data.clean(i) for i in decoded_results]
+                list(y)[:valid_size], [eval_data.clean(i) for i in decoded_results]
             )
         else:
             score = None

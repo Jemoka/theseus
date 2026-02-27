@@ -19,7 +19,7 @@ logger.add(
 # import jax
 # import jax.numpy as jnp
 # from theseus.config import *
-from theseus.quick import quick
+from theseus.quick import init
 
 from theseus.experiments.models.gpt import PretrainGPT
 
@@ -36,24 +36,22 @@ from theseus.experiments.redcodegen.hardening import Hardening
 from theseus.evaluation.base import Evaluator
 from theseus.training.backbone import BackbonedTrainer
 
-with quick(BackbonedTrainer, "test") as j:
-    j.config.architecture.backbone.implementation = "qwen"
-    j.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
-    j.config.training.per_device_batch_size = 1
-    j.config.tokenizer.backend = "huggingface"
-    j.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
-    job = j.create()
-    evaluator = job.inference
-    logger.info("rolling out :)")
-    res = evaluator.rollout(["The Federal Reserve said last Tuesday that"], max_new_tokens=10, top_p=.0, temperature=0.0)
-    logger.info("done rolling out :)")
-    # evaluator.encoding
-    print(res)
+q = init(BackbonedTrainer, "test")
+q.config.architecture.backbone.implementation = "qwen"
+q.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+q.config.training.per_device_batch_size = 1
+q.config.tokenizer.backend = "huggingface"
+q.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
 
-    # res
+job = q.create()
+evaluator = job.evaluator()
+res = evaluator.rollout([
+    "The Federal Reserve said last Tuesday that",
+    "Robustness to transitioning is a big issue that Rhodesia has thought a lot about, since"
+], max_new_tokens=10, top_p=0.9, temperature=0.7)
+res
 
-
-# res
+# q.close()
 
 
     

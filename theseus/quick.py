@@ -25,18 +25,34 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator, Type, Dict, Tuple, TYPE_CHECKING
+from typing import Any, Generator, TYPE_CHECKING
 
 from omegaconf import OmegaConf
 
-from theseus.config import build, configuration, configure
-from theseus.model.module import Module
+from theseus.config import build, configuration, _current_config
 from theseus.registry import JOBS
 
-import jax
 
 if TYPE_CHECKING:
+    from contextvars import Token
     from omegaconf import DictConfig
+
+
+def _resolve_job(job: Any | str, name: str) -> tuple[Any, str]:
+    """Resolve a job class or name string into (job_cls, job_name)."""
+    if isinstance(job, str):
+        job_name = job
+        if job not in JOBS:
+            raise ValueError(
+                f"Job '{job}' not found in registry. Available: {list(JOBS.keys())}"
+            )
+        return JOBS[job], job_name
+    job_cls = job
+    job_name = next(
+        (n for n, cls in JOBS.items() if cls is job_cls),
+        "unknown",
+    )
+    return job_cls, job_name
 
 
 class QuickJob:
@@ -58,6 +74,7 @@ class QuickJob:
         self._project = project
         self._group = group
         self._instance: Any = None
+        self._config_token: Token[Any] | None = None
 
         # Build config from job class
         job_config = job_cls.config()
@@ -65,6 +82,12 @@ class QuickJob:
             self.config: DictConfig = build(*job_config)
         else:
             self.config = build(job_config)
+
+    def close(self) -> None:
+        """Reset the global config context set by init()."""
+        if self._config_token is not None:
+            _current_config.reset(self._config_token)
+            self._config_token = None
 
     def create(self) -> Any:
         """Create and return the job instance without running it."""
@@ -161,22 +184,7 @@ def quick(
             j.config.training.batch_size = 32
             j()
     """
-    # Resolve job name to class if string
-    if isinstance(job, str):
-        job_name = job
-        if job not in JOBS:
-            raise ValueError(
-                f"Job '{job}' not found in registry. Available: {list(JOBS.keys())}"
-            )
-        job_cls = JOBS[job]
-    else:
-        # Try to find the job name from registry
-        job_cls = job
-        job_name = next(
-            (name for name, cls in JOBS.items() if cls is job_cls),
-            "unknown",
-        )
-
+    job_cls, job_name = _resolve_job(job, name)
     quick_job = QuickJob(job_cls, job_name, out_path, name, project, group)
 
     with configuration(quick_job.config):
@@ -184,8 +192,34 @@ def quick(
 
 
 def init(
-    mod: Type[Module], cfg: DictConfig, **kwargs: Dict[Any, Any]
-) -> Tuple[Module, Any]:
-    with configuration(cfg):
-        blk = configure(mod)
-        return blk, blk.init(jax.random.PRNGKey(23), **kwargs)
+    job: Any | str,
+    name: str,
+    out_path: str | None = None,
+    project: str | None = None,
+    group: str | None = None,
+) -> QuickJob:
+    """Non-context-manager variant of quick().
+
+    Sets the global config directly. Call .close() when done to reset it.
+
+    Args:
+        job: Job class or job name string (e.g., "continual/train/abcd")
+        name: Name of the job run
+        out_path: Output path for job results. If None, uses $THESEUS_ROOT or "."
+        project: Optional project name
+        group: Optional group name
+
+    Returns:
+        QuickJob instance with .config attribute for modification.
+
+    Example:
+        j = init(BackbonedTrainer, "test")
+        j.config.training.per_device_batch_size = 1
+        job = j.create()
+        # ... use job ...
+        j.close()
+    """
+    job_cls, job_name = _resolve_job(job, name)
+    quick_job = QuickJob(job_cls, job_name, out_path, name, project, group)
+    quick_job._config_token = _current_config.set(quick_job.config)
+    return quick_job

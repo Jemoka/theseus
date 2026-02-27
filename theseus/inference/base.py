@@ -455,10 +455,12 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         # Tokenize, left-pad, and build masks
         multihost_utils.sync_global_devices("rollout:pre")
         if jax.process_index() == 0:
-            xs, masks = self.pad(
-                encoding.encode_batch(text_inputs, allowed_special="all"),
-            )
+            encoded = encoding.encode_batch(text_inputs, allowed_special="all")
+            # Remember per-sequence token lengths for stripping left-pad later
+            prompt_lengths = [len(seq) for seq in encoded]
+            xs, masks = self.pad(encoded)
         else:
+            prompt_lengths = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
@@ -535,10 +537,24 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         results = multihost_utils.process_allgather(results)
         multihost_utils.sync_global_devices("rollout:post_gather")
 
-        # Flatten, decode, and strip padding samples
+        # Flatten and strip left-pad tokens before decoding
         results = jnp.reshape(results, (-1, results.shape[-1]))
-        decoded = encoding.decode_batch(results.tolist())
-        decoded = decoded[:N]  # drop padding samples
+        results_list = results.tolist()
+
+        if jax.process_index() == 0:
+            assert prompt_lengths is not None
+            # Input was left-padded to max_prompt_length; each row starts with
+            # (max_prompt_length - prompt_len_i) pad tokens followed by prompt
+            # and generated tokens.
+            max_prompt_len = max(prompt_lengths)
+            stripped = [
+                row[max_prompt_len - prompt_lengths[i] :]
+                for i, row in enumerate(results_list[:N])
+            ]
+        else:
+            stripped = [row for row in results_list[:N]]
+
+        decoded = encoding.decode_batch(stripped)
 
         # Convert back to original types
         outputs: List[Union[str, ChatTemplate]] = []
