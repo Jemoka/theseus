@@ -28,10 +28,20 @@ from theseus.web.models import (
 
 
 class StatusService:
-    """Service for reading job status from the filesystem."""
+    """Service for reading job status from the filesystem.
+
+    When a JobCache is attached (via ``set_cache``), list operations are served
+    from the in-memory cache instead of walking the filesystem on every request.
+    Single-job lookups still hit the filesystem for maximum freshness.
+    """
 
     def __init__(self, status_dir: Path):
         self.status_dir = Path(status_dir)
+        self._cache = None  # Optional[JobCache], set via set_cache()
+
+    def set_cache(self, cache) -> None:
+        """Attach a JobCache instance to serve list queries from memory."""
+        self._cache = cache
 
     def _extract_wandb_url(self, log_path: Path) -> Optional[str]:
         """Extract W&B URL from output.log file."""
@@ -113,6 +123,11 @@ class StatusService:
 
         Jobs are returned sorted by start_time (most recent first).
         """
+        if self._cache is not None:
+            return self._cache.list_all_jobs(
+                project=project, group=group, status=status, limit=limit
+            )
+
         jobs: list[JobMetadata] = []
 
         if not self.status_dir.exists():
@@ -155,16 +170,26 @@ class StatusService:
     def get_job(
         self, project: str, group: str, name: str, run_id: str
     ) -> Optional[JobMetadata]:
-        """Get a specific job by its identifiers."""
+        """Get a specific job by its identifiers.
+
+        Always reads from filesystem for maximum freshness on detail pages.
+        Falls back to cache if the filesystem read fails or file is missing.
+        """
         metadata_path = (
             self.status_dir / project / group / name / run_id / "metadata.json"
         )
         if metadata_path.exists():
             return self._parse_metadata(metadata_path)
+        # Fallback: maybe the file was just deleted but cache still has it
+        if self._cache is not None:
+            return self._cache.get_job(project, group, name, run_id)
         return None
 
     def get_job_runs(self, project: str, group: str, name: str) -> list[JobMetadata]:
         """Get all runs for a specific job name."""
+        if self._cache is not None:
+            return self._cache.get_job_runs(project, group, name)
+
         jobs: list[JobMetadata] = []
         job_dir = self.status_dir / project / group / name
 
@@ -185,6 +210,9 @@ class StatusService:
 
     def list_projects(self) -> list[ProjectSummary]:
         """List all projects with summary stats."""
+        if self._cache is not None:
+            return self._cache.list_projects()
+
         projects: dict[str, ProjectSummary] = {}
 
         if not self.status_dir.exists():
@@ -227,11 +255,16 @@ class StatusService:
 
     def get_running_jobs(self) -> list[JobMetadata]:
         """Get all currently running jobs, excluding stale ones (no heartbeat >5min)."""
+        if self._cache is not None:
+            return self._cache.get_running_jobs()
         jobs = self.list_all_jobs(status=JobStatus.RUNNING, limit=1000)
         return [j for j in jobs if not j.is_stale]
 
     def get_recent_jobs(self, hours: int = 24, limit: int = 50) -> list[JobMetadata]:
         """Get jobs started within the last N hours."""
+        if self._cache is not None:
+            return self._cache.get_recent_jobs(hours=hours, limit=limit)
+
         cutoff = datetime.now().timestamp() - (hours * 3600)
         jobs = self.list_all_jobs(limit=1000)
 
@@ -250,6 +283,9 @@ class StatusService:
 
     def get_dashboard_stats(self) -> DashboardStats:
         """Get aggregated stats for the dashboard."""
+        if self._cache is not None:
+            return self._cache.get_dashboard_stats()
+
         jobs = self.list_all_jobs(limit=10000)
         projects = self.list_projects()
 
@@ -291,6 +327,10 @@ class StatusService:
                         project_dir = group_dir.parent
                         if project_dir.exists() and not any(project_dir.iterdir()):
                             project_dir.rmdir()
+
+                # Evict from cache immediately
+                if self._cache is not None:
+                    self._cache.delete_job(project, group, name, run_id)
 
                 return True
             except Exception:
