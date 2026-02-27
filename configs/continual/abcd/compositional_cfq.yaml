@@ -1,4 +1,9 @@
-# uv run theseus submit 20B_fw_mnli_qqp_sst2_siqa ./configs/continual/abcd.yaml -p continual -g e1 --mem 128G
+# Compositional generalization: CFQ question -> SPARQL query
+# Paradigm: Bridging learning
+#
+# A(FineWeb general pretraining) -> B(CFQ question->SPARQL) -> C(MNLI)
+# Tests whether compositional question->query mapping survives further finetuning
+# on a different NLU task.
 
 architecture:
   n_embd: 2048
@@ -12,10 +17,10 @@ architecture:
   vram_calib_factor: 1.0
 eval:
   evaluations:
+  - cfq
   - mnli
-  - qqp
-  - sst2
-  - siqa
+  - fineweb_ppl
+  - mnli_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base
@@ -34,11 +39,9 @@ training:
   batch_size: 512
   per_device_batch_size: -1
   tokens:
-  - 20000000000
-  - 100000000
-  - 100000000
-  - 100000000
-  - 100000000
+  - 10000000000   # Phase 0: general pretraining on FineWeb
+  - 100000000     # Phase 1: CFQ question->SPARQL training
+  - 100000000     # Phase 2: MNLI (test if CFQ knowledge is retained)
   validation: false
   evaluate: true
   dataset:
@@ -46,28 +49,15 @@ training:
       rate: 1.0
       style: PMD
       suffix: ''
+  - - name: cfq
+      rate: 1.0
+      style: PADDED
+      suffix: ''
   - - name: mnli
       rate: 1.0
       style: PADDED
       suffix: ''
-  - - name: qqp
-      rate: 1.0
-      style: PADDED
-      suffix: ''
-  - - name: sst2
-      rate: 1.0
-      style: PADDED
-      suffix: ''
-  - - name: siqa
-      rate: 1.0
-      style: PADDED
-      suffix: ''
   validation_steps: 2048
-  # Fade: gradual transition between dataset boundaries.
-  # overlap: 0 = hard switch (default), 1 = full overlap of smaller segment
-  # curve: linear | cosine | sigmoid
-  # steepness: sigmoid sharpness (only used when curve=sigmoid)
-  # per_boundary_overlap: optional list of per-boundary overlap overrides
   fade:
     overlap: 0.0
     curve: linear

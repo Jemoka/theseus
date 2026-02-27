@@ -1,0 +1,8 @@
+data:
+  dataset: ccaligned
+  config: 'zh_CN'
+  suffix: 'zh'
+  val_pct: 0.05
+  seed: 2357
+  max_samples: -1
+job: data/tokenize_variable_dataset

@@ -1,0 +1,74 @@
+# Multilingual continual learning: CCAligned language shift
+# Paradigm: Standard CL — sequential shift across languages
+#
+# A(en-fr) -> B(en-de) -> C(en-zh)
+# Each phase trains on sentence-aligned bilingual text for one language pair.
+# Evals track per-language perplexity to measure forgetting and plasticity.
+
+architecture:
+  n_embd: 2048
+  n_layers: 16
+  bias: true
+  dropout: 0.0
+  n_head: 16
+  rope: true
+  block_size: 512
+  vocab_size: 100288
+  vram_calib_factor: 1.0
+eval:
+  evaluations:
+  - ccaligned_fr_xx
+  - ccaligned_de_de
+  - ccaligned_zh_cn
+  - fineweb_ppl
+tokenizer:
+  backend: tiktoken
+  name: cl100k_base
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+  warmup_pct: 0.05
+  decay_pct: 0.10
+  constant_pct: 0.02
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens:
+  - 5000000000    # Phase 0: English-French CCAligned (5B tokens)
+  - 2000000000    # Phase 1: English-German CCAligned (2B tokens)
+  - 2000000000    # Phase 2: English-Chinese CCAligned (2B tokens)
+  validation: false
+  evaluate: true
+  dataset:
+  - - name: ccaligned
+      rate: 1.0
+      style: PMD
+      suffix: 'fr'
+  - - name: ccaligned
+      rate: 1.0
+      style: PMD
+      suffix: 'de'
+  - - name: ccaligned
+      rate: 1.0
+      style: PMD
+      suffix: 'zh'
+  validation_steps: 2048
+  fade:
+    overlap: 0.0
+    curve: linear
+    steepness: 10.0
+logging:
+  report_interval: 32
+  checkpoint_interval: 4096
+  validation_interval: 1024
+  wandb: true
+job: continual/train/abcd
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1

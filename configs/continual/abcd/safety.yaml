@@ -1,0 +1,97 @@
+# Safety fine-tuning continual learning
+# Paradigm: Safety (from "Learning and Forgetting Unsafe Examples in LLMs",
+#   Zhao et al. 2024, arXiv:2312.12736)
+#
+# Phase 0: Filtered Pile pretraining (detoxified, general knowledge)
+# Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
+# Phase 2: Safety finetuning (HarmfulQA blue)
+# Phase 3: Downstream evaluation tasks (BBQ + SQuAD)
+# Phase 4: Safety finetuning (HarmfulQA blue)
+#
+# Evaluates: Does safety alignment survive mixed unsafe/safe finetuning?
+# Key metrics: MMLU accuracy, SQuAD F1, Pile perplexity
+
+architecture:
+  n_embd: 2048
+  n_layers: 16
+  bias: true
+  dropout: 0.0
+  n_head: 16
+  rope: true
+  block_size: 512
+  vocab_size: 100288
+  vram_calib_factor: 1.0
+eval:
+  evaluations:
+  - mmlu
+  - squad
+  - pile
+tokenizer:
+  backend: tiktoken
+  name: cl100k_base
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+  warmup_pct: 0.05
+  decay_pct: 0.10
+  constant_pct: 0.02
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens:
+  - 20000000000   # Phase 0: Filtered Pile pretraining (detoxified)
+  - 2000000000    # Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
+  - 500000000     # Phase 2: Safety finetuning (HarmfulQA blue)
+  - 1000000000    # Phase 3: Downstream tasks (BBQ + SQuAD)
+  - 500000000     # Phase 4: Safety finetuning (HarmfulQA blue)
+  validation: false
+  evaluate: true
+  dataset:
+  - - name: pile_detoxify
+      rate: 1.0
+      style: PMD
+      suffix: ''
+  - - name: harmfulqa
+      rate: 0.5
+      style: PADDED
+      suffix: 'red'
+    - name: mmlu
+      rate: 0.5
+      style: PADDED
+      suffix: ''
+  - - name: harmfulqa
+      rate: 1.0
+      style: PADDED
+      suffix: 'blue'
+  - - name: bbq
+      rate: 0.5
+      style: PADDED
+      suffix: ''
+    - name: squad
+      rate: 0.5
+      style: PADDED
+      suffix: ''
+  - - name: harmfulqa
+      rate: 1.0
+      style: PADDED
+      suffix: 'blue'
+  validation_steps: 2048
+  fade:
+    overlap: 0.0
+    curve: linear
+    steepness: 10.0
+logging:
+  report_interval: 32
+  checkpoint_interval: 4096
+  validation_interval: 1024
+  wandb: true
+job: continual/train/abcd
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1
