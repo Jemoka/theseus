@@ -1,13 +1,12 @@
 import lzma
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 
 from theseus.data.datasets import StreamingPretrainingDataset
 
 
-_SENTENCE_URL_TEMPLATE = (
-    "https://data.statmt.org/cc-aligned/sentence-aligned/en_XX-{lang}.tsv.xz"
-)
+_BASE_URL = "https://data.statmt.org/cc-aligned/sentence-aligned/"
 
 
 class CCAligned(StreamingPretrainingDataset):
@@ -19,6 +18,9 @@ class CCAligned(StreamingPretrainingDataset):
     (e.g. ``"fr_XX"``, ``"de_DE"``, ``"zh_CN"``).  Each yielded string
     is a single target-language sentence, suitable for monolingual
     pretraining in that language.
+
+    Some language pairs are stored as ``en_XX-{lang}.tsv.xz`` and others
+    as ``{lang}-en_XX.tsv.xz``; both orderings are tried automatically.
     """
 
     def __init__(
@@ -27,10 +29,26 @@ class CCAligned(StreamingPretrainingDataset):
         split: str = "train",
     ) -> None:
         self.lang = config or "fr_XX"
-        self._url = _SENTENCE_URL_TEMPLATE.format(lang=self.lang)
+        self._urls = [
+            f"{_BASE_URL}en_XX-{self.lang}.tsv.xz",
+            f"{_BASE_URL}{self.lang}-en_XX.tsv.xz",
+        ]
+
+    def _open(self) -> "urllib.response.addinfourl":
+        for url in self._urls:
+            try:
+                return urllib.request.urlopen(url)  # noqa: S310
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    continue
+                raise
+        raise FileNotFoundError(
+            f"CCAligned data not found for {self.lang}; "
+            f"tried {self._urls}"
+        )
 
     def __iter__(self) -> Iterator[str]:
-        response = urllib.request.urlopen(self._url)  # noqa: S310
+        response = self._open()
         decompressor = lzma.LZMADecompressor()
         leftover = b""
         for chunk in iter(lambda: response.read(64 * 1024), b""):

@@ -335,20 +335,21 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
             shapes[split_name] = [num_samples, args.block_size]
 
             # Log statistics
-            avg_length = total_length / num_samples if num_samples > 0 else 0
             logger.info(f"{split_name.upper()} STATISTICS:")
             logger.info(f"  Total samples: {num_samples}")
             logger.info(f"  Shape: ({num_samples}, {args.block_size})")
-            logger.info(
-                f"  Truncated: {num_truncated} ({100 * num_truncated / num_samples:.2f}%)"
-            )
-            logger.info(
-                f"  Padded: {num_padded} ({100 * num_padded / num_samples:.2f}%)"
-            )
-            logger.info(f"  Exact fit: {num_samples - num_truncated - num_padded}")
-            logger.info(
-                f"  Sequence lengths - Min: {min_length}, Max: {max_length}, Avg: {avg_length:.2f}"
-            )
+            if num_samples > 0:
+                avg_length = total_length / num_samples
+                logger.info(
+                    f"  Truncated: {num_truncated} ({100 * num_truncated / num_samples:.2f}%)"
+                )
+                logger.info(
+                    f"  Padded: {num_padded} ({100 * num_padded / num_samples:.2f}%)"
+                )
+                logger.info(f"  Exact fit: {num_samples - num_truncated - num_padded}")
+                logger.info(
+                    f"  Sequence lengths - Min: {min_length}, Max: {max_length}, Avg: {avg_length:.2f}"
+                )
 
         # Write shape.json
         with open(os.path.join(output_path, "shape.json"), "w") as f:
