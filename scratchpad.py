@@ -32,31 +32,99 @@ import jax.numpy as jnp
 import jax.nn as jnn
 import flax.linen as nn
 
-from theseus.experiments.redcodegen.hardening import Hardening
+from theseus.experiments.models.gpt import PretrainGPT
 from theseus.evaluation.base import Evaluator
 from theseus.training.backbone import BackbonedTrainer
 
-q = init(BackbonedTrainer, "test")
-q.config.architecture.backbone.implementation = "qwen"
-q.config.architecture.backbone.weights = "Qwen/Qwen2.5-0.5B"
+q = init(PretrainGPT, "test")
+q.config.architecture.n_layers = 4
+q.config.architecture.n_embd = 128
 q.config.training.per_device_batch_size = 1
-q.config.tokenizer.backend = "huggingface"
-q.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
-
+# q.config.tokenizer.backend = "huggingface"
+# q.config.tokenizer.name = "Qwen/Qwen2.5-0.5B"
 job = q.create()
-evaluator = job.evaluator()
-res = evaluator.rollout([
-    "The Federal Reserve said last Tuesday that",
-    "Robustness to transitioning is a big issue that Rhodesia has thought a lot about, since"
-], max_new_tokens=10, top_p=0.9, temperature=0.7)
-res
+job()
 
-# q.close()
+# evaluator = job.evaluator()
+# res = evaluator.rollout([
+#     "The Federal Reserve said last Tuesday that",
+#     "Robustness to transitioning is a big issue that Rhodesia has thought a lot about, since"
+# ], max_new_tokens=10, top_p=0.9, temperature=0.7)
+# res
+
+# # q.close()
+
+# from types import SimpleNamespace
+# self = SimpleNamespace()
 
 
+# res = jax.eval_shape(
+#     self.rms_1.apply, jnp.ones((8, q.config.architecture.block_size, q.config.architecture.n_embd))
+# )
+
+# import jax
+# def do_thing(x):
+#     vars = self.rms_1.init(jax.random.PRNGKey(0), x)
+#     self.rms_1.apply(vars,x)
+#     return x
+
+# jax.eval_shape(lambda:self.rms_1.init(jax.random.PRNGKey(0), tmp))
     
+# tmp = jax.ShapeDtypeStruct(.shape, jnp.float32)
+# x = jnp.ones((8, q.config.architecture.block_size, q.config.architecture.n_embd))
+# res = self.mlp(jnp.ones((8, q.config.architecture.block_size, q.config.architecture.n_embd)))
+# type(res)
+# self.rms_1.obj
+# res = jax.eval_shape(do_thing, tmp)
+# res
 
+# self = Mocker()
+# self.n_embd = 128
+
+# self.three = 32
+
+
+# def mock(module):
+
+# import flax.linen as nn
+
+# class SowCNN(nn.Module):
+#   @nn.compact
+#   def __call__(self, x):
+#     x = nn.Conv(features=32, kernel_size=(3, 3))(x)
+#     x = nn.relu(x)
+#     x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+#     x = nn.Conv(features=64, kernel_size=(3, 3))(x)
+#     x = nn.relu(x)
+#     x = nn.avg_pool(x, window_shape=(2, 2), strides=(2, 2))
+#     x = x.reshape((x.shape[0], -1))  # flatten
+#     self.sow('intermediates', 'features', x)
     
+#     x = nn.Dense(features=256)(x)
+#     x = nn.relu(x)
+#     x = nn.Dense(features=10)(x)
+#     x = nn.log_softmax(x)
+#     return x
+
+# import jax
+# import jax.numpy as jnp
+
+# variables = SowCNN().init(jax.random.PRNGKey(7), jnp.ones((1, 28, 28, 1)))
+# res, mod = SowCNN().apply(variables, jnp.ones((1, 28, 28, 1)), mutable='intermediates')
+# mod
+                        
+#   # By default the 'intermediates' collection is not mutable during init.
+#   # So variables will only contain 'params' here.
+#   return variables
+
+# @jax.jit
+# def predict(variables, x):
+#   # If mutable='intermediates' is not specified, then .sow() acts as a noop.
+#   output, mod_vars = SowCNN2().apply(variables, x, mutable='intermediates')
+#   features = mod_vars['intermediates']['SowCNN']['features']
+#   return output, features
+
+
 
 # os.environ["WANDB_DISABLED"] = "true"
 # from theseus.base.job import ExecutionSpec

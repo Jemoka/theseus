@@ -425,13 +425,10 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
-        extra_variables: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        # batch is expected to be a dict with x, y, padding_mask keys
         from typing import cast as type_cast
 
-        batch_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
+        batch_dict = type_cast(Dict[str, jax.Array], batch)
         x = batch_dict["x"]
         y = batch_dict["y"]
         padding_mask = batch_dict["padding_mask"]
@@ -440,25 +437,16 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         if not deterministic and key is not None:
             _, dropout_key = jax_random.split(key)
 
-        variables: Dict[str, Any] = {"params": params}
-        if extra_variables is not None:
-            variables.update(extra_variables)
-
-        kwargs: Dict[str, Any] = {
-            "padding_mask": padding_mask,
-            "deterministic": deterministic,
-        }
-        if dropout_key is not None:
-            kwargs["rngs"] = {"dropout": dropout_key}
-
-        if mutable is not None:
-            (logits, loss), mutated = state.apply_fn(
-                variables, x, y, mutable=mutable, **kwargs
-            )
-            return (logits, loss, {}), mutated
-        else:
-            logits, loss = state.apply_fn(variables, x, y, **kwargs)
-            return logits, loss, {}
+        rngs = {"dropout": dropout_key} if dropout_key is not None else {}
+        logits, loss = state.apply_fn(
+            {"params": params},
+            x,
+            y,
+            padding_mask=padding_mask,
+            deterministic=deterministic,
+            rngs=rngs,
+        )
+        return logits, loss, {}
 
     @classmethod
     def train_step(

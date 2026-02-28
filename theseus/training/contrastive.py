@@ -92,15 +92,11 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
-        extra_variables: Optional[Dict[str, Any]] = None,
     ) -> Any:
         cstate = type_cast(ContrastiveTrainState, state)
         batch_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
 
-        # in this case we are probably running some kind of
-        # evaluation so we'd like to skip the contrastive loss and
-        # just return the logits
+        # evaluation path: skip contrastive loss, just return logits
         if batch_dict.get("x") is not None:
             return BaseTrainer.forward(
                 state,
@@ -108,15 +104,6 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
                 batch,
                 key,
                 deterministic,
-                mutable,
-                extra_variables,
-            )
-
-        # if mutable is not None, panic. something is likely goofy
-        # such as we are trying to do KV caching during training?
-        if mutable is not None:
-            raise NotImplementedError(
-                "Mutable variables not supported in contrastive trainer yet."
             )
 
         # unpack dataset

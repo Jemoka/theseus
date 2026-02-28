@@ -116,10 +116,8 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
-        mutable: Optional[list[str]] = None,
-        extra_variables: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        del key, deterministic, extra_variables
+        del key, deterministic
         from typing import cast as type_cast
 
         xb: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
@@ -134,8 +132,6 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
             batch=(x, y, padding_mask),
             mutable_buffers=False,
         )
-        if mutable is not None:
-            return (logits, loss, {}), flax.core.freeze({})
         return logits, loss, {}
 
     @classmethod

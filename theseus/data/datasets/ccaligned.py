@@ -2,6 +2,7 @@ import lzma
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from typing import Any
 
 from theseus.data.datasets import StreamingPretrainingDataset
 
@@ -34,7 +35,7 @@ class CCAligned(StreamingPretrainingDataset):
             f"{_BASE_URL}{self.lang}-en_XX.tsv.xz",
         ]
 
-    def _open(self) -> "urllib.response.addinfourl":
+    def _open(self) -> Any:
         for url in self._urls:
             try:
                 return urllib.request.urlopen(url)  # noqa: S310
@@ -43,8 +44,7 @@ class CCAligned(StreamingPretrainingDataset):
                     continue
                 raise
         raise FileNotFoundError(
-            f"CCAligned data not found for {self.lang}; "
-            f"tried {self._urls}"
+            f"CCAligned data not found for {self.lang}; tried {self._urls}"
         )
 
     def __iter__(self) -> Iterator[str]:
