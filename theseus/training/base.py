@@ -40,6 +40,7 @@ from theseus.training.utils import (
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
 from theseus.evaluation.base import Evaluator, EvaluatorConfig
 from theseus.data.tokenizer import TokenizerConfig
+from theseus.plot import PlotsConfig, PlotsDispatcher
 
 M = TypeVar("M", bound=Module)
 
@@ -108,7 +109,12 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
-        cfg: List[Type[Any]] = [*cls.MODEL.gather(), EvaluatorConfig, TokenizerConfig]
+        cfg: List[Type[Any]] = [
+            *cls.MODEL.gather(),
+            EvaluatorConfig,
+            TokenizerConfig,
+            PlotsConfig,
+        ]
 
         if isinstance(cls.optimizer(), str):
             _, optim_cfg = OPTIMIZERS.get(cls.optimizer(), (None, None))
@@ -308,6 +314,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     def _init_wandb(self, spec: ExecutionSpec) -> None:
         """Initialize Weights & Biases logging."""
+        self.plots_dispatcher: Optional[PlotsDispatcher] = None
+
         if self.main_process():
             assert current_config() is not None, (
                 "cannot locate configuration in context!"
@@ -329,6 +337,24 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                     f"WANDB | project={wandb.run.project} run_id={wandb.run.id} "
                     f"run_name={wandb.run.name} url={wandb.run.get_url()}"
                 )
+
+                if self.MODEL.plot is not Module.plot:
+                    plots_cfg = configure(PlotsConfig)
+                    cluster = spec.hardware.hosts[0].cluster
+                    project = spec.project or "general"
+                    group = spec.group if spec.group else "default"
+                    save_dir = (
+                        Path(cluster.results_dir)
+                        / project
+                        / group
+                        / self.spec.name
+                        / str(self.spec.id)
+                    )
+                    self.plots_dispatcher = PlotsDispatcher(
+                        model_cls=self.MODEL,
+                        save=plots_cfg.save,
+                        save_dir=save_dir,
+                    )
 
     def _init_data(self, spec: ExecutionSpec) -> None:
         """Initialize dataset strategy and data loaders."""
@@ -447,12 +473,17 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 padding_mask=padding_mask,
                 deterministic=deterministic,
                 rngs=rngs,
-                mutable=["intermediates"],
+                mutable=["intermediates", "plots"],
             )
             return (
                 logits,
                 loss,
-                dict({"intermediates": mutated.get("intermediates", {})}),
+                dict(
+                    {
+                        "intermediates": mutated.get("intermediates", {}),
+                        "plots": mutated.get("plots", {}),
+                    }
+                ),
             )
         else:
             logits, loss = state.apply_fn(
@@ -597,7 +628,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
     def __make_valid_step(
         self,
-    ) -> Callable[[train_state.TrainState], Tuple[float, Dict[str, float]]]:
+    ) -> Callable[..., Tuple[float, Dict[str, float]]]:
         batch = self._to_global(self._reshape_batch(self.batch("val")))
         data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
 
@@ -609,11 +640,14 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
         def valid_step_wrapper(
             state: train_state.TrainState,
+            step: int = 0,
         ) -> Tuple[float, Dict[str, float]]:
-            loss_sum, count, _ = valid_step_inner_jit(state, batch)
+            loss_sum, count, meta = valid_step_inner_jit(state, batch)
 
-            # handle graphing
-            # intermediates = _.get("intermediates")
+            # handle graphing / plotting
+            if self.plots_dispatcher is not None:
+                plots_meta = jax.device_get(meta)
+                self.plots_dispatcher.submit(plots_meta, step=step)
 
             loss_sum = jax.device_get(loss_sum)
             count = jax.device_get(count)
@@ -750,7 +784,9 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 score = None
 
                 if self.args.validate:
-                    val_score, metrics = valid_step(self.state)
+                    val_score, metrics = valid_step(
+                        self.state, step=indx // self.accumulate_steps
+                    )
                     score = val_score
                     val_metrics.update(metrics)
                 if self.args.evaluate and self.inference is not None:
@@ -799,6 +835,9 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 )
             )
         )
+
+        if self.plots_dispatcher is not None:
+            self.plots_dispatcher.close()
 
     def save(self, suffix: Path) -> None:
         """final save at the end of training"""
