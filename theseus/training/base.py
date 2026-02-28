@@ -425,6 +425,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
+        intermediates: bool = False,
     ) -> Any:
         from typing import cast as type_cast
 
@@ -438,15 +439,31 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             _, dropout_key = jax_random.split(key)
 
         rngs = {"dropout": dropout_key} if dropout_key is not None else {}
-        logits, loss = state.apply_fn(
-            {"params": params},
-            x,
-            y,
-            padding_mask=padding_mask,
-            deterministic=deterministic,
-            rngs=rngs,
-        )
-        return logits, loss, {}
+        if intermediates:
+            (logits, loss), mutated = state.apply_fn(
+                {"params": params},
+                x,
+                y,
+                padding_mask=padding_mask,
+                deterministic=deterministic,
+                rngs=rngs,
+                mutable=["intermediates"],
+            )
+            return (
+                logits,
+                loss,
+                dict({"intermediates": mutated.get("intermediates", {})}),
+            )
+        else:
+            logits, loss = state.apply_fn(
+                {"params": params},
+                x,
+                y,
+                padding_mask=padding_mask,
+                deterministic=deterministic,
+                rngs=rngs,
+            )
+            return logits, loss, {}
 
     @classmethod
     def train_step(
@@ -528,7 +545,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         cls,
         state: train_state.TrainState,
         batch: PyTree[jax.Array],  # (S, B, T) each
-    ) -> Tuple[jax.Array, jax.Array]:
+    ) -> Tuple[jax.Array, jax.Array, Any]:
         """Compute validation loss over S micro-batches.
 
         Args:
@@ -537,13 +554,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                    S = accumulation size, B = batch size, T = sequence length
 
         Returns:
-            (loss_sum, token_count) for computing mean: loss = loss_sum / token_count
+            (loss_sum, token_count, last_meta)
         """
 
         def reduce(
             carry: Tuple[jax.Array, jax.Array],
             xb_item: Any,  # PyTree with single batch item (B, T)
-        ) -> Tuple[Tuple[jax.Array, jax.Array], None]:
+        ) -> Tuple[Tuple[jax.Array, jax.Array], Any]:
             from typing import cast as type_cast
 
             loss_sum, count = carry
@@ -553,8 +570,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             params_pytree: PyTree[jax.Array] = type_cast(
                 PyTree[jax.Array], state.params
             )
-            _, loss_i, _ = cls.forward(
-                state, params_pytree, xb_pytree, deterministic=True
+            _, loss_i, meta = cls.forward(
+                state, params_pytree, xb_pytree, deterministic=True, intermediates=True
             )  # loss_i: scalar
 
             # Extract mask from batch (expected to be dict)
@@ -567,14 +584,16 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             assert mask is not None, "No padding mask found in batch"
 
             n = mask.sum()  # count real tokens: scalar
-            return (loss_sum + loss_i * n, count + n), None
+            return (loss_sum + loss_i * n, count + n), meta
 
         # scan over S micro-batches, accumulating weighted loss
-        (loss_sum, count), _ = jax.lax.scan(
+        (loss_sum, count), metas = jax.lax.scan(
             reduce, (jnp.array(0.0), jnp.array(0)), batch
         )
 
-        return loss_sum, count  # scalar arrays
+        last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
+
+        return loss_sum, count, last_meta
 
     def __make_valid_step(
         self,
@@ -585,13 +604,17 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         valid_step_inner_jit = jax.jit(
             self.val_step,
             in_shardings=(self.state_sharding, data_shard),
-            out_shardings=(None, None),
+            out_shardings=(None, None, None),
         )
 
         def valid_step_wrapper(
             state: train_state.TrainState,
         ) -> Tuple[float, Dict[str, float]]:
-            loss_sum, count = valid_step_inner_jit(state, batch)
+            loss_sum, count, _ = valid_step_inner_jit(state, batch)
+
+            # handle graphing
+            # intermediates = _.get("intermediates")
+
             loss_sum = jax.device_get(loss_sum)
             count = jax.device_get(count)
 

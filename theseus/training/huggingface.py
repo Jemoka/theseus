@@ -116,7 +116,9 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
+        intermediates: bool = False,
     ) -> Any:
+        assert not intermediates, "intermediates not supported in HFTrainer.forward"
         del key, deterministic
         from typing import cast as type_cast
 
@@ -204,7 +206,7 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         cls,
         state: train_state.TrainState,
         batch: PyTree[jax.Array],
-    ) -> Tuple[jax.Array, jax.Array]:
+    ) -> Tuple[jax.Array, jax.Array, Any]:
         from typing import cast as type_cast
 
         batch_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
@@ -215,7 +217,7 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
         def reduce(
             carry: Tuple[jax.Array, jax.Array],
             xb_item: Any,  # PyTree with single batch item
-        ) -> Tuple[Tuple[jax.Array, jax.Array], None]:
+        ) -> Tuple[Tuple[jax.Array, jax.Array], Any]:
             loss_sum, count = carry
             xb_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], xb_item)
             x_i = xb_dict["x"]
@@ -230,11 +232,12 @@ class HFTrainer(BaseTrainer[HFTrainerConfig, HM], Generic[HM]):
                 mutable_buffers=False,
             )
             n = mask_i.sum()
-            return (loss_sum + loss_i * n, count + n), None
+            return (loss_sum + loss_i * n, count + n), {}
 
         # Create dict of arrays to scan over
         batch_to_scan = {"x": x, "y": y, "padding_mask": padding_mask}
-        (loss_sum, count), _ = jax.lax.scan(
+        (loss_sum, count), metas = jax.lax.scan(
             reduce, (jnp.array(0.0), jnp.array(0)), batch_to_scan
         )
-        return loss_sum, count
+        last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
+        return loss_sum, count, last_meta

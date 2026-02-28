@@ -92,6 +92,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         batch: PyTree[jax.Array],
         key: Optional[jax.Array] = None,
         deterministic: bool = False,
+        intermediates: bool = False,
     ) -> Any:
         cstate = type_cast(ContrastiveTrainState, state)
         batch_dict: Dict[str, jax.Array] = type_cast(Dict[str, jax.Array], batch)
@@ -104,6 +105,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
                 batch,
                 key,
                 deterministic,
+                intermediates=intermediates,
             )
 
         # unpack dataset
@@ -122,21 +124,36 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         if dropout_key is not None:
             kwargs["rngs"] = {"dropout": dropout_key}
 
-        # compute logprobs for pos and neg using the parameters
-        (logits, loss_pos) = cstate.apply_fn(
+        # compute logprobs for pos and neg using the policy parameters
+        if intermediates:
+            kwargs["mutable"] = ["intermediates"]
+
+        result_pos = cstate.apply_fn(
             {"params": params},
             pos[:, :-1],
             pos[:, 1:],
             padding_mask=padding_mask_pos[:, :-1],
             **kwargs,
         )
-        (_, loss_neg) = cstate.apply_fn(
+        result_neg = cstate.apply_fn(
             {"params": params},
             neg[:, :-1],
             neg[:, 1:],
             padding_mask=padding_mask_neg[:, :-1],
             **kwargs,
         )
+
+        intermediates_meta: Dict[str, Any] = {}
+        if intermediates:
+            (logits, loss_pos), mutated_pos = result_pos
+            (_, loss_neg), mutated_neg = result_neg
+            intermediates_meta = {
+                "pos": dict(mutated_pos.get("intermediates", {})),
+                "neg": dict(mutated_neg.get("intermediates", {})),
+            }
+        else:
+            (logits, loss_pos) = result_pos
+            (_, loss_neg) = result_neg
 
         # compute baseline loss
         (_, loss_base_pos) = cstate.apply_fn(
@@ -185,7 +202,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             -beta * (loss_neg - loss_base_neg) * n_neg
         )
 
-        metrics = {
+        metrics: Dict[str, Any] = {
             "rewards/chosen": chosen_rewards,
             "rewards/rejected": rejected_rewards,
             "rewards/reward_accuracy": jnp.mean(chosen_rewards > rejected_rewards),
@@ -194,6 +211,7 @@ class ContrastiveTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             "policy/nll_rejected": loss_neg,
             "ref/nll_chosen": loss_base_pos,
             "ref/nll_rejected": loss_base_neg,
+            **intermediates_meta,
         }
 
         return logits, loss, metrics

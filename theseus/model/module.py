@@ -28,6 +28,12 @@ class Module(nn):
     param_dtype: str = field("architecture/dtype/param", default="float32")
     activation_dtype: str = field("architecture/dtype/activation", default="bfloat16")
 
+    @staticmethod
+    def plot(intermediates: Any) -> List[Any]:
+        """intermediates -> [figure]"""
+
+        return []
+
     @property
     def _param_dtype(self) -> Any:
         return parse_dtype(self.param_dtype)
