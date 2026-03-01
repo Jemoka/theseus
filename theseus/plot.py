@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from theseus.config import field
 
-BG = "#F5F4F1"
+BG = "#FFFFFF"
 FG = "#1C1F24"
 SPINE = "#444444"
 

@@ -34,45 +34,71 @@ def _split_kwargs(kwargs):  # type: ignore[no-untyped-def]
     return static, dynamic
 
 
-def _mock_leaf(leaf, key=jax.random.PRNGKey(0)):  # type: ignore[no-untyped-def]
-    if leaf.dtype == jnp.float32:
-        return jax.random.normal(key, leaf.shape).astype(jnp.float32)
-    elif leaf.dtype == jnp.bfloat16:
-        return jax.random.normal(key, leaf.shape).astype(jnp.bfloat16)
-    elif leaf.dtype == jnp.int32:
-        return jax.random.randint(key, leaf.shape, 0, 100).astype(jnp.int32)
-    elif leaf.dtype == jnp.bool_:
-        return jax.random.bernoulli(key, 0.5, leaf.shape).astype(jnp.bool_)
-    else:
-        raise ValueError(f"Unsupported dtype {leaf.dtype} for mocked value")
+def _mock_leaf(leaf, key):  # type: ignore[no-untyped-def]
+    """Create a mocked array with the same shape/dtype as `leaf`."""
+    # In shape-land, leaves are often ShapeDtypeStruct-like.
+    # We assume `.dtype` and `.shape` exist.
+    dtype = leaf.dtype
+    shape = leaf.shape
+
+    # Floats
+    if jnp.issubdtype(dtype, jnp.floating):
+        return jax.random.normal(key, shape).astype(dtype)
+
+    # Complex
+    if jnp.issubdtype(dtype, jnp.complexfloating):
+        k1, k2 = jax.random.split(key)
+        real = jax.random.normal(k1, shape)
+        imag = jax.random.normal(k2, shape)
+        return (real + 1j * imag).astype(dtype)
+
+    # Signed ints
+    if jnp.issubdtype(dtype, jnp.signedinteger):
+        info = jnp.iinfo(dtype)  # type: ignore[no-untyped-call]
+        # Keep range modest to avoid overflow surprises in downstream ops.
+        lo = max(info.min, -100)
+        hi = min(info.max, 100)
+        # randint upper bound is exclusive; ensure hi > lo
+        if hi <= lo:
+            lo, hi = 0, max(1, int(info.max))
+        return jax.random.randint(key, shape, lo, hi, dtype=dtype)
+
+    # Unsigned ints
+    if jnp.issubdtype(dtype, jnp.unsignedinteger):
+        info = jnp.iinfo(dtype)  # type: ignore[no-untyped-call]
+        lo = 0
+        hi = min(info.max, 100)
+        if hi <= lo:
+            hi = max(1, int(info.max))
+        return jax.random.randint(key, shape, lo, hi, dtype=dtype)
+
+    # Bool
+    if dtype == jnp.bool_ or jnp.issubdtype(dtype, jnp.bool_):
+        return jax.random.bernoulli(key, 0.5, shape).astype(jnp.bool_)
+
+    raise ValueError(f"Unsupported dtype {dtype} for mocked value")
 
 
 def _mock_shape(shape, key=jax.random.PRNGKey(0)):  # type: ignore[no-untyped-def]
+    """Mock an output pytree using per-leaf RNG keys."""
     shape = _unwrap_partitioned(shape)  # type: ignore[no-untyped-call]
-    leaves = jax.tree.leaves(shape)
+
+    leaves, treedef = jax.tree_util.tree_flatten(shape)
     if len(leaves) == 0:
         raise ValueError("init_fn returned an empty pytree")
-    elif len(leaves) == 1 and leaves[0] is shape:
-        return _mock_leaf(shape, key)  # type: ignore[no-untyped-call]
-    return jax.tree.map(functools.partial(_mock_leaf, key=key), shape)
+
+    # Split RNG per leaf so leaves don't share identical draws.
+    keys = jax.random.split(key, len(leaves))
+
+    mocked_leaves = [
+        _mock_leaf(leaf, k)  # type: ignore[no-untyped-call]
+        for leaf, k in zip(leaves, keys)
+    ]
+    return jax.tree_util.tree_unflatten(treedef, mocked_leaves)
 
 
 class InlineMockLinenModule:
-    """Helper for inline mocking.
-
-    >>> obj = get_an_inline_mock()
-    >>> mocked_value = obj(
-    ...     mocked,
-    ...     inputs,
-    ...     here,
-    ... )
-
-    You should NEVER, EVER, EVER instantiate
-    this object yourself because it will cause subtle
-    bugs like "oh no I accidentally left a mocker
-    in my code and now it is returning mocked values instead
-    of the real ones and I have no idea why"
-    """
+    """Helper for inline mocking."""
 
     def __init__(self, name, obj, key):  # type: ignore[no-untyped-def]
         self.obj = obj
@@ -92,20 +118,18 @@ class InlineMockLinenModule:
         output_shape = jax.eval_shape(
             apply_fn, self.param_tree, *args, **dynamic_kwargs
         )
-        return _mock_shape(output_shape, self.key)  # type: ignore[no-untyped-call]
+
+        # IMPORTANT: advance key per call so successive calls differ,
+        # while still using per-leaf splits inside _mock_shape.
+        out_key, self.key = jax.random.split(self.key)
+        return _mock_shape(output_shape, out_key)  # type: ignore[no-untyped-call]
 
     def __repr__(self):  # type: ignore[no-untyped-def]
         return f"Mocked {self.name}"
 
 
 class Mocker:
-    """Linen-class mocker that enables in-line debugging.
-
-    Tip:
-    Set this class to `self`, and suddenly you can just
-    run parts of this class as if you are using the values
-    directly. Useful for inline debugging.
-    """
+    """Linen-class mocker that enables in-line debugging."""
 
     def __init__(self) -> None:
         self.key = jax.random.PRNGKey(0)
@@ -124,13 +148,15 @@ class Mocker:
         static_kwargs, dynamic_kwargs = _split_kwargs(init_kwargs)  # type: ignore[no-untyped-call]
 
         def init_wrapper(rng, *dynamic_args):  # type: ignore[no-untyped-def]
-            # reconstruct full args in original order, substituting back dynamic ones
             d_iter = iter(dynamic_args)
             full_args = [a if _is_static(a) else next(d_iter) for a in init_args]
             return init_fn(rng, *full_args, **static_kwargs, **dynamic_kwargs)
 
         dynamic_args = [a for a in init_args if not _is_static(a)]
         init_shape = jax.eval_shape(init_wrapper, dummy_rng, *dynamic_args)
-        mocked = _mock_shape(init_shape)  # type: ignore[no-untyped-call]
+
+        # Use the Mocker's key so params are reproducible but not constant.
+        p_key, self.key = jax.random.split(self.key)
+        mocked = _mock_shape(init_shape, p_key)  # type: ignore[no-untyped-call]
         super().__setattr__(name, mocked)
         return mocked
