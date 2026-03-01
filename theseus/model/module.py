@@ -5,7 +5,7 @@ dump all the types of constitutent parts so we can configure it.
 
 from abc import abstractproperty
 
-from typing import Type, List, Any, Tuple, Optional
+from typing import Type, List, Any, Tuple, Optional, Dict
 from flax.linen import Module as nn
 import jax.numpy as jnp
 
@@ -29,10 +29,10 @@ class Module(nn):
     activation_dtype: str = field("architecture/dtype/activation", default="bfloat16")
 
     @staticmethod
-    def plot(intermediates: Any) -> List[Any]:
+    def plot(intermediates: Any) -> Dict[str, Any]:
         """intermediates -> [figure]"""
 
-        return []
+        return {}
 
     @property
     def _param_dtype(self) -> Any:

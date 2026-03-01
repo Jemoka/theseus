@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
-from typing import Optional, Tuple, List, Any, Type
+from typing import Optional, Tuple, List, Any, Type, Dict
 
 from theseus.model.models.base import GPT
 from theseus.model.block.forking import ThoughtBlock, ForkingBlock
@@ -33,6 +33,21 @@ class Thoughtbubbles(GPT):
     def sharding(self) -> List[Tuple[str, Optional[Any]]]:
         base_sharding = super().sharding
         return base_sharding + [(Axes.N_FORK.value, None)]
+
+    @staticmethod
+    def plot(intermediates: Any) -> Dict[str, Any]:
+        """intermediates -> [figure]"""
+
+        from matplotlib import pyplot as plt
+        import seaborn as sns
+
+        scores = [i["new_cumulative_scores"] for i in intermediates["plots"].values()]
+        scores = jnp.exp(jnp.stack(jnp.array(scores))[:, 0, 0])  # type: ignore
+        fig = plt.figure(figsize=(10, 6))
+        ax = fig.add_subplot(111)
+        ax = sns.heatmap(scores, ax=ax)
+
+        return {"analysis/cum_scores": fig}
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
