@@ -31,7 +31,6 @@ from theseus.base import PyTree, Topology, ExecutionSpec
 from theseus.config import field, configure
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
-from theseus.plot import PALETTE
 
 
 # ---------------------------------------------------------------------------
@@ -83,36 +82,6 @@ class KLDivergenceTrainState(train_state.TrainState):  # type: ignore[no-untyped
 # ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
-
-def _make_eval_bar_chart(
-    eval_metrics: dict[str, float], boundary_label: str
-) -> Dict[str, Any]:
-    """Create a bar chart of evaluation results at a stage boundary."""
-    from matplotlib import pyplot as plt
-
-    names = list(eval_metrics.keys())
-    scores = list(eval_metrics.values())
-    colors = [PALETTE[i % len(PALETTE)] for i in range(len(names))]
-
-    fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
-    bars = ax.bar(names, scores, color=colors, width=0.6)
-    ax.set_ylabel("Score")
-    ax.set_title(f"Evaluation at boundary {boundary_label}")
-    ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
-
-    for bar, score in zip(bars, scores):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.02,
-            f"{score:.3f}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-        )
-
-    fig.tight_layout()
-    return {f"eval/boundary_{boundary_label}": fig}
-
 
 C = TypeVar("C", bound=KLDivergenceTrainerConfig)
 
@@ -302,16 +271,10 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         if self.main_process():
             logger.info("EVAL | {}", eval_metrics)
-            step = self.global_step_counter_ // self.accumulate_steps
-            wandb.log(eval_metrics, step=step)
-
-            if len(eval_metrics) > 0:
-                boundary_label = f"{old_stage}_to_{new_stage}"
-                metrics_snapshot = dict(eval_metrics)
-                self.plotter.plot(
-                    lambda m=metrics_snapshot, l=boundary_label: _make_eval_bar_chart(m, l),
-                    step=step,
-                )
+            wandb.log(
+                eval_metrics,
+                step=(self.global_step_counter_ // self.accumulate_steps),
+            )
 
         logger.info(
             "STAGE | switching from stage {} to stage {} at {} tokens",
