@@ -210,7 +210,7 @@ class Plotter:
         model_cls = self.model_cls
 
         def plot_fn() -> Dict[str, Any]:
-            return model_cls.plot(intermediates)
+            return model_cls.plot(intermediates)  # type: ignore[no-any-return]
 
         self.plot(plot_fn, step)
 
@@ -242,9 +242,9 @@ class Plotter:
                     if self.save and self.save_dir:
                         safe_name = re.sub(r"[^\w\-.]", "_", name)
                         fig.savefig(
-                            self.save_dir / f"{safe_name}_step{step}.svg",
+                            self.save_dir / f"{safe_name}_step{step}.pdf",
                             bbox_inches="tight",
-                            pad_inches=0.3,
+                            pad_inches=0.05,
                         )
                     plt.close(fig)
             except Exception as e:

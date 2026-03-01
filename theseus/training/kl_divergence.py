@@ -99,7 +99,7 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
     ``kl_penalty = policy_loss - sg(reference_loss)``.
     """
 
-    CONFIG = KLDivergenceTrainerConfig
+    CONFIG = KLDivergenceTrainerConfig  # type: ignore[assignment]
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
@@ -122,9 +122,7 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
         self.replicas = spec.topology.replicas
         self.local_replicas = spec.topology.local_replicas
         self.total_steps = int(
-            sum(self.args.total_tokens)
-            / self.args.batch_size
-            / self.args.block_size
+            sum(self.args.total_tokens) / self.args.batch_size / self.args.block_size
         )
         return topology
 
@@ -150,7 +148,7 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
             )
             return type_cast(
                 KLDivergenceTrainState,
-                KLDivergenceTrainState.create(
+                KLDivergenceTrainState.create(  # type: ignore[no-untyped-call]
                     apply_fn=self.model.apply,
                     params=p,
                     base=base,
@@ -160,7 +158,7 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
             )
 
         state_shapes = jax.eval_shape(make_state, params)
-        self.state_sharding = flax.linen.logical_to_mesh_sharding(
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore[attr-defined]
             flax.linen.get_partition_spec(state_shapes),
             self.mesh,
             rules=tuple(self.model.sharding),
@@ -200,9 +198,7 @@ class KLDivergenceTrainer(BaseTrainer[C, M], Generic[C, M]):
             * (self.per_device_batch_size * self.local_replicas),
         )
         self.val_dls = [
-            s.get_async_batches(
-                self._val_batch_rows, split="val", deterministic_key=32
-            )
+            s.get_async_batches(self._val_batch_rows, split="val", deterministic_key=32)
             for s in self.strategies
         ]
 

@@ -63,9 +63,7 @@ def create_app(
     if cache_mode is None:
         cache_mode = os.environ.get("THESEUS_CACHE_MODE", "polling")
     if cache_poll_interval is None:
-        cache_poll_interval = float(
-            os.environ.get("THESEUS_CACHE_POLL_INTERVAL", "10")
-        )
+        cache_poll_interval = float(os.environ.get("THESEUS_CACHE_POLL_INTERVAL", "10"))
 
     # Initialize services
     status_dir = cluster_root / "status"

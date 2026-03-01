@@ -340,13 +340,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             cluster = spec.hardware.hosts[0].cluster
             project = spec.project or "general"
             group = spec.group if spec.group else "default"
-            save_dir = (
-                Path(cluster.results_dir)
-                / project
-                / group
-                / self.spec.name
-                / str(self.spec.id)
-            )
+            save_dir = Path(cluster.results_dir) / project / group / self.spec.name
             model_cls = self.MODEL if self.MODEL.plot is not Module.plot else None
             self.plotter = Plotter(
                 model_cls=model_cls,

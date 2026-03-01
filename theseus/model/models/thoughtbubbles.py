@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
+import numpy as np
 from typing import Optional, Tuple, List, Any, Type, Dict
 
 from theseus.model.models.base import GPT
@@ -41,11 +42,12 @@ class Thoughtbubbles(GPT):
         from matplotlib import pyplot as plt
         import seaborn as sns
 
+        ### plot cumulative scores
         scores = [i["new_cumulative_scores"] for i in intermediates["plots"].values()]
         scores = jnp.exp(jnp.stack(jnp.array(scores))[:, 0, 0])  # type: ignore
         fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
-        ax = sns.heatmap(scores, ax=ax)
+        ax = sns.heatmap(np.array(scores).astype(np.float32), ax=ax)
 
         return {"analysis/cum_scores": fig}
 

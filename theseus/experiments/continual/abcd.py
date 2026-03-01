@@ -3,7 +3,7 @@ import wandb
 import numpy as np
 from pathlib import Path
 
-from typing import Any, Dict, List, Generic, TypeVar, Callable
+from typing import Any, Callable, Dict, Generic, List, Tuple, TypeVar
 from loguru import logger
 from jax.experimental import multihost_utils
 
@@ -15,11 +15,9 @@ from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.kl_divergence import (
     KLDivergenceTrainer,
     KLDivergenceTrainerConfig,
-    KLConfig,
 )
-from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
-from theseus.plot import PALETTE
+from theseus.plot import PALETTE, SPINE
 
 
 @dataclass
@@ -107,10 +105,6 @@ class ABCDConfig(BaseTrainerConfig):
 C = TypeVar("C", bound=ABCDConfig)
 
 
-@dataclass
-class ABCDHFConfig(ABCDConfig, HFTrainerConfig): ...
-
-
 def _make_eval_bar_chart(
     eval_metrics: dict[str, float], boundary_label: str
 ) -> Dict[str, Any]:
@@ -119,19 +113,33 @@ def _make_eval_bar_chart(
     Called on the Plotter worker thread where matplotlib is already
     initialized and apply_theme() has been applied.
     """
+    import seaborn as sns
     from matplotlib import pyplot as plt
 
     names = list(eval_metrics.keys())
-    scores = list(eval_metrics.values())
-    colors = [PALETTE[i % len(PALETTE)] for i in range(len(names))]
+    scores = [float(v) for v in eval_metrics.values()]
+    colors = PALETTE[: len(names)]
 
     fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
-    bars = ax.bar(names, scores, color=colors, width=0.6)
+    sns.barplot(
+        x=names,
+        y=scores,
+        hue=names,
+        palette=colors,
+        width=0.6,
+        ax=ax,
+        dodge=False,
+        legend=False,
+    )
+    # Restore categorical ticks (the MaxNLocator patch in apply_theme
+    # overwrites them with a numeric locator on axes creation).
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names)
     ax.set_ylabel("Score")
     ax.set_title(f"Evaluation at boundary {boundary_label}")
     ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
 
-    for bar, score in zip(bars, scores):
+    for bar, score in zip(ax.patches, scores):
         ax.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.02,
@@ -143,6 +151,45 @@ def _make_eval_bar_chart(
 
     fig.tight_layout()
     return {f"eval/boundary_{boundary_label}": fig}
+
+
+def _make_eval_timeline_chart(
+    eval_history: Dict[str, List[Tuple[int, float]]],
+    boundary_tokens: List[int],
+) -> Dict[str, Any]:
+    """Create a line chart tracking evaluation metrics across boundaries.
+
+    Each metric is plotted as a separate line; vertical dash-dot lines
+    mark dataset/stage boundaries.
+    """
+    import seaborn as sns
+    from matplotlib import pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    for i, (name, points) in enumerate(eval_history.items()):
+        tokens = [p[0] for p in points]
+        scores = [p[1] for p in points]
+        color = PALETTE[i % len(PALETTE)]
+        sns.lineplot(
+            x=tokens,
+            y=scores,
+            marker="o",
+            label=name,
+            color=color,
+            ax=ax,
+            errorbar=None,
+        )
+
+    for bt in boundary_tokens:
+        ax.axvline(x=bt, color=SPINE, linestyle="-.", linewidth=0.9, alpha=0.7)
+
+    ax.set_xlabel("Tokens")
+    ax.set_ylabel("Score")
+    ax.set_title("Evaluation over training")
+    ax.legend()
+    fig.tight_layout()
+    return {"eval/timeline": fig}
 
 
 class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
@@ -363,6 +410,8 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         # Track current primary dataset index for boundary logging
         self._current_dl_idx: int = 0
+        self._eval_history: Dict[str, List[Tuple[int, float]]] = {}
+        self._boundary_tokens: List[int] = []
 
         # Precompute segment boundaries (token positions)
         self._segment_starts: List[int] = [0]
@@ -406,12 +455,26 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
                 logger.info("EVAL | {}", eval_metrics)
                 step = self.global_step_counter_ // self.accumulate_steps
                 wandb.log(eval_metrics, step=step)
+                self._boundary_tokens.append(current_ntok)
 
                 if len(eval_metrics) > 0:
                     boundary_label = f"{self._current_dl_idx}_to_{primary_idx}"
                     metrics_snapshot = dict(eval_metrics)
                     self.plotter.plot(
-                        lambda m=metrics_snapshot, l=boundary_label: _make_eval_bar_chart(m, l),
+                        lambda m=metrics_snapshot,  # type: ignore[misc]
+                        label=boundary_label: _make_eval_bar_chart(m, label),
+                        step=step,
+                    )
+
+                    for k, v in metrics_snapshot.items():
+                        self._eval_history.setdefault(k, []).append(
+                            (current_ntok, float(v))
+                        )
+                    history_snap = {k: list(v) for k, v in self._eval_history.items()}
+                    boundaries_snap = list(self._boundary_tokens)
+                    self.plotter.plot(
+                        lambda h=history_snap,  # type: ignore[misc]
+                        b=boundaries_snap: _make_eval_timeline_chart(h, b),
                         step=step,
                     )
 
@@ -501,13 +564,13 @@ class ABCDKLConfig(KLDivergenceTrainerConfig):
             100_000_000,
             100_000_000,
         ],
-    )  # type: ignore
+    )
 
     warmup_pct: float = field("optimization/warmup_pct", default=0.01)
     decay_pct: float = field("optimization/decay_pct", default=0.01)
     constant_pct: float = field("optimization/constant_pct", default=0.30)
 
-    datasets: List[List[Sampling]] = field(  # type: ignore
+    datasets: List[List[Sampling]] = field(
         "training/dataset",
         default_factory=lambda: [
             [Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)],
@@ -703,6 +766,9 @@ class ABCDKLDivergenceTrainer(KLDivergenceTrainer[CKL, M], Generic[CKL, M]):
         # Set initial beta for stage 0
         self.state = self.state.replace(beta=self.args.betas[0])
 
+        self._eval_history: Dict[str, List[Tuple[int, float]]] = {}
+        self._boundary_tokens: List[int] = []
+
     # ------------------------------------------------------------------
     # Stage boundary handling
     # ------------------------------------------------------------------
@@ -719,12 +785,27 @@ class ABCDKLDivergenceTrainer(KLDivergenceTrainer[CKL, M], Generic[CKL, M]):
             logger.info("EVAL | {}", eval_metrics)
             step = self.global_step_counter_ // self.accumulate_steps
             wandb.log(eval_metrics, step=step)
+            current_ntok = self._current_token_position()
+            self._boundary_tokens.append(current_ntok)
 
             if len(eval_metrics) > 0:
                 boundary_label = f"{old_stage}_to_{new_stage}"
                 metrics_snapshot = dict(eval_metrics)
                 self.plotter.plot(
-                    lambda m=metrics_snapshot, l=boundary_label: _make_eval_bar_chart(m, l),
+                    lambda m=metrics_snapshot,  # type: ignore[misc]
+                    label=boundary_label: _make_eval_bar_chart(m, label),
+                    step=step,
+                )
+
+                for k, v in metrics_snapshot.items():
+                    self._eval_history.setdefault(k, []).append(
+                        (current_ntok, float(v))
+                    )
+                history_snap = {k: list(v) for k, v in self._eval_history.items()}
+                boundaries_snap = list(self._boundary_tokens)
+                self.plotter.plot(
+                    lambda h=history_snap,  # type: ignore[misc]
+                    b=boundaries_snap: _make_eval_timeline_chart(h, b),
                     step=step,
                 )
 

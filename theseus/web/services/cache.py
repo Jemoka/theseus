@@ -476,9 +476,7 @@ class JobCache:
         key = (project, group, name, run_id)
         self._entries.pop(key, None)
         # Also clean up path_to_key
-        self._path_to_key = {
-            p: k for p, k in self._path_to_key.items() if k != key
-        }
+        self._path_to_key = {p: k for p, k in self._path_to_key.items() if k != key}
 
     def invalidate(self, project: str, group: str, name: str, run_id: str) -> None:
         """Force re-read a specific job on next incremental scan."""

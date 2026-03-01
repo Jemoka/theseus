@@ -110,7 +110,7 @@ class InlineMockLinenModule:
         static_kwargs, dynamic_kwargs = _split_kwargs(kwargs)  # type: ignore[no-untyped-call]
         init_fn = functools.partial(self.obj.init, **static_kwargs)
         apply_fn = functools.partial(
-            self.obj.apply, **static_kwargs, mutable=["intermediates", "plots"]
+            self.obj.apply, mutable=["intermediates", "plots"], **static_kwargs
         )
 
         if self.param_tree is None:

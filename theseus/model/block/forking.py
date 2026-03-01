@@ -227,6 +227,7 @@ class ForkingBlock(ThoughtBlock):
             forking_scores_cum, top_k_indices, axis=-1
         )
         new_token_indices = jnp.take_along_axis(token_index, orig_indices, axis=-1)
+        self.sow("plots", "new_cumulative_scores", new_cumulative_scores)
 
         return x_to_consider, new_cumulative_scores, new_token_indices
 
