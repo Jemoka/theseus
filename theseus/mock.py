@@ -106,6 +106,27 @@ class InlineMockLinenModule:
         self.param_tree = None
         self.key = key
 
+    def intermediates(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        static_kwargs, dynamic_kwargs = _split_kwargs(kwargs)  # type: ignore[no-untyped-call]
+        init_fn = functools.partial(self.obj.init, **static_kwargs)
+        apply_fn = functools.partial(
+            self.obj.apply, **static_kwargs, mutable=["intermediates", "plots"]
+        )
+
+        if self.param_tree is None:
+            key, self.key = jax.random.split(self.key)
+            self.param_tree = jax.eval_shape(init_fn, key, *args, **dynamic_kwargs)
+
+        output_shape, mutated_shape = jax.eval_shape(
+            apply_fn, self.param_tree, *args, **dynamic_kwargs
+        )
+        result = {}
+        for col in ("intermediates", "plots"):
+            shapes = mutated_shape.get(col, {})
+            if jax.tree.leaves(shapes):
+                result[col] = _mock_shape(shapes, self.key)  # type: ignore[no-untyped-call]
+        return result
+
     def __call__(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         static_kwargs, dynamic_kwargs = _split_kwargs(kwargs)  # type: ignore[no-untyped-call]
         init_fn = functools.partial(self.obj.init, **static_kwargs)
