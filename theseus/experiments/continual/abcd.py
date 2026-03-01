@@ -3,7 +3,7 @@ import wandb
 import numpy as np
 from pathlib import Path
 
-from typing import Any, List, Generic, TypeVar, Callable
+from typing import Any, Dict, List, Generic, TypeVar, Callable
 from loguru import logger
 from jax.experimental import multihost_utils
 
@@ -14,6 +14,7 @@ from theseus.base import Topology, ExecutionSpec, PyTree
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.huggingface import HFTrainerConfig
 from theseus.training.flywheel.strategy import Sampling, DatasetStyle, Strategy
+from theseus.plot import PALETTE
 
 
 @dataclass
@@ -103,6 +104,40 @@ C = TypeVar("C", bound=ABCDConfig)
 
 @dataclass
 class ABCDHFConfig(ABCDConfig, HFTrainerConfig): ...
+
+
+def _make_eval_bar_chart(
+    eval_metrics: dict[str, float], boundary_label: str
+) -> Dict[str, Any]:
+    """Create a bar chart of evaluation results at a dataset boundary.
+
+    Called on the Plotter worker thread where matplotlib is already
+    initialized and apply_theme() has been applied.
+    """
+    from matplotlib import pyplot as plt
+
+    names = list(eval_metrics.keys())
+    scores = list(eval_metrics.values())
+    colors = [PALETTE[i % len(PALETTE)] for i in range(len(names))]
+
+    fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
+    bars = ax.bar(names, scores, color=colors, width=0.6)
+    ax.set_ylabel("Score")
+    ax.set_title(f"Evaluation at boundary {boundary_label}")
+    ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
+
+    for bar, score in zip(bars, scores):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.02,
+            f"{score:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    fig.tight_layout()
+    return {f"eval/boundary_{boundary_label}": fig}
 
 
 class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
@@ -364,10 +399,16 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
             if self.main_process():
                 logger.info("EVAL | {}", eval_metrics)
-                wandb.log(
-                    eval_metrics,
-                    step=(self.global_step_counter_ // self.accumulate_steps),
-                )
+                step = self.global_step_counter_ // self.accumulate_steps
+                wandb.log(eval_metrics, step=step)
+
+                if self.plotter is not None and len(eval_metrics) > 0:
+                    boundary_label = f"{self._current_dl_idx}_to_{primary_idx}"
+                    metrics_snapshot = dict(eval_metrics)
+                    self.plotter.plot(
+                        lambda m=metrics_snapshot, l=boundary_label: _make_eval_bar_chart(m, l),
+                        step=step,
+                    )
 
             logger.info(
                 "DATASET | switching primary from {} to {} at {} tokens (weights: {})",
