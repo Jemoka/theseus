@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue, Empty
 from threading import Thread
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from theseus.config import field
 
@@ -168,10 +168,10 @@ class PlotsConfig:
     save: bool = field("logging/plots/save", default=False)
 
 
-class PlotsDispatcher:
+class Plotter:
     def __init__(
         self,
-        model_cls: Type[Any],
+        model_cls: Optional[Type[Any]] = None,
         save: bool = False,
         save_dir: Optional[Path] = None,
     ) -> None:
@@ -188,12 +188,31 @@ class PlotsDispatcher:
         self.thread = Thread(target=self._worker, daemon=True)
         self.thread.start()
 
-    def submit(self, intermediates: Any, step: int) -> None:
+    def plot(self, plot_fn: Callable[[], Dict[str, Any]], step: int) -> None:
+        """Submit an arbitrary plot function to be executed in the worker thread.
+
+        The callable is invoked on the worker thread where matplotlib is
+        initialized and apply_theme() has already been called.
+        """
         if self.error is not None:
             err = self.error
             self.error = None
             raise err
-        self.queue.put((intermediates, step))
+        self.queue.put((plot_fn, step))
+
+    def submit(self, intermediates: Any, step: int) -> None:
+        """Submit model intermediates for plotting (legacy API).
+
+        No-op when model_cls is None (model has no plot() override).
+        """
+        if self.model_cls is None:
+            return
+        model_cls = self.model_cls
+
+        def plot_fn() -> Dict[str, Any]:
+            return model_cls.plot(intermediates)
+
+        self.plot(plot_fn, step)
 
     def _worker(self) -> None:
         import matplotlib
@@ -215,8 +234,8 @@ class PlotsDispatcher:
                 break
 
             try:
-                intermediates, step = item
-                figures: Dict[str, Any] = self.model_cls.plot(intermediates)
+                plot_fn, step = item
+                figures: Dict[str, Any] = plot_fn()
 
                 for name, fig in figures.items():
                     wandb.log({name: wandb.Image(fig)}, step=step)
@@ -243,3 +262,7 @@ class PlotsDispatcher:
 
     def __del__(self) -> None:
         self.close()
+
+
+# Backwards compatibility alias
+PlotsDispatcher = Plotter
