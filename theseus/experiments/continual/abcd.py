@@ -717,10 +717,16 @@ class ABCDKLDivergenceTrainer(KLDivergenceTrainer[CKL, M], Generic[CKL, M]):
 
         if self.main_process():
             logger.info("EVAL | {}", eval_metrics)
-            wandb.log(
-                eval_metrics,
-                step=(self.global_step_counter_ // self.accumulate_steps),
-            )
+            step = self.global_step_counter_ // self.accumulate_steps
+            wandb.log(eval_metrics, step=step)
+
+            if len(eval_metrics) > 0:
+                boundary_label = f"{old_stage}_to_{new_stage}"
+                metrics_snapshot = dict(eval_metrics)
+                self.plotter.plot(
+                    lambda m=metrics_snapshot, l=boundary_label: _make_eval_bar_chart(m, l),
+                    step=step,
+                )
 
         logger.info(
             "STAGE | switching from stage {} to stage {} at {} tokens",
