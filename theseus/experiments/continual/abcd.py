@@ -402,7 +402,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
                 step = self.global_step_counter_ // self.accumulate_steps
                 wandb.log(eval_metrics, step=step)
 
-                if self.plotter is not None and len(eval_metrics) > 0:
+                if len(eval_metrics) > 0:
                     boundary_label = f"{self._current_dl_idx}_to_{primary_idx}"
                     metrics_snapshot = dict(eval_metrics)
                     self.plotter.plot(
