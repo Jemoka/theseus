@@ -130,6 +130,7 @@ def dispatch(
     check_availability: bool = True,
     mem: str | None = None,
     timeout: float = 60.0,
+    extra_uv_groups: list[str] | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -231,6 +232,7 @@ def dispatch(
             mem,
             dirty,
             timeout,
+            extra_uv_groups=extra_uv_groups or [],
         )
     else:
         logger.info(f"DISPATCH | submitting via SSH to {solve_result.host_config.ssh}")
@@ -243,6 +245,7 @@ def dispatch(
             bootstrap_py_content,
             dirty,
             timeout,
+            extra_uv_groups=extra_uv_groups or [],
         )
 
 
@@ -258,6 +261,7 @@ def _dispatch_slurm(
     mem: str | None,
     dirty: bool,
     timeout: float,
+    extra_uv_groups: list[str] | None = None,
 ) -> SlurmResult:
     """Dispatch job via SLURM."""
     assert solve_result.host_config is not None
@@ -300,7 +304,7 @@ def _dispatch_slurm(
         account=host_config.account,
         qos=host_config.qos,
         exclude=host_config.exclude,
-        uv_groups=host_config.uv_groups,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         payload_extract_to=work_dir,
         output=f"{cluster.log_dir}/{job_name}-%j.out",
         juicefs_mount=juicefs_mount,
@@ -336,6 +340,7 @@ def _dispatch_plain(
     bootstrap_py_content: str,
     dirty: bool,
     timeout: float,
+    extra_uv_groups: list[str] | None = None,
 ) -> RunResult:
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
     assert solve_result.host_config is not None
@@ -359,7 +364,7 @@ def _dispatch_plain(
         command="python _bootstrap_dispatch.py",
         root_dir=cluster.root,
         is_slurm=False,  # SSH mode - no SBATCH directives
-        uv_groups=host_config.uv_groups,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
         bootstrap_py=bootstrap_py_content,
@@ -608,6 +613,7 @@ def dispatch_repl(
     startup_timeout: float = 180.0,
     slurm_wait_timeout: float | None = None,
     sync_enabled: bool = False,
+    extra_uv_groups: list[str] | None = None,
 ) -> ReplResult:
     """Dispatch an interactive Jupyter session on selected infrastructure."""
     solve_result = solve_or_raise(
@@ -650,6 +656,7 @@ def dispatch_repl(
             startup_timeout=startup_timeout,
             slurm_wait_timeout=slurm_wait_timeout,
             sync_enabled=sync_enabled,
+            extra_uv_groups=extra_uv_groups or [],
         )
 
     return _dispatch_repl_plain(
@@ -663,6 +670,7 @@ def dispatch_repl(
         timeout=timeout,
         startup_timeout=startup_timeout,
         sync_enabled=sync_enabled,
+        extra_uv_groups=extra_uv_groups or [],
     )
 
 
@@ -677,6 +685,7 @@ def _dispatch_repl_plain(
     timeout: float,
     startup_timeout: float,
     sync_enabled: bool,
+    extra_uv_groups: list[str] | None = None,
 ) -> ReplResult:
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
@@ -697,7 +706,7 @@ def _dispatch_repl_plain(
         command=_repl_command(sync_enabled),
         root_dir=cluster.root,
         is_slurm=False,
-        uv_groups=host_config.uv_groups,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
     )
@@ -854,6 +863,7 @@ def _dispatch_repl_slurm(
     startup_timeout: float,
     slurm_wait_timeout: float | None,
     sync_enabled: bool,
+    extra_uv_groups: list[str] | None = None,
 ) -> ReplResult:
     from theseus.dispatch.slurm import cancel, wait_until_running
 
@@ -891,7 +901,7 @@ def _dispatch_repl_slurm(
         account=host_config.account,
         qos=host_config.qos,
         exclude=host_config.exclude,
-        uv_groups=host_config.uv_groups,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         payload_extract_to=work_dir,
         output=output_template,
         juicefs_mount=juicefs_mount,

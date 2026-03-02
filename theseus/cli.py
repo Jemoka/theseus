@@ -449,6 +449,12 @@ def run(
     default=True,
     help="Include uncommitted changes (default: --dirty)",
 )  # type: ignore[misc]
+@click.option(
+    "--target",
+    "uv_targets",
+    multiple=True,
+    help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -464,6 +470,7 @@ def submit(
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
+    uv_targets: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -602,6 +609,7 @@ def submit(
         dispatch_config=dispatch_cfg,
         dirty=dirty,
         mem=mem,
+        extra_uv_groups=list(uv_targets) if uv_targets else None,
     )
 
     if not result.ok:
@@ -681,6 +689,12 @@ def submit(
     default=None,
     help="Optional timeout (seconds) while waiting for SLURM allocation",
 )  # type: ignore[misc]
+@click.option(
+    "--target",
+    "uv_targets",
+    multiple=True,
+    help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
+)  # type: ignore[misc]
 def repl(
     dispatch_config: str | None,
     chip: str | None,
@@ -695,6 +709,7 @@ def repl(
     port: int,
     startup_timeout: float,
     slurm_wait_timeout: float | None,
+    uv_targets: tuple[str, ...],
 ) -> None:
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
@@ -886,6 +901,7 @@ def repl(
         startup_timeout=startup_timeout,
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,
+        extra_uv_groups=list(uv_targets) if uv_targets else None,
     )
 
     if not result.ok:
