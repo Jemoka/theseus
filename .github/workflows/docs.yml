@@ -5,7 +5,7 @@ on:
     branches:
       - master
     paths:
-      - "doc/**"
+      - "docs/**"
       - "mkdocs.yml"
       - "pyproject.toml"
       - ".github/workflows/docs.yml"
