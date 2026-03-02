@@ -65,6 +65,12 @@ def _call_to_hf(impl: str, params, n_layers: int, hf_cfg):
 def main(suffix, root, name, output, project, group, export_base):
     """Export a Theseus backbone checkpoint to HuggingFace format."""
 
+    import os
+
+    # disable wandb
+    os.environ["WANDB_MODE"] = "disabled"
+
+    # build ExecutionSpec to locate the checkpoint, even though we won't actually run a job here
     spec = ExecutionSpec.local(root, name=name, project=project, group=group)
 
     # Pre-load config.yaml to find the concrete job class, since RestoreableJob is abstract
