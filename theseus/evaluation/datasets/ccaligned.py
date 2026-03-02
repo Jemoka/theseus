@@ -11,6 +11,7 @@ registered as ``ccaligned_<lang>`` (e.g. ``ccaligned_fr_xx``).
 
 from theseus.data.datasets.ccaligned import CCAligned
 from theseus.evaluation import PerplexityEvaluation
+from theseus.registry import EVALUATIONS
 
 
 # All language codes available on statmt.org/cc-aligned/sentence-aligned/
@@ -164,3 +165,5 @@ def _make_lang_eval(lang: str) -> type[CCAlignedEval]:
 CCALIGNED_EVALS: dict[str, type[CCAlignedEval]] = {
     f"ccaligned_{lang.lower()}": _make_lang_eval(lang) for lang in CCALIGNED_LANGS
 }
+
+EVALUATIONS.update(CCALIGNED_EVALS)

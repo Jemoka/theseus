@@ -10,10 +10,12 @@ learning experiments.
 from datasets import load_dataset
 
 from theseus.evaluation import PerplexityEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import encode_chat_template, get_tokenizer
 from theseus.data.datasets import ChatTurn
 
 
+@evaluation("mnli_ppl")
 class MNLIPerplexityEval(PerplexityEvaluation):
     """Perplexity on MNLI validation_matched split."""
 
@@ -48,6 +50,7 @@ class MNLIPerplexityEval(PerplexityEvaluation):
         return encode_chat_template(chat, self.encoder, tokenize=False)
 
 
+@evaluation("qqp_ppl")
 class QQPPerplexityEval(PerplexityEvaluation):
     """Perplexity on QQP validation split."""
 
@@ -81,6 +84,7 @@ class QQPPerplexityEval(PerplexityEvaluation):
         return encode_chat_template(chat, self.encoder, tokenize=False)
 
 
+@evaluation("sst2_ppl")
 class SST2PerplexityEval(PerplexityEvaluation):
     """Perplexity on SST-2 validation split."""
 
@@ -113,6 +117,7 @@ class SST2PerplexityEval(PerplexityEvaluation):
         return encode_chat_template(chat, self.encoder, tokenize=False)
 
 
+@evaluation("siqa_ppl")
 class SIQAPerplexityEval(PerplexityEvaluation):
     """Perplexity on Social IQa validation split."""
 
@@ -151,6 +156,7 @@ class SIQAPerplexityEval(PerplexityEvaluation):
         return encode_chat_template(chat, self.encoder, tokenize=False)
 
 
+@evaluation("winogrande_ppl")
 class WinograndePerplexityEval(PerplexityEvaluation):
     """Perplexity on Winogrande validation split."""
 
@@ -185,6 +191,7 @@ class WinograndePerplexityEval(PerplexityEvaluation):
         return encode_chat_template(chat, self.encoder, tokenize=False)
 
 
+@evaluation("fineweb_ppl")
 class FineWebPerplexityEval(PerplexityEvaluation):
     """Perplexity on a sample from FineWeb."""
 

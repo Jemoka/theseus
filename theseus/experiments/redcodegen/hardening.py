@@ -1,7 +1,9 @@
 import optax
 from theseus.training.contrastive import BackbonedContrastiveTrainer
+from theseus.registry import job
 
 
+@job("redcodegen/train/hardening")
 class Hardening(BackbonedContrastiveTrainer):
     """Harden a model by running cybersecurity contrastive datasets via DPO.
 

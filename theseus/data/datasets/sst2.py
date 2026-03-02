@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(sentence: str, label: str) -> ChatTemplate:
@@ -15,6 +16,7 @@ sentence: {sentence}
     ]
 
 
+@dataset("sst2")
 class SST2(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("stanfordnlp/sst2", split=split)

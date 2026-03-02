@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 _ZIP_URL = (
@@ -123,6 +124,7 @@ def template_dictionary_entry(word: str, pos: str, definition: str) -> ChatTempl
     ]
 
 
+@dataset("mtob")
 class MTOB(ChatTemplateDataset):
     """MTOB: Machine Translation from One Book (Grammar-Book benchmark).
 

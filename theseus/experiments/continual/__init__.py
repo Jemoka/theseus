@@ -1,12 +1,5 @@
-from theseus.job import BasicJob
-from typing import Any
-
+# Jobs are registered via @job decorators in their definition modules.
 try:
-    from .abcd import ABCDTrainer, ABCDKLTrainer
-
-    JOBS: dict[str, type[BasicJob[Any]]] = {
-        "continual/train/abcd": ABCDTrainer,
-        "continual/train/abcd_kl": ABCDKLTrainer,
-    }
+    from .abcd import ABCDTrainer, ABCDKLTrainer  # noqa: F401
 except ImportError:
-    JOBS = {}
+    pass

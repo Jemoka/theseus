@@ -5,6 +5,7 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -63,6 +64,7 @@ def template(context: str, question: str, choices: dict[str, str]) -> ChatTempla
     ]
 
 
+@evaluation("longhealth")
 class LongHealthEval(RolloutEvaluation):
     """LongHealth long-context clinical QA evaluation."""
 

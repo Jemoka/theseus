@@ -3,8 +3,10 @@ from collections.abc import Iterator
 from datasets import load_dataset
 
 from theseus.data.datasets import StreamingPretrainingDataset
+from theseus.registry import dataset
 
 
+@dataset("pg19")
 class PG19(StreamingPretrainingDataset):
     """Project Gutenberg books (sedthh/gutenberg_english).
 

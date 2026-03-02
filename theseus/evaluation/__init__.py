@@ -7,10 +7,7 @@ from .base import (
     Evaluator,
 )
 
-EVALUATIONS: dict[str, type[Evaluation]] = {}
-
 __all__ = [
-    "EVALUATIONS",
     "Evaluation",
     "RolloutEvaluation",
     "EncodingEvaluation",

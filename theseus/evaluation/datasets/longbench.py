@@ -3,6 +3,7 @@ from typing import Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -30,6 +31,7 @@ Answer with only the letter (A, B, C, or D):""",
     ]
 
 
+@evaluation("longbench")
 class LongBench(RolloutEvaluation):
     def __init__(self, split: str = "train") -> None:
         self.ds = load_dataset("THUDM/LongBench-v2", split="train")

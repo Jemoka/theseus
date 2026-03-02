@@ -1,8 +1,10 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
+@dataset("harmfulqa")
 class HarmfulQA(ChatTemplateDataset):
     """HarmfulQA (Bhardwaj & Poria, 2023).
 

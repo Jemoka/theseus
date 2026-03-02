@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(
@@ -24,6 +25,7 @@ Answer with only the letter (A, B, C, or D):""",
     ]
 
 
+@dataset("longbench")
 class LongBench(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("THUDM/LongBench-v2", split="train")

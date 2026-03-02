@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(story: str, query: str, target_text: str) -> ChatTemplate:
@@ -20,6 +21,7 @@ def template(story: str, query: str, target_text: str) -> ChatTemplate:
     ]
 
 
+@dataset("clutrr")
 class CLUTRR(ChatTemplateDataset):
     """CLUTRR relational reasoning benchmark (Facebook Research).
 

@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(question: str, choices: list[str], answer: str) -> ChatTemplate:
@@ -20,6 +21,7 @@ def template(question: str, choices: list[str], answer: str) -> ChatTemplate:
     ]
 
 
+@dataset("mmlu")
 class MMLU(ChatTemplateDataset):
     """MMLU: Massive Multitask Language Understanding (Hendrycks et al., 2021).
 

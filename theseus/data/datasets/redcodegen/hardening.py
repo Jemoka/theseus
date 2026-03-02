@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn, ContrastiveChatTemplateDataset
+from theseus.registry import dataset
 
 
 def template(prompt: str, label: str) -> ChatTemplate:
@@ -16,6 +17,7 @@ def template(prompt: str, label: str) -> ChatTemplate:
     ]
 
 
+@dataset("redcodegen__hardening")
 class RCGHardeningDataset(ContrastiveChatTemplateDataset):
     def __init__(self, split: str = "noop", config: str = "") -> None:
         """Load the RedCodeGen repo generated contrastive learning dataset."""

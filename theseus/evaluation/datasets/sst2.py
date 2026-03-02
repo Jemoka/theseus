@@ -3,6 +3,7 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -22,6 +23,7 @@ sentence: {sentence}
     ]
 
 
+@evaluation("sst2")
 class SST2Eval(RolloutEvaluation):
     """SST-2 sentiment evaluation using validation split."""
 

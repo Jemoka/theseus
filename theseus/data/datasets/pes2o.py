@@ -3,8 +3,10 @@ from collections.abc import Iterator
 from datasets import load_dataset
 
 from theseus.data.datasets import StreamingPretrainingDataset
+from theseus.registry import dataset
 
 
+@dataset("pes2o")
 class Pes2O(StreamingPretrainingDataset):
     """Scientific papers from the peS2o corpus (AllenAI).
 

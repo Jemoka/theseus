@@ -3,6 +3,7 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -26,6 +27,7 @@ def template(story: str, query: str) -> ChatTemplate:
     ]
 
 
+@evaluation("clutrr")
 class CLUTRREval(RolloutEvaluation):
     """CLUTRR relational reasoning evaluation using test split."""
 

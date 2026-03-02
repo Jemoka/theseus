@@ -3,8 +3,10 @@ import optax
 from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.training.backbone import BackbonedTrainer
 from theseus.model.models import Llama
+from theseus.registry import job
 
 
+@job("llama/train/pretrain")
 class PretrainLlama(BaseTrainer[BaseTrainerConfig, Llama]):
     MODEL = Llama
     CONFIG = BaseTrainerConfig
@@ -14,6 +16,7 @@ class PretrainLlama(BaseTrainer[BaseTrainerConfig, Llama]):
         return "wsd"  # warmup-stable-decay schedule
 
 
+@job("llama/train/finetune")
 class FinetuneBackboneLlama(BackbonedTrainer):
     """Finetune from a pretrained Llama backbone.
 
