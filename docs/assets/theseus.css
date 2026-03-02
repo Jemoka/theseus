@@ -1,0 +1,791 @@
+/* ============================================================
+   theseus docs — IBM Plex + flat/dense design system
+   mirrors theseus/web/static/styles.css aesthetic
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+
+/* ── Design tokens ── */
+:root {
+    --gray-3: #929292;
+    --gray-2: #D5D5D5;
+    --gray-1: #EBEBEB;
+
+    --bg: #F7F7F7;
+    --fg: #2F3338;
+    --accent: #434D5F;
+
+    --blue: #37A5BE;
+    --green: #26A671;
+    --yellow: #EAEDAD;
+    --yellow-accent: #DCE279;
+    --yellow-fg: #84876C;
+    --orange: #F27200;
+    --red: #FF3900;
+
+    --radius: 2px;
+}
+
+/* ── Material theme variable overrides ── */
+:root,
+[data-md-color-scheme="default"] {
+    /* Primary / accent palette
+       Material uses fg-color as the header *background* and bg-color as the
+       header *text/icon* color — so invert them for a light header. */
+    --md-primary-fg-color:        #ffffff;
+    --md-primary-fg-color--light: #f3f3f3;
+    --md-primary-fg-color--dark:  #EBEBEB;
+    --md-primary-bg-color:        #2F3338;
+    --md-primary-bg-color--light: #434D5F;
+
+    --md-accent-fg-color:         #37A5BE;
+    --md-accent-fg-color--transparent: rgba(55, 165, 190, 0.1);
+    --md-accent-bg-color:         #F7F7F7;
+
+    /* Text colours */
+    --md-default-fg-color:              #2F3338;
+    --md-default-fg-color--light:       #434D5F;
+    --md-default-fg-color--lighter:     #929292;
+    --md-default-fg-color--lightest:    #D5D5D5;
+    --md-default-bg-color:              #F7F7F7;
+    --md-default-bg-color--light:       #EBEBEB;
+    --md-default-bg-color--lighter:     #f3f3f3;
+    --md-default-bg-color--lightest:    #ffffff;
+
+    /* Footer */
+    --md-footer-fg-color:               #929292;
+    --md-footer-fg-color--light:        #D5D5D5;
+    --md-footer-fg-color--lighter:      #EBEBEB;
+    --md-footer-bg-color:               #2F3338;
+    --md-footer-bg-color--dark:         #1a1d21;
+
+    /* Typeset */
+    --md-typeset-font-size:    0.875rem; /* 14px */
+    --md-typeset-color:        #2F3338;
+    --md-typeset-a-color:      #37A5BE;
+
+    /* Code — ayu-light palette */
+    --md-code-fg-color:        #575f66;
+    --md-code-bg-color:        #fafafa;
+    --md-code-hl-color:        rgba(57, 158, 230, 0.12);
+
+    /* Fonts */
+    --md-text-font:  "IBM Plex Sans";
+    --md-code-font:  "IBM Plex Mono";
+}
+
+/* ── Global typography ── */
+body,
+.md-typeset {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Header / nav bar — light ── */
+.md-header {
+    background: white;
+    box-shadow: none;
+    border-bottom: 1px solid var(--gray-1);
+    color: var(--fg);
+}
+
+/* ── Navigation tabs — hidden ── */
+.md-tabs {
+    display: none !important;
+}
+
+/* Hide the logo icon everywhere, collapse its space */
+.md-logo,
+.md-header__button.md-logo {
+    display: none !important;
+    width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.md-header__title {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.3px;
+    color: var(--fg);
+    margin-left: 0.7rem  !important;
+}
+
+.md-header__button {
+    color: var(--gray-3);
+}
+
+.md-header__button:hover {
+    color: var(--fg);
+}
+
+/* Search bar */
+.md-search__form {
+    background: var(--gray-1);
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+}
+
+.md-search__form:hover,
+.md-search__form:focus-within {
+    background: white;
+    border-color: var(--gray-3);
+}
+
+.md-search__input {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 13px;
+    color: var(--fg);
+}
+
+.md-search__input::placeholder {
+    color: var(--gray-3);
+    font-size: 12px;
+    letter-spacing: 0.3px;
+}
+
+
+/* ── Sidebar ── */
+.md-sidebar {
+    background: #F7F7F7;
+}
+
+.md-nav__title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--gray-3);
+    text-transform: uppercase;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--gray-1);
+    margin-bottom: 4px;
+}
+
+.md-nav__item .md-nav__link {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--accent);
+    padding: 3px 8px;
+    border-radius: var(--radius);
+    transition: all 0.1s ease;
+}
+
+.md-nav__item .md-nav__link:hover {
+    color: var(--fg);
+    background: var(--gray-1);
+}
+
+.md-nav__item .md-nav__link--active {
+    font-weight: 600;
+    color: var(--fg);
+    background: transparent;
+}
+
+/* Collapsible section headers render as <label> elements; Material adds extra
+   padding-inline-start to them to accommodate the expand icon, making them
+   visually indent more than sibling <a> page links at the same depth.
+   Override to keep the left edge flush. */
+.md-nav__item--nested > label.md-nav__link {
+    padding-inline-start: 8px !important;
+}
+
+/* Nested nav indent lines */
+.md-nav__item--nested > .md-nav {
+    border-left: 1px solid var(--gray-2);
+    margin-left: 12px;
+    padding-left: 8px;
+}
+
+/* TOC sidebar */
+.md-nav--secondary .md-nav__link {
+    font-size: 12px;
+}
+
+/* ── Main content area ── */
+.md-main__inner {
+    background: #F7F7F7;
+}
+
+.md-content__inner {
+    padding: 2rem 1.5rem;
+    max-width: 860px;
+}
+
+/* ── Typeset: headings ── */
+.md-typeset h1 {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--fg);
+    border-bottom: 2px solid var(--gray-1);
+    padding-bottom: 10px;
+    margin-bottom: 1.5rem;
+    letter-spacing: -0.3px;
+}
+
+.md-typeset h2 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--fg);
+    border-bottom: 1px solid var(--gray-1);
+    padding-bottom: 6px;
+    margin-top: 2rem;
+    margin-bottom: 0.75rem;
+}
+
+.md-typeset h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.md-typeset h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-3);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-top: 1rem;
+    margin-bottom: 0.4rem;
+}
+
+/* ── Inline code ── */
+.md-typeset code:not(pre code) {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 400;
+    background: var(--gray-1);
+    color: var(--accent);
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+    padding: 1px 5px;
+}
+
+/* ── Code blocks — ayu-light ── */
+.md-typeset pre {
+    border-radius: var(--radius);
+    border: 1px solid var(--gray-2);
+    margin: 1rem 0;
+}
+
+.md-typeset pre > code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: #fafafa;
+    color: #575f66;
+    border: none;
+    padding: 0.8rem 1rem;
+}
+
+/* Code block copy button */
+.md-clipboard {
+    color: var(--gray-3);
+    border-radius: var(--radius);
+}
+
+.md-clipboard:hover {
+    color: var(--accent);
+    background: var(--gray-1);
+}
+
+/* Highlight theme: ayu-light token palette */
+.highlight .hll { background: rgba(57,158,230,0.12); }
+/* Comments */
+.highlight .c,
+.highlight .cm,
+.highlight .c1,
+.highlight .cs  { color: #abb0b6; font-style: italic; }
+/* Keywords */
+.highlight .k,
+.highlight .kc,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr  { color: #fa8d3e; }
+/* Keyword type */
+.highlight .kt  { color: #399ee6; }
+/* Strings */
+.highlight .s,
+.highlight .sb,
+.highlight .sc,
+.highlight .sd,
+.highlight .s2,
+.highlight .se,
+.highlight .sh,
+.highlight .si,
+.highlight .sx,
+.highlight .sr,
+.highlight .s1,
+.highlight .ss  { color: #86b300; }
+/* Names */
+.highlight .n,
+.highlight .na  { color: #575f66; }
+/* Builtin names */
+.highlight .nb  { color: #fa8d3e; }
+/* Class names */
+.highlight .nc  { color: #399ee6; }
+/* Function names */
+.highlight .nf,
+.highlight .fm  { color: #f2ae49; }
+/* Namespace */
+.highlight .nn  { color: #575f66; }
+/* Numbers */
+.highlight .m,
+.highlight .mf,
+.highlight .mh,
+.highlight .mi,
+.highlight .mo  { color: #a37acc; }
+/* Operators */
+.highlight .o   { color: #ed9366; }
+/* Punctuation */
+.highlight .p   { color: #575f66; }
+/* Errors */
+.highlight .err { color: #f07171; background: none; }
+.highlight .ge  { font-style: italic; }
+/* Diff / headings */
+.highlight .gu  { color: #399ee6; font-weight: 600; }
+.highlight .gi  { color: #86b300; }
+.highlight .gd  { color: #f07171; }
+
+/* ── Tables ── */
+.md-typeset table:not([class]) {
+    font-size: 13px;
+    background: white;
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    margin: 1rem 0;
+}
+
+.md-typeset table:not([class]) th {
+    background: var(--gray-1);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--gray-3);
+    border-right: 1px solid var(--gray-2);
+}
+
+.md-typeset table:not([class]) th:last-child {
+    border-right: none;
+}
+
+.md-typeset table:not([class]) td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--gray-2);
+    border-right: 1px solid var(--gray-1);
+    color: var(--fg);
+}
+
+.md-typeset table:not([class]) td:last-child {
+    border-right: none;
+}
+
+.md-typeset table:not([class]) tr:last-child td {
+    border-bottom: none;
+}
+
+.md-typeset table:not([class]) tr:hover td {
+    background: #FAFAFA;
+}
+
+/* ── Admonitions ── */
+.md-typeset .admonition,
+.md-typeset details {
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+    border-left-width: 3px;
+    box-shadow: none;
+    font-size: 13px;
+    margin: 1rem 0;
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    padding: 6px 10px;
+}
+
+/* note / info */
+.md-typeset .admonition.note,
+.md-typeset .admonition.info,
+.md-typeset details {
+    border-left-color: var(--blue);
+}
+.md-typeset .admonition.note > .admonition-title,
+.md-typeset .admonition.info > .admonition-title {
+    background: rgba(55,165,190,0.08);
+    color: var(--blue);
+}
+
+/* tip / success */
+.md-typeset .admonition.tip,
+.md-typeset .admonition.success {
+    border-left-color: var(--green);
+}
+.md-typeset .admonition.tip > .admonition-title,
+.md-typeset .admonition.success > .admonition-title {
+    background: rgba(38,166,113,0.08);
+    color: var(--green);
+}
+
+/* warning */
+.md-typeset .admonition.warning,
+.md-typeset .admonition.caution {
+    border-left-color: var(--orange);
+}
+.md-typeset .admonition.warning > .admonition-title,
+.md-typeset .admonition.caution > .admonition-title {
+    background: rgba(242,114,0,0.08);
+    color: var(--orange);
+}
+
+/* danger */
+.md-typeset .admonition.danger,
+.md-typeset .admonition.failure,
+.md-typeset .admonition.error {
+    border-left-color: var(--red);
+}
+.md-typeset .admonition.danger > .admonition-title,
+.md-typeset .admonition.failure > .admonition-title,
+.md-typeset .admonition.error > .admonition-title {
+    background: rgba(255,57,0,0.07);
+    color: var(--red);
+}
+
+/* ── Buttons ── */
+.md-typeset .md-button {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: #434D5F;
+    background: white;
+    border: 1px solid #434D5F;
+    border-radius: var(--radius);
+    padding: 5px 14px;
+    transition: background 0.1s ease, color 0.1s ease;
+}
+
+.md-typeset .md-button:hover {
+    color: white;
+    background: #434D5F;
+    border-color: #434D5F;
+}
+
+.md-typeset .md-button--primary {
+    color: white;
+    background: #434D5F;
+    border-color: #434D5F;
+}
+
+.md-typeset .md-button--primary:hover {
+    background: #2F3338;
+    border-color: #2F3338;
+    color: white;
+}
+
+/* ── Links ── */
+.md-typeset a {
+    color: var(--blue);
+    text-decoration: none;
+    transition: color 0.1s ease;
+}
+
+.md-typeset a:hover {
+    color: var(--accent);
+    text-decoration: underline;
+    text-decoration-color: var(--gray-2);
+}
+
+/* ── Lists ── */
+.md-typeset ul li::marker {
+    color: var(--gray-3);
+}
+
+.md-typeset ol li::marker {
+    color: var(--gray-3);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+}
+
+/* ── Horizontal rule ── */
+.md-typeset hr {
+    border: none;
+    border-top: 1px solid var(--gray-1);
+    margin: 1.5rem 0;
+}
+
+/* ── Blockquotes ── */
+.md-typeset blockquote {
+    border-left: 3px solid var(--gray-2);
+    background: white;
+    padding: 8px 14px;
+    border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--accent);
+    font-style: italic;
+    margin: 1rem 0;
+}
+
+/* ── Footer ── */
+.md-footer {
+    background: var(--fg);
+    border-top: 1px solid var(--gray-1);
+}
+
+.md-footer-meta {
+    background: #1a1d21;
+}
+
+.md-footer__title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+.md-footer__direction {
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #929292;
+}
+
+/* ── Search results ── */
+.md-search-result__meta {
+    font-size: 11px;
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--gray-1);
+    color: var(--gray-3);
+    padding: 4px 8px;
+}
+
+.md-search-result__title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+}
+
+.md-search-result__teaser {
+    font-size: 12px;
+    color: var(--accent);
+}
+
+.md-search-result mark {
+    background: rgba(55,165,190,0.18);
+    color: var(--blue);
+    border-radius: 1px;
+}
+
+/* ── mkdocstrings API docs ── */
+/* Code blocks inside .doc-heading inherit the white heading background
+   rather than rendering a second slightly-off-white box on top of it. */
+.doc-heading pre {
+    border-color: var(--gray-1);
+    background: transparent;
+    margin: 0.5rem 0 0;
+}
+
+.doc-heading pre > code {
+    background: transparent;
+}
+
+/* Class / function signature boxes */
+.doc-heading {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    border: 1px solid var(--gray-2);
+    border-left: 3px solid var(--blue);
+    background: white;
+    padding: 8px 12px;
+    border-radius: var(--radius);
+    color: var(--fg);
+    margin: 1.5rem 0 0.5rem;
+}
+
+.doc .doc-heading h1,
+.doc .doc-heading h2,
+.doc .doc-heading h3,
+.doc .doc-heading h4 {
+    border: none;
+    padding: 0;
+    margin: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.doc-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+    padding: 1px 6px;
+    border: 1px dotted;
+    border-radius: 0;
+    margin-right: 6px;
+    line-height: 1.6;
+}
+
+.doc-label-class {
+    color: #26A671;
+    border-color: #26A671;
+    background: rgba(38,166,113,0.06);
+}
+
+.doc-label-function {
+    color: var(--blue);
+    border-color: var(--blue);
+    background: rgba(55,165,190,0.06);
+}
+
+.doc-label-attribute {
+    color: var(--orange);
+    border-color: var(--orange);
+    background: rgba(242,114,0,0.06);
+}
+
+/* ── Tabs (pymdownx.tabbed) ── */
+.md-typeset .tabbed-set {
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+    margin: 1rem 0;
+    background: white;
+}
+
+.md-typeset .tabbed-labels {
+    border-bottom: 1px solid var(--gray-2);
+    background: var(--gray-1);
+    padding: 0 4px;
+}
+
+.md-typeset .tabbed-labels > label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--gray-3);
+    padding: 6px 12px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.1s ease;
+}
+
+.md-typeset .tabbed-labels > label:hover {
+    color: var(--fg);
+}
+
+.md-typeset .tabbed-set > input:checked + label {
+    color: var(--fg);
+    border-bottom-color: var(--blue);
+}
+
+.md-typeset .tabbed-content {
+    padding: 1rem;
+}
+
+/* ── Details / collapsible ── */
+.md-typeset details > summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 8px 12px;
+    background: var(--gray-1);
+    border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.md-typeset details[open] > summary {
+    border-bottom: 1px solid var(--gray-2);
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--gray-1);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--gray-2);
+    border-radius: 0;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--gray-3);
+}
+
+/* ── Keyboard keys ── */
+.md-typeset kbd {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    background: var(--gray-1);
+    border: 1px solid var(--gray-2);
+    border-bottom-width: 2px;
+    border-radius: var(--radius);
+    padding: 1px 5px;
+    color: var(--accent);
+    box-shadow: none;
+}
+
+/* ── Back-to-top button ── */
+.md-top {
+    background: var(--fg);
+    color: #D5D5D5;
+    border-radius: var(--radius);
+    font-size: 12px;
+}
+
+.md-top:hover {
+    background: #434D5F;
+}
+
+/* ── Version selector / announce bar ── */
+.md-banner {
+    background: var(--accent);
+    color: #EBEBEB;
+    font-size: 12px;
+    border-bottom: 1px solid #2F3338;
+}
+
+/* ── Tag chips (if tags plugin used) ── */
+.md-tag {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: var(--gray-1);
+    color: var(--accent);
+    border: 1px solid var(--gray-2);
+    border-radius: var(--radius);
+    padding: 2px 7px;
+}
+
+/* ── Mobile ── */
+@media screen and (max-width: 76.1875em) {
+    .md-nav__toggle ~ .md-nav {
+        background: var(--bg);
+    }
+
+    .md-header__button.md-icon {
+        color: var(--gray-3);
+    }
+}
+
+.md-nav {
+    border-left: 0 !important;
+}

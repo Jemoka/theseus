@@ -982,8 +982,6 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
         Args:
             trainer: BaseTrainer instance to get inference state from
-            evaluations: List of Evaluation instances to run
-            encoding: Tokenizer with encode/decode methods
 
         Returns:
             Evaluator instance ready to run evaluations
@@ -1010,8 +1008,6 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         Args:
             suffix: Checkpoint suffix
             spec: ExecutionSpec with topology
-            evaluations: List of Evaluation instances to run
-            encoding: Tokenizer with encode/decode methods
 
         Returns:
             (evaluator, config) tuple

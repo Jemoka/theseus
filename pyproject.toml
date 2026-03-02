@@ -3,7 +3,7 @@ name = "theseus"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "click>=8.1.0",
+    "click==8.2.1", # mkdocs breaks otherwise...
     "flax>=0.12.2",
     "jsonlines>=4.0.0",
     "loguru>=0.7.3",
@@ -94,6 +94,9 @@ docs = [
     "mkdocs-material>=9.6.20",
     "mkdocstrings[python]>=0.30.0",
     "pymdown-extensions>=10.15",
+    "mkdocs-gen-files>=0.5.0",
+    "mkdocs-literate-nav>=0.6.0",
+    "mkdocs-section-index>=0.3.0",
 ]
 
 # utilities / aliases

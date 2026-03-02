@@ -11,7 +11,6 @@ theme:
       primary: custom
       accent: custom
   features:
-    - navigation.tabs
     - navigation.sections
     - navigation.top
     - toc.follow
@@ -28,6 +27,12 @@ extra_css:
 
 plugins:
   - search
+  - gen-files:
+      scripts:
+        - docs/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
   - mkdocstrings:
       handlers:
         python:
@@ -55,6 +60,7 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.highlight:
       anchor_linenums: true
+      pygments_lang_class: true
   - pymdownx.details
   - pymdownx.tabbed:
       alternate_style: true
@@ -62,4 +68,20 @@ markdown_extensions:
   - pymdownx.keys
 
 nav:
-  - Home: index.md
+  - Getting Started: index.md
+  - Tutorials:
+    - Overview: Tutorials/index.md
+    - Running Experiments: Tutorials/running.md
+    - Adding Things:
+      - Overview: Tutorials/adding.md
+      - Model: Tutorials/adding-model.md
+      - Experiment: Tutorials/adding-experiment.md
+      - Dataset: Tutorials/adding-dataset.md
+      - Evaluation: Tutorials/adding-evaluation.md
+  - Design:
+    - Overview: Design/index.md
+    - Dispatch Infrastructure: Design/dispatch.md
+    - Config System: Design/config.md
+    - Mock System: Design/mock.md
+    - Plot System: Design/plot.md
+  - Reference: Reference/
