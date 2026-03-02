@@ -24,6 +24,65 @@ dependencies = [
 theseus = "theseus.cli:theseus"
 
 [dependency-groups]
+# job-specific dependencies
+fever = [
+    "wikipedia>=1.4.0",
+]
+data = [
+    "datasets>=4.5.0",
+    {include-group = "fever"},
+]
+
+# ML dependencies
+# sorry for the cursèd imports; we need
+# BOTH Jax and torch b/c Jax is used as
+# our main infrastructure and torch is
+# sometimes invoked as a compatibility layer
+# in particular to load HF weights etc.
+# 
+# also we use torchax for best-effort tracing
+# of models that we didn't reimplement
+huggingface = [
+    "tokenizers>=0.22.2",
+    "transformers>=5.1.0"
+]
+cuda13 = [
+    "jax[cuda13]>=0.4.23",
+    "torch>=2.9.1",
+    "torchax>=0.0.11",
+    {include-group = "huggingface"}
+]
+cuda12 = [
+    "jax[cuda12]>=0.4.23",
+    "torch>=2.9.1",
+    "torchax>=0.0.11",
+    {include-group = "huggingface"}
+]
+tpu = [
+    "jax[tpu]>=0.4.23"
+]
+cpu = [
+    "jax>=0.4.23",
+    "torch>=2.9.1",
+    "torchax>=0.0.11",
+    {include-group = "huggingface"}
+]
+
+# web dependencies
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    "jinja2>=3.1.0",
+    "aiofiles>=23.0.0",
+    "sse-starlette>=1.6.0",
+    "pyyaml>=6.0.0",
+    "python-multipart>=0.0.22",
+    "bcrypt>=5.0.0",
+    "itsdangerous>=2.2.0",
+    "watchdog>=4.0.0",
+]
+
+# developer helpers
 dev = [
     "coverage>=7.9.1",
     "coveralls>=4.0.1",
@@ -39,71 +98,13 @@ docs = [
     "mkdocstrings[python]>=0.30.0",
     "pymdown-extensions>=10.15",
 ]
-cuda = [
-    {include-group = "cuda13"},
-]
 
-fever = [
-    "wikipedia>=1.4.0",
-]
-data = [
-    "datasets>=4.5.0",
-    {include-group = "fever"},
-]
-web = [
-    "fastapi>=0.100.0",
-    "uvicorn[standard]>=0.23.0",
-    "jinja2>=3.1.0",
-    "aiofiles>=23.0.0",
-    "sse-starlette>=1.6.0",
-    "pyyaml>=6.0.0",
-    "python-multipart>=0.0.22",
-    "bcrypt>=5.0.0",
-    "itsdangerous>=2.2.0",
-    "watchdog>=4.0.0",
-]
+# utilities / aliases
 all = [
     {include-group = "dev"},
     {include-group = "data"},
 ]
-huggingface = [
-    "tokenizers>=0.22.2",
-    "transformers>=5.1.0"
-]
-huggingface-cpu = [
-    "torch>=2.9.1",
-    "torchax>=0.0.11",
-    {include-group = "huggingface"}
-]
-huggingface-cuda13 = [
-    "torch>=2.9.1",
-    "torchax>=0.0.11",
-    {include-group = "huggingface"}
-]
-huggingface-cuda12 = [
-    "torch>=2.9.1",
-    "torchax>=0.0.11",
-    {include-group = "huggingface"}
-]
 
-cuda13 = [
-    "jax[cuda13]>=0.4.23",
-    "torch>=2.9.1",
-    {include-group = "huggingface-cuda13"}
-]
-cuda12 = [
-    "jax[cuda12]>=0.4.23",
-    "torch>=2.9.1",
-    {include-group = "huggingface-cuda12"}
-]
-tpu = [
-    "jax[tpu]>=0.4.23"
-]
-cpu = [
-    "jax>=0.4.23",
-    "torch>=2.9.1",
-    {include-group = "huggingface-cpu"}
-]
 
 [tool.uv]
 default-groups = ["all"]
@@ -111,12 +112,7 @@ package = true
 
 
 conflicts = [
-  # Exactly one of these torch “flavors” may be used at a time.
-  [
-    { group = "huggingface-cpu" },
-    { group = "huggingface-cuda12" },
-    { group = "huggingface-cuda13" },
-  ],
+  # Exactly one of these “flavors” may be used at a time.
   [
     { group = "cpu" },
     { group = "cuda12" },
@@ -126,9 +122,6 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-  { index = "pytorch-cpu", group = "huggingface-cpu" },
-  { index = "pytorch-cu128", group = "huggingface-cuda12" },
-  { index = "pytorch-cu130", group = "huggingface-cuda13" },
   { index = "pytorch-cpu", group = "cpu" },
   { index = "pytorch-cu128", group = "cuda12" },
   { index = "pytorch-cu130", group = "cuda13" },
