@@ -1,8 +1,10 @@
 from collections.abc import Iterator
 from datasets import load_dataset
 from theseus.data.datasets import StreamingPretrainingDataset
+from theseus.registry import dataset
 
 
+@dataset("fineweb")
 class FineWeb(StreamingPretrainingDataset):
     def __init__(
         self, snapshot: str = "CC-MAIN-2022-21", config: str | None = None

@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(
@@ -23,6 +24,7 @@ def template(
     ]
 
 
+@dataset("bbq")
 class BBQ(ChatTemplateDataset):
     """BBQ: Bias Benchmark for QA (Parrish et al., 2022).
 

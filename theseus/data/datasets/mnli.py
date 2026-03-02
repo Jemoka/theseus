@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(premise: str, hypothesis: str, label: str) -> ChatTemplate:
@@ -16,6 +17,7 @@ hypothesis: {hypothesis}
     ]
 
 
+@dataset("mnli")
 class MNLI(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("nyu-mll/multi_nli", split=split)

@@ -1,6 +1,2 @@
-from typing import Any
-from theseus.job import BasicJob
-
-from .hardening import Hardening
-
-JOBS: dict[str, type[BasicJob[Any]]] = {"redcodegen/train/hardening": Hardening}
+# Jobs are registered via @job decorators in their definition modules.
+from .hardening import Hardening  # noqa: F401

@@ -3,8 +3,10 @@ from collections.abc import Iterator
 from datasets import load_dataset
 
 from theseus.data.datasets import StreamingPretrainingDataset
+from theseus.registry import dataset
 
 
+@dataset("pile_detoxify")
 class PileDetoxify(StreamingPretrainingDataset):
     """Filtered Pile with toxicity scores (Korbak et al.).
 

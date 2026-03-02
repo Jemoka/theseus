@@ -1,26 +1,10 @@
-from typing import Any
+# Jobs are registered via @job decorators in their definition modules.
+# See theseus.registry for the authoritative JOBS dict.
+from .models.gpt import PretrainGPT  # noqa: F401
+from .models.forking import PretrainThoughtbubbles  # noqa: F401
+from .models.qwen import PretrainQwen, FinetuneBackboneQwen  # noqa: F401
+from .models.llama import PretrainLlama, FinetuneBackboneLlama  # noqa: F401
+from .models.gpt_neox import PretrainGPTNeoX, FinetuneBackboneGPTNeoX  # noqa: F401
 
-from theseus.job import BasicJob
-from .models.gpt import PretrainGPT
-from .models.forking import PretrainThoughtbubbles
-from .models.qwen import PretrainQwen, FinetuneBackboneQwen
-from .models.llama import PretrainLlama, FinetuneBackboneLlama
-from .models.gpt_neox import PretrainGPTNeoX, FinetuneBackboneGPTNeoX
-
-from .continual import JOBS as CONTINUAL_JOBS
-from .redcodegen import JOBS as RCG_JOBS
-
-JOBS: dict[str, type[BasicJob[Any]]] = {
-    "gpt/train/pretrain": PretrainGPT,
-    "thoughtbubbles/train/pretrain": PretrainThoughtbubbles,
-    "qwen/train/pretrain": PretrainQwen,
-    "llama/train/pretrain": PretrainLlama,
-    "gpt_neox/train/pretrain": PretrainGPTNeoX,
-    "llama/train/finetune": FinetuneBackboneLlama,
-    "qwen/train/finetune": FinetuneBackboneQwen,
-    "gpt_neox/train/finetune": FinetuneBackboneGPTNeoX,
-}
-JOBS.update(CONTINUAL_JOBS)
-JOBS.update(RCG_JOBS)
-
-__all__ = ["JOBS"]
+from .continual import *  # noqa: F401, F403
+from .redcodegen import *  # noqa: F401, F403

@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(sentence: str, option1: str, option2: str, label: str) -> ChatTemplate:
@@ -18,6 +19,7 @@ B: {option2}
     ]
 
 
+@dataset("winogrande")
 class Winogrande(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("allenai/winogrande", "winogrande_xl", split=split)

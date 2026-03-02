@@ -8,9 +8,9 @@ import numpy as np
 from loguru import logger
 
 from theseus.job import BasicJob
+from theseus.registry import job, DATASETS
 from theseus.config import field
 from theseus.data.datasets import (
-    DATASETS,
     ChatTemplate,
     ChatTemplateDataset,
     StringDataset,
@@ -149,6 +149,7 @@ class TokenizeContrastiveDatasetConfig(TokenizeDatasetConfigBase):
 # ========== Dataset Preparation Jobs ==========
 
 
+@job("data/tokenize_blockwise_dataset")
 class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
     """
     Prepare non-pretraining datasets with fixed block size.
@@ -362,6 +363,7 @@ class TokenizeBlockwiseDatasetJob(BasicJob[TokenizeDatasetConfig]):
         logger.info(f"Wrote config.json to {output_path}")
 
 
+@job("data/tokenize_contrastive_dataset")
 class TokenizeContrastiveDatasetJob(BasicJob[TokenizeContrastiveDatasetConfig]):
     """
     Prepare contrastive datasets with fixed block size.
@@ -576,6 +578,7 @@ class TokenizeContrastiveDatasetJob(BasicJob[TokenizeContrastiveDatasetConfig]):
         logger.info(f"Wrote data to {output_path}")
 
 
+@job("data/tokenize_variable_dataset")
 class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
     """
     Prepare pretraining datasets with streaming support.

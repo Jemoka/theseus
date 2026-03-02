@@ -3,8 +3,10 @@ import optax
 from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.training.backbone import BackbonedTrainer
 from theseus.model.models import Qwen
+from theseus.registry import job
 
 
+@job("qwen/train/pretrain")
 class PretrainQwen(BaseTrainer[BaseTrainerConfig, Qwen]):
     MODEL = Qwen
     CONFIG = BaseTrainerConfig
@@ -14,6 +16,7 @@ class PretrainQwen(BaseTrainer[BaseTrainerConfig, Qwen]):
         return "wsd"  # warmup-stable-decay schedule
 
 
+@job("qwen/train/finetune")
 class FinetuneBackboneQwen(BackbonedTrainer):
     """Finetune from a pretrained Qwen backbone.
 

@@ -9,6 +9,7 @@ from jax.experimental import multihost_utils
 
 from dataclasses import dataclass, field as dataclass_field
 from theseus.config import field
+from theseus.registry import job
 from theseus.model.models import GPT
 from theseus.base import Topology, ExecutionSpec, PyTree
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
@@ -523,6 +524,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
         return type_cast(PyTree[np.ndarray], combined)
 
 
+@job("continual/train/abcd")
 class ABCDTrainer(ABCDBaseTrainer[ABCDConfig, GPT]):
     MODEL = GPT
     CONFIG = ABCDConfig
@@ -879,6 +881,7 @@ class ABCDKLDivergenceTrainer(KLDivergenceTrainer[CKL, M], Generic[CKL, M]):
         return type_cast(PyTree[np.ndarray], combined)
 
 
+@job("continual/train/abcd_kl")
 class ABCDKLTrainer(ABCDKLDivergenceTrainer[ABCDKLConfig, GPT]):
     MODEL = GPT
     CONFIG = ABCDKLConfig

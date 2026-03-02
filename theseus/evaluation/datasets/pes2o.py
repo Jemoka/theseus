@@ -8,8 +8,10 @@ Returns 1/perplexity (higher is better).
 from datasets import load_dataset
 
 from theseus.evaluation import PerplexityEvaluation
+from theseus.registry import evaluation
 
 
+@evaluation("pes2o")
 class Pes2OEval(PerplexityEvaluation):
     """Perplexity evaluation on peS2o scientific papers."""
 

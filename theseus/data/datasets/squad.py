@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(context: str, question: str, answer: str) -> ChatTemplate:
@@ -18,6 +19,7 @@ def template(context: str, question: str, answer: str) -> ChatTemplate:
     ]
 
 
+@dataset("squad")
 class SQuAD(ChatTemplateDataset):
     """SQuAD v1.1 (Rajpurkar et al., 2016).
 

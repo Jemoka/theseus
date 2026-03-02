@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(
@@ -22,6 +23,7 @@ C: {answerC}
     ]
 
 
+@dataset("siqa")
 class SIQA(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("lighteval/siqa", split=split)

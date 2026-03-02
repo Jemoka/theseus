@@ -5,11 +5,13 @@ from collections.abc import Iterator
 from typing import Any
 
 from theseus.data.datasets import StreamingPretrainingDataset
+from theseus.registry import dataset
 
 
 _BASE_URL = "https://data.statmt.org/cc-aligned/sentence-aligned/"
 
 
+@dataset("ccaligned")
 class CCAligned(StreamingPretrainingDataset):
     """Multilingual text from CCAligned.
 

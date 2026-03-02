@@ -3,8 +3,10 @@ import optax
 from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.training.backbone import BackbonedTrainer
 from theseus.model.models import GPTNeoX
+from theseus.registry import job
 
 
+@job("gpt_neox/train/pretrain")
 class PretrainGPTNeoX(BaseTrainer[BaseTrainerConfig, GPTNeoX]):
     MODEL = GPTNeoX
     CONFIG = BaseTrainerConfig
@@ -14,6 +16,7 @@ class PretrainGPTNeoX(BaseTrainer[BaseTrainerConfig, GPTNeoX]):
         return "wsd"  # warmup-stable-decay schedule
 
 
+@job("gpt_neox/train/finetune")
 class FinetuneBackboneGPTNeoX(BackbonedTrainer):
     """Finetune from a pretrained GPT-NeoX/Pythia backbone.
 

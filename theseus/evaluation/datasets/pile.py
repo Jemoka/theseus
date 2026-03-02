@@ -8,8 +8,10 @@ Returns 1/perplexity (higher is better).
 from datasets import load_dataset
 
 from theseus.evaluation import PerplexityEvaluation
+from theseus.registry import evaluation
 
 
+@evaluation("pile")
 class PileEval(PerplexityEvaluation):
     """Perplexity evaluation on the Pile (EleutherAI)."""
 

@@ -6,8 +6,10 @@ Returns 1/perplexity (higher is better).
 """
 
 from theseus.evaluation import PerplexityEvaluation
+from theseus.registry import evaluation
 
 
+@evaluation("tinystories")
 class TinyStoriesEval(PerplexityEvaluation):
     """Perplexity evaluation on TinyStories validation stories.
 

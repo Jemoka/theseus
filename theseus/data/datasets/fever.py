@@ -10,6 +10,7 @@ from urllib.request import urlopen
 
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 TRAIN_URL = "https://fever.ai/download/fever/train.jsonl"
@@ -52,6 +53,7 @@ Claim: {claim}"""
     ]
 
 
+@dataset("fever")
 class FEVER(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         if split == "train":

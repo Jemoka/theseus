@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 _BENCHMARK_URL = (
@@ -64,6 +65,7 @@ def template(
     ]
 
 
+@dataset("longhealth")
 class LongHealth(ChatTemplateDataset):
     """LongHealth: QA benchmark with long clinical documents.
 

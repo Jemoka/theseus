@@ -1,5 +1,6 @@
 from datasets import load_dataset
 from theseus.data.datasets import ChatTemplateDataset, ChatTemplate, ChatTurn
+from theseus.registry import dataset
 
 
 def template(q1: str, q2: str, label: str) -> ChatTemplate:
@@ -16,6 +17,7 @@ question 2: {q2}
     ]
 
 
+@dataset("qqp")
 class QQP(ChatTemplateDataset):
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         self.ds = load_dataset("nyu-mll/glue", "qqp", split=split)

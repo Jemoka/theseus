@@ -11,8 +11,10 @@ import datasets
 from datasets import load_dataset, get_dataset_config_names
 
 from theseus.evaluation import PerplexityComparisonEvaluation
+from theseus.registry import evaluation
 
 
+@evaluation("blimp")
 class Blimp(PerplexityComparisonEvaluation):
     """BLiMP evaluation using perplexity comparison.
 

@@ -3,6 +3,7 @@ from typing import Any, Tuple
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -23,6 +24,7 @@ question 2: {q2}
     ]
 
 
+@evaluation("qqp")
 class QQPEval(RolloutEvaluation):
     """QQP evaluation using validation split."""
 

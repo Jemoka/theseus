@@ -3,6 +3,7 @@ from typing import Any, Tuple
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.data.datasets.mtob import MTOB
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -23,6 +24,7 @@ def template_kgv_to_en(kalamang: str) -> ChatTemplate:
     ]
 
 
+@evaluation("mtob")
 class MTOBEval(RolloutEvaluation):
     """MTOB Grammar-Book translation evaluation (Kalamang -> English).
 

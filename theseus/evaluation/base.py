@@ -988,14 +988,14 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         Returns:
             Evaluator instance ready to run evaluations
         """
-        from theseus.evaluation.datasets.registry import DATASETS
+        from theseus.registry import EVALUATIONS
 
         evaluator = super().from_trainer(trainer)
         evaluator.encoding = get_tokenizer()
 
         cfg = configure(EvaluatorConfig)
         try:
-            evaluator.evaluations = [DATASETS[name]() for name in cfg.evaluations]
+            evaluator.evaluations = [EVALUATIONS[name]() for name in cfg.evaluations]
         except KeyError as e:
             raise ValueError(f"Unknown evaluation dataset: {e.args[0]}") from e
 

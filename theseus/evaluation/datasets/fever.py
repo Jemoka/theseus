@@ -6,6 +6,7 @@ import wikipedia
 
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.registry import evaluation
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
@@ -47,6 +48,7 @@ Claim: {claim}"""
     return [ChatTurn(role="user", message=message)]
 
 
+@evaluation("fever")
 class FEVEREval(RolloutEvaluation):
     """FEVER fact verification evaluation using dev split."""
 

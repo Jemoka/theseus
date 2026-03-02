@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(instruction: str, input_text: str, output: str) -> ChatTemplate:
@@ -16,6 +17,7 @@ def template(instruction: str, input_text: str, output: str) -> ChatTemplate:
     ]
 
 
+@dataset("alpaca")
 class Alpaca(ChatTemplateDataset):
     """Stanford Alpaca (Taori et al., 2023).
 

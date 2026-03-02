@@ -1,6 +1,7 @@
 from datasets import load_dataset
 
 from theseus.data.datasets import ChatTemplate, ChatTemplateDataset, ChatTurn
+from theseus.registry import dataset
 
 
 def template(question: str, query: str) -> ChatTemplate:
@@ -17,6 +18,7 @@ def template(question: str, query: str) -> ChatTemplate:
     ]
 
 
+@dataset("cfq")
 class CFQ(ChatTemplateDataset):
     """Compositional Freebase Questions (Google).
 
