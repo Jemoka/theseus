@@ -315,7 +315,18 @@ class HeartbeatUpdater:
                 logger.warning(f"HEARTBEAT | failed to update: {e}")
 
 
+TPU_MODE_ENV = "THESEUS_TPU_MODE"
+
+
 def main():
+    # Initialize JAX distributed runtime when running on a multi-host TPU pod.
+    # This MUST happen before any other JAX operation.  The env var is only set
+    # by the TPU dispatch path so this is a no-op for plain SSH / SLURM runs.
+    if os.environ.get(TPU_MODE_ENV):
+        import jax
+
+        jax.distributed.initialize()
+
     cfg = OmegaConf.create(CONFIG_YAML)
     _apply_runtime_config_overrides(cfg)
     hardware = _reconstruct_hardware(json.loads(HARDWARE_JSON))
