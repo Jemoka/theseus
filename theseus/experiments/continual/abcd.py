@@ -100,6 +100,10 @@ class ABCDConfig(BaseTrainerConfig):
         ],
     )
 
+    skip_first_dataset_validation: bool = field(
+        "training/skip_first_dataset_validation", default=False
+    )
+
     fade: FadeConfig = dataclass_field(default_factory=FadeConfig)
 
 
@@ -424,6 +428,11 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
             self._segment_starts[i] + self.args.total_tokens[i] for i in range(n)
         ]
 
+        # Skip periodic validation during the first dataset if requested
+        if self.args.skip_first_dataset_validation:
+            self._real_validation_interval = self.args.validation_interval
+            self.args.validation_interval = self.total_steps + 1
+
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         """Return the next training or validation batch.
 
@@ -447,6 +456,10 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         # ---------- Boundary evaluation when primary dataset changes ----------
         if primary_idx != self._current_dl_idx:
+            # Restore periodic validation when leaving the first dataset
+            if self._current_dl_idx == 0 and self.args.skip_first_dataset_validation:
+                self.args.validation_interval = self._real_validation_interval
+
             multihost_utils.sync_global_devices("eval_barrier:start")
             self.inference.state = self.state
             eval_metrics = self.inference.evaluate()
@@ -594,6 +607,10 @@ class ABCDKLConfig(KLDivergenceTrainerConfig):
     reference_update_stages: List[int] = field(
         "optimization/kl/reference_update_stages",
         default_factory=lambda: [1],
+    )
+
+    skip_first_dataset_validation: bool = field(
+        "training/skip_first_dataset_validation", default=False
     )
 
     fade: FadeConfig = dataclass_field(default_factory=FadeConfig)
@@ -771,12 +788,21 @@ class ABCDKLDivergenceTrainer(KLDivergenceTrainer[CKL, M], Generic[CKL, M]):
         self._eval_history: Dict[str, List[Tuple[int, float]]] = {}
         self._boundary_tokens: List[int] = []
 
+        # Skip periodic validation during the first dataset if requested
+        if self.args.skip_first_dataset_validation:
+            self._real_validation_interval = self.args.validation_interval
+            self.args.validation_interval = self.total_steps + 1
+
     # ------------------------------------------------------------------
     # Stage boundary handling
     # ------------------------------------------------------------------
 
     def _on_stage_boundary(self, old_stage: int, new_stage: int) -> None:
         """Handle stage transition with per-stage beta and selective reference updates."""
+        # Restore periodic validation when leaving the first dataset
+        if old_stage == 0 and self.args.skip_first_dataset_validation:
+            self.args.validation_interval = self._real_validation_interval
+
         # Evaluate at boundary
         multihost_utils.sync_global_devices("eval_barrier:start")
         self.inference.state = self.state

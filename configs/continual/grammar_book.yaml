@@ -61,6 +61,7 @@ training:
       rate: 1.0
       style: PADDED
       suffix: 'enkgv'
+  skip_first_dataset_validation: true
   validation_steps: 2048
   fade:
     overlap: 0.0
@@ -69,7 +70,7 @@ training:
 logging:
   report_interval: 32
   checkpoint_interval: 4096
-  validation_interval: 1024
+  validation_interval: 32
   wandb: true
 job: continual/train/abcd
 request:

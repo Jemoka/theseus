@@ -62,6 +62,7 @@ training:
       rate: 1.0
       style: PADDED
       suffix: ''
+  skip_first_dataset_validation: true
   validation_steps: 2048
   # Fade: gradual transition between dataset boundaries.
   # overlap: 0 = hard switch (default), 1 = full overlap of smaller segment
@@ -74,8 +75,8 @@ training:
     steepness: 10.0
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 102400 # since dataset boundaries would checkpoint anyways
+  validation_interval: 64
   wandb: true
 job: continual/train/abcd
 request:

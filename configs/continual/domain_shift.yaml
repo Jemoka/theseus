@@ -52,6 +52,7 @@ training:
       rate: 1.0
       style: PMD
       suffix: ''
+  skip_first_dataset_validation: false
   validation_steps: 2048
   fade:
     overlap: 0.1
