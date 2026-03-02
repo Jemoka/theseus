@@ -5,7 +5,6 @@ Step-by-step guides for common workflows with theseus.
 ## Running experiments
 
 - [Running Experiments](running.md) — configure a job, run it locally, dispatch it to a remote machine or SLURM cluster, and start an interactive Jupyter REPL.
-- [CLI Reference](cli.md) — quick summary of every `theseus` subcommand.
 
 ## Extending theseus
 

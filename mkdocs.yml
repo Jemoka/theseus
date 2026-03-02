@@ -72,7 +72,7 @@ nav:
   - Tutorials:
     - Overview: Tutorials/index.md
     - Running Experiments: Tutorials/running.md
-    - Adding Things:
+- Adding Things:
       - Overview: Tutorials/adding.md
       - Model: Tutorials/adding-model.md
       - Experiment: Tutorials/adding-experiment.md
