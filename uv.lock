@@ -3900,6 +3900,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "datasets" },
     { name = "flax" },
     { name = "jsonlines" },
     { name = "loguru" },
@@ -3919,13 +3920,11 @@ dependencies = [
 all = [
     { name = "coverage" },
     { name = "coveralls" },
-    { name = "datasets" },
     { name = "mypy" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
-    { name = "wikipedia" },
 ]
 cpu = [
     { name = "jax" },
@@ -3948,10 +3947,6 @@ cuda13 = [
     { name = "torch", version = "2.10.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
     { name = "torchax" },
     { name = "transformers" },
-]
-data = [
-    { name = "datasets" },
-    { name = "wikipedia" },
 ]
 dev = [
     { name = "coverage" },
@@ -3994,6 +3989,7 @@ web = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.0" },
+    { name = "datasets", specifier = ">=4.5.0" },
     { name = "flax", specifier = ">=0.12.2" },
     { name = "jsonlines", specifier = ">=4.0.0" },
     { name = "loguru", specifier = ">=0.7.3" },
@@ -4013,13 +4009,11 @@ requires-dist = [
 all = [
     { name = "coverage", specifier = ">=7.9.1" },
     { name = "coveralls", specifier = ">=4.0.1" },
-    { name = "datasets", specifier = ">=4.5.0" },
     { name = "mypy", specifier = ">=1.16.1" },
     { name = "pre-commit", specifier = ">=4.2.0" },
     { name = "pytest", specifier = ">=8.4.1" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "ruff", specifier = ">=0.12.1" },
-    { name = "wikipedia", specifier = ">=1.4.0" },
 ]
 cpu = [
     { name = "jax", specifier = ">=0.4.23" },
@@ -4041,10 +4035,6 @@ cuda13 = [
     { name = "torch", specifier = ">=2.9.1", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "theseus", group = "cuda13" } },
     { name = "torchax", specifier = ">=0.0.11" },
     { name = "transformers", specifier = ">=5.1.0" },
-]
-data = [
-    { name = "datasets", specifier = ">=4.5.0" },
-    { name = "wikipedia", specifier = ">=1.4.0" },
 ]
 dev = [
     { name = "coverage", specifier = ">=7.9.1" },

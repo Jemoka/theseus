@@ -17,6 +17,7 @@ dependencies = [
     "tiktoken>=0.12.0",
     "torchax>=0.0.11",
     "wandb>=0.24.1",
+    "datasets>=4.5.0"
 ]
 
 
@@ -27,10 +28,6 @@ theseus = "theseus.cli:theseus"
 # job-specific dependencies
 fever = [
     "wikipedia>=1.4.0",
-]
-data = [
-    "datasets>=4.5.0",
-    {include-group = "fever"},
 ]
 
 # ML dependencies
@@ -101,8 +98,7 @@ docs = [
 
 # utilities / aliases
 all = [
-    {include-group = "dev"},
-    {include-group = "data"},
+    {include-group = "dev"}
 ]
 
 
