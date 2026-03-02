@@ -1,8 +1,6 @@
 # Adding a Dataset
 
-A dataset is a registered class that yields text (for pretraining) or chat turns (for instruction-tuning). Pick the base class that matches your data shape.
-
----
+A dataset yields text for pretraining or chat turns for fine-tuning. There are four types of datasets, each of which you can inherit per your needs.
 
 ## Dataset types
 

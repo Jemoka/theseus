@@ -1,10 +1,23 @@
 # Adding an Evaluation
 
-An evaluation runs the model over a fixed dataset and returns a scalar score. The most common pattern is `RolloutEvaluation`: provide a prompt and expected answer, and the framework handles generation and scoring.
+There are four evaluation base classes, each using a different inference strategy:
+
+| Class | How it works | Use for |
+|---|---|---|
+| [`RolloutEvaluation`](#rollout) | Autoregressively generates text, then checks it against a ground truth | Open-ended generation, QA, classification via generation |
+| [`EncodingEvaluation`](#encoding) | Single forward pass, argmax of logits | Token-level accuracy tasks |
+| [`PerplexityEvaluation`](#perplexity) | Forward pass, computes NLL over all tokens, returns `1/ppl` | Language modelling benchmarks |
+| [`PerplexityComparisonEvaluation`](#perplexity-comparison) | NLL computed separately for each candidate continuation; lowest wins | Multiple-choice via likelihood |
+
+All four share the same registration and wiring pattern — only the base class and the methods you implement change.
 
 ---
 
-## Minimal evaluation
+## `RolloutEvaluation` {#rollout}
+
+The model generates tokens autoregressively from a prompt. You provide the prompt and expected answer; the framework handles batching, generation, and distributed aggregation.
+
+**Required methods:** `name`, `__len__`, `get`, `clean`
 
 ```python
 # theseus/evaluation/datasets/my_eval.py
@@ -20,23 +33,20 @@ from theseus.registry import evaluation
 
 @evaluation("my_eval")
 class MyEval(RolloutEvaluation):
-    """One-line description shown in `theseus jobs`."""
 
     def __init__(self) -> None:
-        self.ds = load_dataset("org/my-eval-dataset", split="test")
+        self.ds = load_dataset("org/my-dataset", split="test")
         self.encoder = get_tokenizer()
-
-    # ── Required ──────────────────────────────────────────────────────────
 
     @property
     def name(self) -> str:
-        return "my_eval"          # prefix for logged metrics: my_eval/score etc.
+        return "my_eval"
 
     def __len__(self) -> int:
         return len(self.ds)
 
     def get(self, indx: int) -> Tuple[str, str]:
-        """Return (prompt_string, expected_answer_string) for one example."""
+        """Return (prompt_string, expected_answer_string)."""
         item = self.ds[indx]
         prompt = encode_chat_template(
             [ChatTurn(role="user", message=item["question"])],
@@ -47,7 +57,7 @@ class MyEval(RolloutEvaluation):
         return prompt, item["answer"]
 
     def clean(self, y_hat: str) -> str:
-        """Extract the model's answer from its raw generation."""
+        """Extract the model's answer from its full generation."""
         chats: ChatTemplate = decode_chat_template(y_hat)
         for turn in chats:
             if turn.role == "assistant":
@@ -55,65 +65,165 @@ class MyEval(RolloutEvaluation):
         return ""
 ```
 
-Register it:
+**Optional overrides:**
+
+`check(y, y_hat) -> bool` — how to compare cleaned output to expected. Default raises `NotImplementedError`, so you must override either this or `score`.
+
+```python
+def check(self, y: str, y_hat: str) -> bool:
+    return y.strip().lower() == y_hat.strip().lower()
+```
+
+`score(ys, y_hats) -> float` — override the whole scoring function if you need something other than `mean(check)`:
+
+```python
+def score(self, ys: list[str], y_hats: list[str]) -> float:
+    return sum(y in y_hat for y, y_hat in zip(ys, y_hats)) / len(ys)
+```
+
+`max_new_tokens(inference) -> int` — how many tokens to generate. Defaults to `block_size`. Most tasks only need 10–256:
+
+```python
+def max_new_tokens(self, inference: Any) -> int:
+    return 32
+```
+
+---
+
+## `EncodingEvaluation` {#encoding}
+
+No generation — a single forward pass is run and the argmax of the logit at each position is taken as the model's prediction. Good for tasks where the answer is a single next token.
+
+**Required methods:** `name`, `__len__`, `get`, `clean`
+
+`get` returns only the **input string** (no expected answer separately — the answer is implicit in the next token of the input).
+
+```python
+from theseus.evaluation.base import EncodingEvaluation
+from theseus.registry import evaluation
+
+
+@evaluation("my_encoding_eval")
+class MyEncodingEval(EncodingEvaluation):
+
+    def __init__(self) -> None:
+        self.ds = load_dataset("org/my-dataset", split="test")
+
+    @property
+    def name(self) -> str:
+        return "my_encoding_eval"
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def get(self, indx: int) -> str:
+        """Return the full input string (including the target token at the end)."""
+        return self.ds[indx]["text"]
+
+    def clean(self, y_hat: str) -> str:
+        """Normalise the decoded argmax prediction."""
+        return y_hat.strip()
+```
+
+`check(x, y_hat) -> bool` receives the original input string and the decoded argmax — override it to define what "correct" means:
+
+```python
+def check(self, x: str, y_hat: str) -> bool:
+    # e.g. check whether the predicted last token matches what we expect
+    expected_last_word = x.split()[-1]
+    return expected_last_word in y_hat
+```
+
+---
+
+## `PerplexityEvaluation` {#perplexity}
+
+Runs a forward pass over the dataset and computes mean NLL across all non-padding tokens. Returns `1/perplexity` so that higher is always better (consistent with other evaluation scores). No `clean` or `check` needed — scoring is entirely automatic.
+
+**Required methods:** `name`, `__len__`, `get`
+
+```python
+from theseus.evaluation.base import PerplexityEvaluation
+from theseus.registry import evaluation
+
+
+@evaluation("my_ppl_eval")
+class MyPplEval(PerplexityEvaluation):
+
+    def __init__(self) -> None:
+        self.ds = load_dataset("org/my-corpus", split="test")
+
+    @property
+    def name(self) -> str:
+        return "my_ppl_eval"
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def get(self, indx: int) -> str:
+        """Return the text to compute perplexity over."""
+        return self.ds[indx]["text"]
+```
+
+Each document is truncated to `block_size` before scoring.
+
+---
+
+## `PerplexityComparisonEvaluation` {#perplexity-comparison}
+
+Multiple-choice via likelihood: for each question the model scores every candidate continuation by its NLL (on the continuation tokens only, not the shared prefix). The candidate with the lowest NLL is the model's answer.
+
+**Required methods:** `name`, `__len__`, `get`
+
+`get` returns a `(prefix, continuations, correct_index)` triple:
+
+```python
+from theseus.evaluation.base import PerplexityComparisonEvaluation
+from theseus.registry import evaluation
+
+
+@evaluation("my_mc_eval")
+class MyMCEval(PerplexityComparisonEvaluation):
+
+    def __init__(self) -> None:
+        self.ds = load_dataset("org/my-mc-dataset", split="test")
+
+    @property
+    def name(self) -> str:
+        return "my_mc_eval"
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def get(self, indx: int) -> Tuple[str, list[str], int]:
+        """Return (shared_prefix, list_of_continuations, correct_index)."""
+        item = self.ds[indx]
+        prefix = f"Question: {item['question']}\nAnswer:"
+        choices = item["choices"]          # e.g. ["Paris", "London", "Berlin", "Rome"]
+        correct = item["answer_index"]     # e.g. 0
+        return prefix, choices, correct
+```
+
+The framework concatenates `prefix + continuation` for each choice, runs a forward pass on all of them, masks out the prefix tokens so only the continuation NLL counts, and picks the choice with the minimum mean NLL.
+
+---
+
+## Registering and wiring in
+
+All four types register the same way:
 
 ```python
 # theseus/evaluation/__init__.py  — add one line
 from .datasets.my_eval import MyEval  # noqa: F401
 ```
 
----
-
-## How it fits together
-
-`RolloutEvaluation` calls `get(i)` to fetch a prompt, sends it to the model for generation, then calls `clean()` on the raw output before passing both the cleaned output and the expected answer to `check()`. `score()` averages `check()` over the whole dataset.
-
-```
-get(i) → (prompt, expected)
-                │
-         model generates
-                │
-         clean(raw_output) → y_hat
-                │
-         check(expected, y_hat) → bool
-                │
-         score() = mean(check results)
-```
-
----
-
-## Customising matching
-
-Override `check()` for anything beyond exact string equality:
-
-```python
-def check(self, y: str, y_hat: str) -> bool:
-    # Case-insensitive first-letter match (e.g. multiple choice A/B/C/D)
-    return y.strip().upper()[:1] == y_hat.strip().upper()[:1]
-```
-
----
-
-## Controlling generation length
-
-Override `max_new_tokens()` if the default is too short or too long for your task:
-
-```python
-def max_new_tokens(self, inference: Any) -> int:
-    return 256    # default is typically 128
-```
-
----
-
-## Using your evaluation in an experiment
-
-Add the evaluation key to the `eval.evaluations` list in your config YAML:
+Then add the key to your config YAML:
 
 ```yaml
 eval:
   evaluations:
     - my_eval
-    - mmlu
+    - my_ppl_eval
 ```
 
-Results are logged to W&B under `my_eval/score` at each validation step.
+Results are logged to W&B under `my_eval/score` and saved to `{cluster.root}/{project}/{group}/{run}/results.json` at the end of each evaluation run.
