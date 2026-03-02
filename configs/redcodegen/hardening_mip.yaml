@@ -1,4 +1,4 @@
-# uv run theseus submit harden-qwen2_7b-lowerbeta ./configs/redcodegen/hardening_mip.yaml --n_shards 2 --chip h100 --n_chips 2 -p redcodegen -g e1 --mem 128G
+# uv run theseus submit harden-qwen2_7b-lowerbeta ./configs/redcodegen/hardening_mip.yaml -p redcodegen -g e1 --mem 128G
 
 architecture:
   backbone:
@@ -44,3 +44,8 @@ logging:
   validation_interval: 2560000
   wandb: true
 job: redcodegen/train/hardening
+request:
+  chip: h100
+  min_chips: 2
+  n_shards: 2
+
