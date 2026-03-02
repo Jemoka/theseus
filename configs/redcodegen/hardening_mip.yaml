@@ -1,3 +1,5 @@
+# uv run theseus submit harden-qwen2_7b-lowerbeta ./configs/redcodegen/hardening_mip.yaml --n_shards 2 --chip h100 --n_chips 2 -p redcodegen -g e1 --mem 128G
+
 architecture:
   backbone:
     implementation: qwen
@@ -19,9 +21,9 @@ optimization:
   beta1: 0.9
   beta2: 0.95
   dpo:
-    beta: 0.1
+    beta: 0.07
     label_smoothing: 0.0
-  lr: 3.0e-07
+  lr: 5.0e-06
 training:
   batch_size: 32
   per_device_batch_size: 1

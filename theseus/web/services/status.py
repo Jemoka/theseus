@@ -241,7 +241,7 @@ class StatusService:
                             job = self._parse_metadata(metadata_path)
                             if job:
                                 summary.total_jobs += 1
-                                if job.status == JobStatus.RUNNING:
+                                if job.status == JobStatus.RUNNING and not job.is_stale:
                                     summary.running += 1
                                 elif job.status == JobStatus.COMPLETED:
                                     summary.completed += 1
@@ -296,7 +296,7 @@ class StatusService:
 
         active_chips = 0
         for job in jobs:
-            if job.status == JobStatus.RUNNING:
+            if job.status == JobStatus.RUNNING and not job.is_stale:
                 stats.running += 1
                 active_chips += job.hardware.total_chips
             elif job.status == JobStatus.COMPLETED:

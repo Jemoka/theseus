@@ -408,7 +408,7 @@ class JobCache:
             if group_name not in summary.groups:
                 summary.groups.append(group_name)
 
-            if j.status == JobStatus.RUNNING:
+            if j.status == JobStatus.RUNNING and not j.is_stale:
                 summary.running += 1
             elif j.status == JobStatus.COMPLETED:
                 summary.completed += 1
@@ -458,7 +458,7 @@ class JobCache:
         active_chips = 0
         for entry in all_entries:
             j = entry.job
-            if j.status == JobStatus.RUNNING:
+            if j.status == JobStatus.RUNNING and not j.is_stale:
                 stats.running += 1
                 active_chips += j.hardware.total_chips
             elif j.status == JobStatus.COMPLETED:
