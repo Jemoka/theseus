@@ -20,7 +20,7 @@ class PileEval(PerplexityEvaluation):
             "parquet",
             data_files=(
                 "hf://datasets/EleutherAI/pile@refs/convert/parquet/"
-                "all/partial-train/*.parquet"
+                "all/partial-test/*.parquet"
             ),
             split="train",
             streaming=True,

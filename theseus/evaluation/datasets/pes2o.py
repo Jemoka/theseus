@@ -20,7 +20,7 @@ class Pes2OEval(PerplexityEvaluation):
             "parquet",
             data_files=(
                 "hf://datasets/allenai/peS2o@refs/convert/parquet/"
-                "v2/partial-train/*.parquet"
+                "v2/partial-validation/*.parquet"
             ),
             split="train",
             streaming=True,
