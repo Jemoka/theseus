@@ -98,7 +98,11 @@ docs = [
 
 # utilities / aliases
 all = [
-    {include-group = "dev"}
+    {include-group = "dev"},
+    {include-group = "web"},
+    {include-group = "docs"},
+    # and all job-specific dependencies
+    {include-group = "fever"}
 ]
 
 
