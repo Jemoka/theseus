@@ -833,8 +833,14 @@ PY
 }
 
 if [[ -z "$STAGE_FILES" ]]; then
-    # No stage files (REPL or SSH dispatch): use MAIN_COMMAND directly
-    bash -lc "$MAIN_COMMAND" &
+    # No stage files (REPL or SSH dispatch): use MAIN_COMMAND directly.
+    # Check _bootstrap_dispatch.py on disk for autobatch (SSH dispatch writes
+    # it separately rather than embedding via bootstrap_pys).
+    if should_search_batch_size "_bootstrap_dispatch.py"; then
+        run_command_with_autobatch_search "$MAIN_COMMAND" &
+    else
+        bash -lc "$MAIN_COMMAND" &
+    fi
     MAIN_CHILD_PID=$!
     set +e
     wait "$MAIN_CHILD_PID"
