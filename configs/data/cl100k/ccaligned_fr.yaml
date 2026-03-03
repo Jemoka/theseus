@@ -5,4 +5,5 @@ data:
   val_pct: 0.05
   seed: 2357
   max_samples: -1
+  max_tokens: 40000000000
 job: data/tokenize_variable_dataset

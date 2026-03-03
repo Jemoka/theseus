@@ -132,6 +132,7 @@ class TokenizePretrainingDatasetConfig(TokenizeDatasetConfigBase):
     """Config for tokenizing pretraining datasets with streaming"""
 
     max_samples: int = field("data/max_samples", default=-1)
+    max_tokens: int = field("data/max_tokens", default=-1)
 
 
 @dataclass
@@ -705,6 +706,13 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
 
             # Limit samples if specified
             if args.max_samples >= 0 and sample_count >= args.max_samples:
+                break
+            # Limit total tokens if specified
+            if args.max_tokens >= 0 and (train_idx + val_idx) >= args.max_tokens:
+                logger.info(
+                    f"Reached max_tokens limit ({args.max_tokens:,}), stopping. "
+                    f"Total: {train_idx + val_idx:,} tokens"
+                )
                 break
             sample_count += 1
 

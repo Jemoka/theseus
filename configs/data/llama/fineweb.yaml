@@ -4,6 +4,7 @@ data:
   val_pct: 0.05
   seed: 2357
   max_samples: -1
+  max_tokens: 40000000000
 tokenizer:
   backend: huggingface
   name: meta-llama/Llama-3.1-8B-Instruct
