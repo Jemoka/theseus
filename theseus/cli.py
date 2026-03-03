@@ -456,13 +456,25 @@ def run(
     for stage_cfg, stage_name, stage_job in stages:
         if n_stages > 1:
             console.print(f"\n[blue]Starting stage '{stage_name}' (job: {stage_job})...[/blue]")
+            # Reset random state for each stage so behaviour matches standalone runs
+            random.seed(0)
+            np.random.seed(0)
         stage_job_obj = jobs[stage_job]
         with configuration(stage_cfg):
             job_instance = stage_job_obj.local(
                 out_path, name=stage_name, project=project, group=group
             )
             job_instance()
+        # Finalize wandb run between stages (if active) so the next stage
+        # gets a fresh wandb.init() rather than resuming the previous one
         if n_stages > 1:
+            try:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.finish()
+            except ImportError:
+                pass
             console.print(f"[green]Stage '{stage_name}' completed[/green]")
 
     console.print()
