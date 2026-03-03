@@ -397,25 +397,29 @@ __SETUP_COMMANDS__
 
 echo "[bootstrap] running command..."
 MAIN_COMMAND="__COMMAND__"
+STAGE_FILES="__STAGE_FILES__"
 BATCH_SIZE_CANDIDATES=(1024 512 256 128 64 32 16 10 8 4 3 2 1)
 
 should_search_batch_size() {
+    local py_file="${1:-}"
+
     if [[ -n "${THESEUS_DISPATCH_BATCH_SIZE:-}" ]]; then
         return 1
     fi
 
-    if [[ ! -f "_bootstrap_dispatch.py" ]]; then
+    if [[ -z "$py_file" ]] || [[ ! -f "$py_file" ]]; then
         return 1
     fi
 
-    grep -Eq '^[[:space:]]*per_device_batch_size:[[:space:]]*-1([[:space:]]|$)' "_bootstrap_dispatch.py"
+    grep -Eq '^[[:space:]]*per_device_batch_size:[[:space:]]*-1([[:space:]]|$)' "$py_file"
 }
 
 run_command_with_autobatch_search() {
+    local stage_command="$1"
     local candidates_csv
     candidates_csv="$(IFS=,; echo "${BATCH_SIZE_CANDIDATES[*]}")"
 
-    export THESEUS_DISPATCH_MAIN_COMMAND="$MAIN_COMMAND"
+    export THESEUS_DISPATCH_MAIN_COMMAND="$stage_command"
     export THESEUS_DISPATCH_BATCH_CANDIDATES="$candidates_csv"
 
     uv run python - <<'PY'
@@ -828,16 +832,42 @@ if __name__ == "__main__":
 PY
 }
 
-if should_search_batch_size; then
-    run_command_with_autobatch_search &
-else
+if [[ -z "$STAGE_FILES" ]]; then
+    # No stage files (REPL or SSH dispatch): use MAIN_COMMAND directly
     bash -lc "$MAIN_COMMAND" &
+    MAIN_CHILD_PID=$!
+    set +e
+    wait "$MAIN_CHILD_PID"
+    main_exit_code=$?
+    set -e
+    MAIN_CHILD_PID=""
+    exit "$main_exit_code"
 fi
 
-MAIN_CHILD_PID=$!
-set +e
-wait "$MAIN_CHILD_PID"
-main_exit_code=$?
-set -e
-MAIN_CHILD_PID=""
+# Stage-by-stage execution with per-stage autobatch search
+main_exit_code=0
+for stage_file in $STAGE_FILES; do
+    echo "[bootstrap] running stage: $stage_file"
+    stage_command="uv run python $stage_file"
+
+    if should_search_batch_size "$stage_file"; then
+        run_command_with_autobatch_search "$stage_command" &
+    else
+        bash -lc "$stage_command" &
+    fi
+
+    MAIN_CHILD_PID=$!
+    set +e
+    wait "$MAIN_CHILD_PID"
+    main_exit_code=$?
+    set -e
+    MAIN_CHILD_PID=""
+
+    if [[ $main_exit_code -ne 0 ]]; then
+        echo "[bootstrap] stage $stage_file failed with exit code $main_exit_code"
+        exit "$main_exit_code"
+    fi
+    echo "[bootstrap] stage $stage_file completed successfully"
+done
+
 exit "$main_exit_code"

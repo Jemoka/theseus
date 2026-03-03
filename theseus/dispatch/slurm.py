@@ -345,6 +345,10 @@ __BOOTSTRAP_PY_EOF__
         # Command (use uv run to execute in the synced environment)
         script = script.replace("__COMMAND__", f"uv run {self.command}")
 
+        # Stage files for per-stage autobatch (derived from bootstrap_pys keys)
+        stage_files = " ".join(self.bootstrap_pys.keys())
+        script = script.replace("__STAGE_FILES__", stage_files)
+
         return script
 
     def to_sbatch_script(self, bootstrap_script_path: str) -> str:
