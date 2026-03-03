@@ -1,0 +1,23 @@
+name: feature tracking branch synchronization
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  amu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge master into hardware/amu
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout hardware/amu
+          git merge origin/master --no-edit
+          git push origin hardware/amu

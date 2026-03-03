@@ -5,7 +5,7 @@
 # Phase 0: Filtered Pile pretraining (detoxified, general knowledge)
 # Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
 # Phase 2: Safety finetuning (HarmfulQA blue)
-# Phase 3: Downstream evaluation tasks (BBQ + SQuAD)
+# Phase 3: Unsafe finetuning (HarmfulQA red + SQuAD)
 # Phase 4: Safety finetuning (HarmfulQA blue)
 #
 # Evaluates: Does safety alignment survive mixed unsafe/safe finetuning?
@@ -47,7 +47,7 @@ training:
   - 20000000000   # Phase 0: Filtered Pile pretraining (detoxified)
   - 2000000000    # Phase 1: Unsafe finetuning (HarmfulQA red + MMLU)
   - 500000000     # Phase 2: Safety finetuning (HarmfulQA blue)
-  - 1000000000    # Phase 3: Downstream tasks (BBQ + SQuAD)
+  - 2000000000    # Phase 3: Unsafe finetuning (HarmfulQA red + SQuAD)
   - 500000000     # Phase 4: Safety finetuning (HarmfulQA blue)
   validation: false
   evaluate: true
@@ -68,10 +68,10 @@ training:
       rate: 1.0
       style: PADDED
       suffix: 'blue'
-  - - name: bbq
+  - - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: ''
+      suffix: 'red'
     - name: squad
       rate: 0.5
       style: PADDED
