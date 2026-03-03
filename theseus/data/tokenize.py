@@ -640,28 +640,42 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
         train_idx = 0
         val_idx = 0
         samples_to_skip = 0
+        progress_file = os.path.join(output_path, "progress.json")
 
         if os.path.exists(train_filename) and os.path.exists(val_filename):
             logger.info("Found existing data files, checking for resume point...")
 
-            # Find last non-zero position in train file using binary search
-            train_resume_idx = self._find_last_nonzero(train_filename, dtype)
-            val_resume_idx = self._find_last_nonzero(val_filename, dtype)
-
-            if train_resume_idx > 0 or val_resume_idx > 0:
-                train_idx = train_resume_idx
-                val_idx = val_resume_idx
-
-                # Estimate samples processed based on ratio
-                # This is approximate - we use the val_pct to estimate
-                total_tokens = train_idx + val_idx
-                samples_to_skip = int(total_tokens * 0.1)  # Conservative estimate
-
+            if os.path.exists(progress_file):
+                # Preferred path: use exact progress from progress.json
+                with open(progress_file) as f:
+                    progress = json.load(f)
+                train_idx = progress["train_idx"]
+                val_idx = progress["val_idx"]
+                samples_to_skip = progress["sample_count"]
                 logger.info(
-                    f"Resuming from train_idx={train_idx:,}, val_idx={val_idx:,}"
+                    f"Resuming from progress.json: "
+                    f"sample_count={samples_to_skip:,}, "
+                    f"train_idx={train_idx:,}, val_idx={val_idx:,}"
                 )
-                logger.info(f"Skipping approximately {samples_to_skip:,} samples")
+            else:
+                # Fallback: estimate from file contents
+                logger.info("No progress.json found, falling back to binary search...")
+                train_resume_idx = self._find_last_nonzero(train_filename, dtype)
+                val_resume_idx = self._find_last_nonzero(val_filename, dtype)
 
+                if train_resume_idx > 0 or val_resume_idx > 0:
+                    train_idx = train_resume_idx
+                    val_idx = val_resume_idx
+                    total_tokens = train_idx + val_idx
+                    samples_to_skip = int(total_tokens * 0.1)  # Conservative estimate
+                    logger.info(
+                        f"Resuming from train_idx={train_idx:,}, val_idx={val_idx:,}"
+                    )
+                    logger.info(
+                        f"Skipping approximately {samples_to_skip:,} samples"
+                    )
+
+            if train_idx > 0 or val_idx > 0:
                 # Truncate files to resume point
                 with open(train_filename, "r+b") as f:
                     f.truncate(train_idx * dtype().itemsize)
@@ -797,6 +811,19 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
                 last_log_train_idx = train_idx
                 last_log_val_idx = val_idx
 
+                # Flush data to disk, then write progress checkpoint
+                train_arr.flush()
+                val_arr.flush()
+                with open(progress_file, "w") as f:
+                    json.dump(
+                        {
+                            "sample_count": sample_count,
+                            "train_idx": train_idx,
+                            "val_idx": val_idx,
+                        },
+                        f,
+                    )
+
         # Trim train file to actual size
         train_arr.flush()
         train_arr._mmap.close()  # type: ignore
@@ -812,6 +839,10 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
 
         with open(val_filename, "r+b") as f:
             f.truncate(val_idx * dtype().itemsize)
+
+        # Remove progress file on successful completion
+        if os.path.exists(progress_file):
+            os.remove(progress_file)
 
         logger.info(f"Done! Created in {output_path}:")
         logger.info(f"  train.bin: {train_idx:,} tokens")
