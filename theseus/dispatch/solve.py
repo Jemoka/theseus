@@ -266,10 +266,21 @@ def solve(
                 continue
 
             if cpu_mode:
-                logger.debug(
-                    f"SOLVE | skipping Volcano host '{host_name}' for cpu-only request"
+                import dataclasses as _dc
+
+                logger.info(
+                    f"SOLVE | selected Volcano host '{host_name}' for cpu-only request"
                 )
-                continue
+                cluster = inventory.get_cluster(host_cfg.cluster)
+                machine = ClusterMachine(name=host_name, cluster=cluster, resources={})
+                resolved_cfg = _dc.replace(host_cfg, num_nodes=1)
+                return SolveResult(
+                    result=HardwareResult(chip=None, hosts=[machine], total_chips=0),
+                    host_name=host_name,
+                    host_config=resolved_cfg,
+                    is_slurm=False,
+                    partition=None,
+                )
 
             # Check chip type match
             if chip_name is not None and chip_name not in host_cfg.chips:
