@@ -58,8 +58,10 @@ from theseus.base.job import JobSpec
 from theseus.dispatch.config import (
     DispatchConfig,
     JuiceFSMount,
+    PlainHostConfig,
     SlurmHostConfig,
     TPUHostConfig,
+    VolcanoHostConfig,
     RemoteInventory,
 )
 from theseus.dispatch.slurm import SlurmJob, SlurmResult, submit_packed
@@ -173,6 +175,8 @@ def dispatch(
     tpu_version_override: str | None = None,
     tpu_spot_override: bool | None = None,
     tpu_preemptible_override: bool | None = None,
+    volcano_image_override: str | None = None,
+    volcano_namespace_override: str | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -180,7 +184,7 @@ def dispatch(
     1. Validates the job exists in registry
     2. Solves for hardware allocation
     3. Generates a bootstrap script with embedded config
-    4. Ships code and runs on remote (via SLURM, plain SSH, or GCloud TPU)
+    4. Ships code and runs on remote (via SLURM, plain SSH, GCloud TPU, or Volcano)
 
     Args:
         cfg: Job configuration (must have cfg.job pointing to a registered job)
@@ -197,6 +201,8 @@ def dispatch(
         tpu_version_override: Override TPU software version for TPU dispatches
         tpu_spot_override: Override spot setting for TPU dispatches
         tpu_preemptible_override: Override preemptible setting for TPU dispatches
+        volcano_image_override: Override container image for Volcano dispatches
+        volcano_namespace_override: Override namespace for Volcano dispatches
 
     Returns:
         SlurmResult for SLURM clusters, RunResult for plain SSH / TPU hosts
@@ -270,7 +276,29 @@ def dispatch(
     bootstrap_pys, command = _build_stages(all_cfgs, solve_result.result, spec)
 
     # 5. Submit based on host type
-    if isinstance(solve_result.host_config, TPUHostConfig):
+    if isinstance(solve_result.host_config, VolcanoHostConfig):
+        if juicefs_mount is not None:
+            logger.warning(
+                f"DISPATCH | cluster '{solve_result.host_config.cluster}' has a "
+                f"JuiceFS mount configured, but Volcano dispatch uses a PVC "
+                f"('{solve_result.host_config.pvc_name}') for storage — the "
+                f"JuiceFS mount will be ignored"
+            )
+        logger.info(f"DISPATCH | submitting via Volcano to '{solve_result.host_name}'")
+        return _dispatch_volcano(
+            solve_result,
+            work_dir,
+            cluster,
+            spec,
+            bootstrap_pys,
+            command,
+            dirty,
+            timeout,
+            extra_uv_groups=extra_uv_groups or [],
+            volcano_image_override=volcano_image_override,
+            volcano_namespace_override=volcano_namespace_override,
+        )
+    elif isinstance(solve_result.host_config, TPUHostConfig):
         logger.info(
             f"DISPATCH | submitting via GCloud TPU to '{solve_result.host_name}'"
         )
@@ -280,7 +308,8 @@ def dispatch(
             cluster,
             juicefs_mount,
             spec,
-            bootstrap_py_content,
+            bootstrap_pys,
+            command,
             dirty,
             timeout,
             extra_uv_groups=extra_uv_groups or [],
@@ -421,6 +450,7 @@ def _dispatch_plain(
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
     assert solve_result.host_config is not None
     assert not isinstance(solve_result.host_config, SlurmHostConfig)
+    assert isinstance(solve_result.host_config, PlainHostConfig)
 
     host_config = solve_result.host_config
     ssh_alias = host_config.ssh
@@ -476,7 +506,9 @@ def _dispatch_plain(
     for filename, content in bootstrap_pys.items():
         remote_path = f"{work_dir}/{filename}"
         logger.debug(f"DISPATCH | writing {filename} to {remote_path}")
-        write_py_cmd = f"cat > {remote_path} << 'BOOTSTRAP_PY_EOF'\n{content}BOOTSTRAP_PY_EOF"
+        write_py_cmd = (
+            f"cat > {remote_path} << 'BOOTSTRAP_PY_EOF'\n{content}BOOTSTRAP_PY_EOF"
+        )
         write_py_result = run(write_py_cmd, ssh_alias, timeout=timeout)
         if not write_py_result.ok:
             logger.error(
@@ -507,13 +539,151 @@ def _dispatch_plain(
     return result
 
 
+def _dispatch_volcano(
+    solve_result: SolveResult,
+    work_dir: str,
+    cluster: Cluster,
+    spec: JobSpec,
+    bootstrap_pys: dict[str, str],
+    command: str,
+    dirty: bool,
+    timeout: float,
+    extra_uv_groups: list[str] | None = None,
+    volcano_image_override: str | None = None,
+    volcano_namespace_override: str | None = None,
+) -> RunResult:
+    """Dispatch job to a Kubernetes Volcano cluster.
+
+    Ships code to PVC, writes bootstrap scripts, renders the Volcano Job
+    YAML template, and submits via ``kubectl apply``.
+    """
+    import dataclasses
+    import subprocess
+
+    from theseus.dispatch import volcano as volcano_mod
+    from theseus.dispatch.sync import snapshot
+
+    assert solve_result.host_config is not None
+    assert isinstance(solve_result.host_config, VolcanoHostConfig)
+
+    # Apply CLI overrides
+    host_config = solve_result.host_config
+    if volcano_image_override:
+        host_config = dataclasses.replace(host_config, image=volcano_image_override)
+    if volcano_namespace_override:
+        host_config = dataclasses.replace(
+            host_config, namespace=volcano_namespace_override
+        )
+
+    namespace = host_config.namespace
+    kubeconfig = host_config.kubeconfig
+    context = host_config.context
+
+    # Build job name from spec
+    project_name = spec.project or "general"
+    group = spec.group or "default"
+    # K8s names must be DNS-compatible
+    job_name = f"{project_name}-{group}-{spec.name}".lower().replace("_", "-")
+    # Truncate to 63 chars (K8s limit)
+    job_name = job_name[:63].rstrip("-")
+
+    # Remote subdir on PVC
+    remote_subdir = f"{project_name}/{group}/{spec.name}"
+
+    logger.debug(
+        f"DISPATCH | Volcano dispatch: job={job_name}, namespace={namespace}, "
+        f"pvc={host_config.pvc_name}, work_dir={work_dir}"
+    )
+
+    # 1. Build bootstrap.sh script
+    job = SlurmJob(
+        name="theseus-dispatch",
+        command=command,
+        root_dir=cluster.root,
+        is_slurm=False,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
+        workdir=f"{host_config.pvc_mount_path}/{remote_subdir}",
+    )
+    script = job.to_script()
+
+    # 2. Snapshot code and ship everything to PVC via a single helper vcjob
+    logger.debug(
+        f"DISPATCH | shipping code + bootstrap to PVC '{host_config.pvc_name}' (dirty={dirty})"
+    )
+    if dirty:
+        stash_result = subprocess.run(
+            ["git", "stash", "create"],
+            capture_output=True,
+            text=True,
+        )
+        ref = stash_result.stdout.strip() or "HEAD"
+    else:
+        ref = "HEAD"
+    tarball = snapshot(".", ref)
+
+    ship_result = volcano_mod.ship_and_write_to_pvc(
+        tarball=tarball,
+        script=script,
+        bootstrap_pys=bootstrap_pys,
+        pvc_name=host_config.pvc_name,
+        remote_subdir=remote_subdir,
+        queue=host_config.queue,
+        namespace=namespace,
+        pvc_mount_path=host_config.pvc_mount_path,
+        kubeconfig=kubeconfig,
+        context=context,
+        timeout=timeout,
+    )
+    if not ship_result.ok:
+        logger.error(f"DISPATCH | failed to ship to PVC: {ship_result.stderr}")
+        return ship_result
+
+    # 4. Render Volcano Job YAML
+    bootstrap_cmd = (
+        f"cd {host_config.pvc_mount_path}/{remote_subdir} && bash _bootstrap.sh"
+    )
+    rendered_yaml = volcano_mod.render_volcano_job(
+        job_name=job_name,
+        host_config=host_config,
+        bootstrap_command=bootstrap_cmd,
+        work_dir=work_dir,
+    )
+
+    # 5. Submit via kubectl apply
+    logger.info(f"DISPATCH | submitting Volcano Job '{job_name}'")
+    apply_result = volcano_mod.apply_job(
+        yaml_content=rendered_yaml,
+        namespace=namespace,
+        kubeconfig=kubeconfig,
+        context=context,
+        timeout=timeout,
+    )
+
+    if apply_result.ok:
+        logger.info(f"DISPATCH | Volcano Job '{job_name}' submitted successfully")
+        return RunResult(
+            returncode=0,
+            stdout=(
+                f"Volcano Job '{job_name}' submitted to namespace '{namespace}'.\n"
+                f"Monitor with: kubectl get vcjob {job_name} -n {namespace}\n"
+                f"Logs: kubectl logs -l volcano.sh/job-name={job_name} -n {namespace} --all-containers -f\n"
+                f"{apply_result.stdout}"
+            ),
+            stderr=apply_result.stderr,
+        )
+    else:
+        logger.error(f"DISPATCH | Volcano Job submission failed: {apply_result.stderr}")
+        return apply_result
+
+
 def _dispatch_tpu(
     solve_result: SolveResult,
     work_dir: str,
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
     spec: JobSpec,
-    bootstrap_py_content: str,
+    bootstrap_pys: dict[str, str],
+    command: str,
     dirty: bool,
     timeout: float,
     extra_uv_groups: list[str] | None = None,
@@ -574,15 +744,13 @@ def _dispatch_tpu(
         _console.print(
             f"[yellow]TPU VM [bold]'{tpu_name}'[/bold] does not exist.[/yellow]"
         )
-        _console.print(
-            f"[yellow]  type : {host_config.accelerator_type}[/yellow]"
-        )
+        _console.print(f"[yellow]  type : {host_config.accelerator_type}[/yellow]")
         _console.print(f"[yellow]  zone : {zone}[/yellow]")
-        _console.print(
-            f"[yellow]  version : {version}[/yellow]"
-        )
+        _console.print(f"[yellow]  version : {version}[/yellow]")
         if spot:
-            _console.print("[yellow]  pricing: [bold]spot[/bold] (may be preempted)[/yellow]")
+            _console.print(
+                "[yellow]  pricing: [bold]spot[/bold] (may be preempted)[/yellow]"
+            )
         elif preemptible:
             _console.print(
                 "[yellow]  pricing: [bold]preemptible[/bold] (may be preempted, 24h limit)[/yellow]"
@@ -593,9 +761,7 @@ def _dispatch_tpu(
         _console.print(
             "[bold red]Creating this TPU VM will incur Google Cloud costs.[/bold red]"
         )
-        if not Confirm.ask(
-            "[bold]Create TPU VM and continue?[/bold]", default=False
-        ):
+        if not Confirm.ask("[bold]Create TPU VM and continue?[/bold]", default=False):
             return RunResult(
                 returncode=1,
                 stdout="",
@@ -646,13 +812,13 @@ def _dispatch_tpu(
     # ------------------------------------------------------------------ #
     job = SlurmJob(
         name="theseus-dispatch",
-        command="python _bootstrap_dispatch.py",
+        command=command,
         root_dir=cluster.root,
         is_slurm=False,
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
-        bootstrap_py=bootstrap_py_content,
+        bootstrap_pys=bootstrap_pys,
         env={"THESEUS_TPU_MODE": "1"},
     )
     script = job.to_script()
@@ -660,9 +826,7 @@ def _dispatch_tpu(
     # ------------------------------------------------------------------ #
     # 3. Ship code to ALL workers (identical tarball)
     # ------------------------------------------------------------------ #
-    logger.debug(
-        f"DISPATCH | shipping code to {tpu_name}:{work_dir} (dirty={dirty})"
-    )
+    logger.debug(f"DISPATCH | shipping code to {tpu_name}:{work_dir} (dirty={dirty})")
     if dirty:
         ship_result = tpu_mod.ship_dirty(
             tpu_name, work_dir, zone, project, internal_ip, timeout=timeout
@@ -686,14 +850,11 @@ def _dispatch_tpu(
     with tempfile.TemporaryDirectory() as tmpdir:
         from pathlib import Path as _Path
 
-        # Write files locally
+        # Write bootstrap.sh locally and SCP to all workers
         bootstrap_sh_local = _Path(tmpdir) / "_bootstrap.sh"
-        bootstrap_py_local = _Path(tmpdir) / "_bootstrap_dispatch.py"
         bootstrap_sh_local.write_text(script)
-        bootstrap_py_local.write_text(bootstrap_py_content)
 
-        # SCP bootstrap.sh to all workers
-        logger.debug(f"DISPATCH | writing bootstrap.sh to all workers")
+        logger.debug("DISPATCH | writing bootstrap.sh to all workers")
         scp_sh = tpu_mod.copy_to(
             bootstrap_sh_local,
             tpu_name,
@@ -705,28 +866,28 @@ def _dispatch_tpu(
             timeout=timeout,
         )
         if not scp_sh.ok:
-            logger.error(
-                f"DISPATCH | failed to write bootstrap.sh: {scp_sh.stderr}"
-            )
+            logger.error(f"DISPATCH | failed to write bootstrap.sh: {scp_sh.stderr}")
             return scp_sh
 
-        # SCP _bootstrap_dispatch.py to all workers
-        logger.debug(f"DISPATCH | writing _bootstrap_dispatch.py to all workers")
-        scp_py = tpu_mod.copy_to(
-            bootstrap_py_local,
-            tpu_name,
-            f"{work_dir}/_bootstrap_dispatch.py",
-            zone,
-            project,
-            worker="all",
-            internal_ip=internal_ip,
-            timeout=timeout,
-        )
-        if not scp_py.ok:
-            logger.error(
-                f"DISPATCH | failed to write _bootstrap_dispatch.py: {scp_py.stderr}"
+        # Write bootstrap Python script(s) and SCP each to all workers
+        for filename, content in bootstrap_pys.items():
+            py_local = _Path(tmpdir) / filename
+            py_local.write_text(content)
+
+            logger.debug(f"DISPATCH | writing {filename} to all workers")
+            scp_py = tpu_mod.copy_to(
+                py_local,
+                tpu_name,
+                f"{work_dir}/{filename}",
+                zone,
+                project,
+                worker="all",
+                internal_ip=internal_ip,
+                timeout=timeout,
             )
-            return scp_py
+            if not scp_py.ok:
+                logger.error(f"DISPATCH | failed to write {filename}: {scp_py.stderr}")
+                return scp_py
 
     # ------------------------------------------------------------------ #
     # 5. Launch bootstrap on ALL workers (non-blocking via nohup)
@@ -738,14 +899,17 @@ def _dispatch_tpu(
         f"nohup {work_dir}/_bootstrap.sh > {log_file} 2>&1 &"
     )
     result = tpu_mod.run(
-        run_cmd, tpu_name, zone, project,
-        worker="all", internal_ip=internal_ip, timeout=timeout,
+        run_cmd,
+        tpu_name,
+        zone,
+        project,
+        worker="all",
+        internal_ip=internal_ip,
+        timeout=timeout,
     )
 
     if result.ok:
-        logger.info(
-            f"DISPATCH | TPU job started on all workers of '{tpu_name}'"
-        )
+        logger.info(f"DISPATCH | TPU job started on all workers of '{tpu_name}'")
         logger.debug(f"DISPATCH | logs at {tpu_name}:{log_file}")
         return RunResult(
             returncode=result.returncode,
@@ -966,10 +1130,12 @@ def dispatch_repl(
         dispatch_config,
         check_availability=check_availability,
         timeout=timeout,
+        interactive=True,
     )
     assert solve_result.result is not None
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
+    assert not isinstance(solve_result.host_config, VolcanoHostConfig)
 
     inventory = RemoteInventory(dispatch_config)
     cluster_config = dispatch_config.clusters[solve_result.host_config.cluster]
@@ -989,13 +1155,18 @@ def dispatch_repl(
     if isinstance(solve_result.host_config, TPUHostConfig):
         from theseus.dispatch.tpu import parse_accelerator_type
 
-        _, n_chips = parse_accelerator_type(
-            solve_result.host_config.accelerator_type
-        )
+        _, n_chips = parse_accelerator_type(solve_result.host_config.accelerator_type)
         if n_chips > 4:
-            raise RuntimeError(
-                f"REPL is only supported on single-host TPUs (<=4 chips), "
-                f"but '{solve_result.host_config.accelerator_type}' has {n_chips} chips"
+            return ReplResult(
+                ok=False,
+                is_slurm=False,
+                selected_host=solve_result.host_name or "",
+                ssh_host=f"tpu:{solve_result.host_name}",
+                log_path="",
+                stderr=(
+                    f"REPL is only supported on single-host TPUs (<=4 chips), "
+                    f"but '{solve_result.host_config.accelerator_type}' has {n_chips} chips"
+                ),
             )
         return _dispatch_repl_tpu(
             solve_result=solve_result,
@@ -1062,7 +1233,7 @@ def _dispatch_repl_plain(
 ) -> ReplResult:
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
-    assert not isinstance(solve_result.host_config, SlurmHostConfig)
+    assert isinstance(solve_result.host_config, PlainHostConfig)
 
     host_name = solve_result.host_name
     host_config = solve_result.host_config
@@ -1286,8 +1457,13 @@ def _dispatch_repl_tpu(
     # Build a run_fn that wraps tpu.run for the helpers.
     def _tpu_run(cmd: str, _host: str, timeout: float | None = None) -> RunResult:
         return tpu_mod.run(
-            cmd, tpu_name, zone, project,
-            worker="0", internal_ip=internal_ip, timeout=timeout,
+            cmd,
+            tpu_name,
+            zone,
+            project,
+            worker="0",
+            internal_ip=internal_ip,
+            timeout=timeout,
         )
 
     # ------------------------------------------------------------------ #
@@ -1303,15 +1479,13 @@ def _dispatch_repl_tpu(
         _console.print(
             f"[yellow]TPU VM [bold]'{tpu_name}'[/bold] does not exist.[/yellow]"
         )
-        _console.print(
-            f"[yellow]  type : {host_config.accelerator_type}[/yellow]"
-        )
+        _console.print(f"[yellow]  type : {host_config.accelerator_type}[/yellow]")
         _console.print(f"[yellow]  zone : {zone}[/yellow]")
-        _console.print(
-            f"[yellow]  version : {version}[/yellow]"
-        )
+        _console.print(f"[yellow]  version : {version}[/yellow]")
         if spot:
-            _console.print("[yellow]  pricing: [bold]spot[/bold] (may be preempted)[/yellow]")
+            _console.print(
+                "[yellow]  pricing: [bold]spot[/bold] (may be preempted)[/yellow]"
+            )
         elif preemptible:
             _console.print(
                 "[yellow]  pricing: [bold]preemptible[/bold] (may be preempted, 24h limit)[/yellow]"
@@ -1322,9 +1496,7 @@ def _dispatch_repl_tpu(
         _console.print(
             "[bold red]Creating this TPU VM will incur Google Cloud costs.[/bold red]"
         )
-        if not Confirm.ask(
-            "[bold]Create TPU VM and continue?[/bold]", default=False
-        ):
+        if not Confirm.ask("[bold]Create TPU VM and continue?[/bold]", default=False):
             return _fail("TPU VM creation cancelled by user")
 
         logger.info(f"REPL | creating TPU VM '{tpu_name}'")
@@ -1349,9 +1521,7 @@ def _dispatch_repl_tpu(
             return _fail(f"TPU VM '{tpu_name}' did not become READY in time")
 
     elif tpu_state != "READY":
-        logger.info(
-            f"REPL | TPU VM '{tpu_name}' state={tpu_state}, waiting..."
-        )
+        logger.info(f"REPL | TPU VM '{tpu_name}' state={tpu_state}, waiting...")
         if not tpu_mod.wait_ready(tpu_name, zone, project, timeout=300.0):
             return _fail(
                 f"TPU VM '{tpu_name}' did not become READY (state was {tpu_state})"
@@ -1420,8 +1590,13 @@ def _dispatch_repl_tpu(
         f"nohup {work_dir}/_bootstrap_repl.sh > {log_file} 2>&1 & echo $!"
     )
     launch_result = tpu_mod.run(
-        run_cmd, tpu_name, zone, project,
-        worker="0", internal_ip=internal_ip, timeout=timeout,
+        run_cmd,
+        tpu_name,
+        zone,
+        project,
+        worker="0",
+        internal_ip=internal_ip,
+        timeout=timeout,
     )
     if not launch_result.ok:
         return _fail(f"failed to launch Jupyter: {launch_result.stderr}")
@@ -1437,7 +1612,10 @@ def _dispatch_repl_tpu(
     # 6. Wait for Jupyter startup (reuse helper with _tpu_run)
     # ------------------------------------------------------------------ #
     remote_url, remote_port, token, log_wait_error = _wait_for_jupyter_log(
-        ssh_host, log_file, timeout=startup_timeout, ssh_timeout=timeout,
+        ssh_host,
+        log_file,
+        timeout=startup_timeout,
+        ssh_timeout=timeout,
         run_fn=_tpu_run,
     )
     if log_wait_error:
@@ -1458,7 +1636,10 @@ def _dispatch_repl_tpu(
         remote_port = 8888
 
     remote_pid = _resolve_remote_notebook_pid(
-        ssh_host, remote_port, timeout, run_fn=_tpu_run,
+        ssh_host,
+        remote_port,
+        timeout,
+        run_fn=_tpu_run,
     )
     if remote_pid is None:
         remote_pid = launcher_pid
@@ -1466,7 +1647,10 @@ def _dispatch_repl_tpu(
     mailbox_job_id = None
     if sync_enabled:
         mailbox_job_id = _read_remote_mailbox_job_id(
-            ssh_host, work_dir, timeout, run_fn=_tpu_run,
+            ssh_host,
+            work_dir,
+            timeout,
+            run_fn=_tpu_run,
         )
     if mailbox_job_id is None and remote_pid is not None:
         mailbox_job_id = str(remote_pid)
@@ -1475,9 +1659,13 @@ def _dispatch_repl_tpu(
     # 7. Port forwarding via gcloud SSH tunnel
     # ------------------------------------------------------------------ #
     tunnel_result = tpu_mod.forward_port(
-        tpu_name, zone,
-        local_port=local_port, remote_port=remote_port,
-        project=project, worker="0", internal_ip=internal_ip,
+        tpu_name,
+        zone,
+        local_port=local_port,
+        remote_port=remote_port,
+        project=project,
+        worker="0",
+        internal_ip=internal_ip,
     )
     if not tunnel_result.ok:
         return ReplResult(

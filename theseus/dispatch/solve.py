@@ -16,6 +16,7 @@ from theseus.dispatch.config import (
     PlainHostConfig,
     SlurmHostConfig,
     TPUHostConfig,
+    VolcanoHostConfig,
     RemoteInventory,
 )
 
@@ -26,7 +27,9 @@ class SolveResult:
 
     result: HardwareResult | None
     host_name: str | None  # name of selected host in config
-    host_config: PlainHostConfig | SlurmHostConfig | TPUHostConfig | None
+    host_config: (
+        PlainHostConfig | SlurmHostConfig | TPUHostConfig | VolcanoHostConfig | None
+    )
     is_slurm: bool  # whether allocation requires SLURM submission
     partition: str | None  # SLURM partition if applicable
 
@@ -36,6 +39,7 @@ def solve(
     config: DispatchConfig,
     check_availability: bool = False,
     timeout: float = 30.0,
+    interactive: bool = False,
 ) -> SolveResult:
     """Solve for hardware allocation given a request and config.
 
@@ -250,6 +254,95 @@ def solve(
                 ),
                 host_name=host_name,
                 host_config=host_cfg,
+                is_slurm=False,
+                partition=None,
+            )
+
+        elif isinstance(host_cfg, VolcanoHostConfig):
+            if interactive:
+                logger.debug(
+                    f"SOLVE | skipping Volcano host '{host_name}' (interactive session)"
+                )
+                continue
+
+            if cpu_mode:
+                logger.debug(
+                    f"SOLVE | skipping Volcano host '{host_name}' for cpu-only request"
+                )
+                continue
+
+            # Check chip type match
+            if chip_name is not None and chip_name not in host_cfg.chips:
+                logger.debug(
+                    f"SOLVE | Volcano host '{host_name}': chip '{chip_name}' not configured"
+                )
+                continue
+
+            # Compute total chips across all nodes
+            if chip_name is None:
+                chips_per_node = sum(max(v, 0) for v in host_cfg.chips.values())
+            else:
+                chips_per_node = host_cfg.chips.get(chip_name, 0)
+
+            # Also count GPUs from gpus_per_node if no chips mapping
+            if chips_per_node == 0 and host_cfg.gpus_per_node > 0:
+                chips_per_node = host_cfg.gpus_per_node
+
+            if chips_per_node == 0:
+                logger.debug(f"SOLVE | Volcano host '{host_name}': 0 chips per node")
+                continue
+
+            # Compute num_nodes needed from request (ceil division)
+            import math
+
+            num_nodes = math.ceil(request.min_chips / chips_per_node)
+            total_chips = chips_per_node * num_nodes
+
+            # Check real-time availability via Volcano queue
+            if check_availability and host_cfg.queue:
+                from theseus.dispatch.volcano import get_queue_availability
+
+                avail_info = get_queue_availability(
+                    host_cfg.queue,
+                    gpu_resource_key=host_cfg.gpu_resource_key,
+                    kubeconfig=host_cfg.kubeconfig,
+                    context=host_cfg.context,
+                    timeout=timeout,
+                )
+                if avail_info is not None:
+                    available, capacity = avail_info
+                    if available < request.min_chips:
+                        logger.debug(
+                            f"SOLVE | Volcano host '{host_name}': queue '{host_cfg.queue}' "
+                            f"has {available}/{capacity} GPUs available, need {request.min_chips}"
+                        )
+                        continue
+
+            logger.info(
+                f"SOLVE | selected Volcano host '{host_name}' "
+                f"({total_chips} chips across {num_nodes} nodes)"
+            )
+            cluster = inventory.get_cluster(host_cfg.cluster)
+            machine_resources = (
+                {request.chip: total_chips} if request.chip is not None else {}
+            )
+            machine = ClusterMachine(
+                name=host_name,
+                cluster=cluster,
+                resources=machine_resources,
+            )
+            # Update num_nodes to match what we actually need
+            import dataclasses as _dc
+
+            resolved_cfg = _dc.replace(host_cfg, num_nodes=num_nodes)
+            return SolveResult(
+                result=HardwareResult(
+                    chip=request.chip,
+                    hosts=[machine],
+                    total_chips=total_chips,
+                ),
+                host_name=host_name,
+                host_config=resolved_cfg,
                 is_slurm=False,
                 partition=None,
             )
@@ -600,9 +693,12 @@ def solve_or_raise(
     config: DispatchConfig,
     check_availability: bool = False,
     timeout: float = 30.0,
+    interactive: bool = False,
 ) -> SolveResult:
     """Like solve(), but raises if no solution found."""
-    result = solve(request, config, check_availability, timeout)
+    result = solve(
+        request, config, check_availability, timeout, interactive=interactive
+    )
     if result.result is None:
         target_desc = (
             "cpu-only"

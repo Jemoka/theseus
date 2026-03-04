@@ -671,9 +671,7 @@ class TokenizeVariableDatasetJob(BasicJob[TokenizePretrainingDatasetConfig]):
                     logger.info(
                         f"Resuming from train_idx={train_idx:,}, val_idx={val_idx:,}"
                     )
-                    logger.info(
-                        f"Skipping approximately {samples_to_skip:,} samples"
-                    )
+                    logger.info(f"Skipping approximately {samples_to_skip:,} samples")
 
             if train_idx > 0 or val_idx > 0:
                 # Truncate files to resume point

@@ -25,6 +25,11 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         display_name="Nvidia GB10",
         memory=int(64 * 1024**3),
     ),
+    "b200": Chip(
+        name="b200",
+        display_name="Nvidia B200",
+        memory=int(192 * 1024**3),
+    ),
     "h200": Chip(
         name="h200",
         display_name="Nvidia H200",

@@ -316,16 +316,51 @@ class HeartbeatUpdater:
 
 
 TPU_MODE_ENV = "THESEUS_TPU_MODE"
+VOLCANO_MODE_ENV = "THESEUS_VOLCANO_MODE"
+
+
+def _init_volcano_distributed():
+    """Initialize JAX distributed runtime from Volcano env plugin variables.
+
+    Volcano's ``env`` plugin injects:
+    - ``VC_WORKER_HOSTS``: comma-separated list of pod hostnames
+    - ``VC_TASK_INDEX``: 0-based index of this pod within the task group
+
+    JAX only auto-detects for TPU, SLURM, and Open MPI, so we must pass
+    coordinator_address, num_processes, and process_id explicitly.
+    """
+    import jax
+
+    worker_hosts = os.environ.get("VC_WORKER_HOSTS", "")
+    task_index = int(os.environ.get("VC_TASK_INDEX", "0"))
+
+    hosts = [h.strip() for h in worker_hosts.split(",") if h.strip()]
+    if not hosts:
+        # Single-node: no distributed init needed
+        return False
+
+    coordinator_address = f"{hosts[0]}:1234"
+    jax.distributed.initialize(
+        coordinator_address=coordinator_address,
+        num_processes=len(hosts),
+        process_id=task_index,
+    )
+    return True
 
 
 def main():
-    # Initialize JAX distributed runtime when running on a multi-host TPU pod.
-    # This MUST happen before any other JAX operation.  The env var is only set
-    # by the TPU dispatch path so this is a no-op for plain SSH / SLURM runs.
-    if os.environ.get(TPU_MODE_ENV):
+    # Initialize JAX distributed runtime for multi-host dispatch.
+    # The env vars are only set by the respective dispatch paths so
+    # this is a no-op for plain SSH / SLURM runs.
+    _jax_distributed = False
+    if os.environ.get(VOLCANO_MODE_ENV):
+        _jax_distributed = _init_volcano_distributed()
+    elif os.environ.get(TPU_MODE_ENV):
+        # TPU auto-detects topology via libtpu; no args needed.
         import jax
 
         jax.distributed.initialize()
+        _jax_distributed = True
 
     cfg = OmegaConf.create(CONFIG_YAML)
     _apply_runtime_config_overrides(cfg)
@@ -338,13 +373,23 @@ def main():
     topology = (
         Topology.new(hardware.chip, shard_into=n_shards) if hardware.chip else None
     )
+
+    # Detect multi-node from JAX runtime when distributed init was performed,
+    # since the serialized hardware only contains a single host entry.
+    if _jax_distributed:
+        import jax
+
+        distributed = jax.process_count() > 1
+    else:
+        distributed = len(hardware.hosts) > 1
+
     spec = ExecutionSpec(
         name=JOB_NAME,
         project=PROJECT or None,
         group=GROUP or None,
         hardware=hardware,
         topology=topology,
-        distributed=len(hardware.hosts) > 1,
+        distributed=distributed,
     )
 
     # Get cluster and setup status directory

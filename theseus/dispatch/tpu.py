@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -60,7 +61,11 @@ def run(
     in a TPU pod simultaneously.
     """
     gcloud_cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "ssh",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "ssh",
         tpu_name,
         f"--zone={zone}",
         f"--worker={worker}",
@@ -118,7 +123,11 @@ def copy_to(
     """
     local_path = Path(local_path)
     gcloud_cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "scp",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "scp",
         str(local_path),
         f"{tpu_name}:{remote_path}",
         f"--zone={zone}",
@@ -131,7 +140,9 @@ def copy_to(
     if internal_ip:
         gcloud_cmd.append("--internal-ip")
 
-    logger.debug(f"TPU | copying {local_path} to {tpu_name}:{remote_path} (worker={worker})")
+    logger.debug(
+        f"TPU | copying {local_path} to {tpu_name}:{remote_path} (worker={worker})"
+    )
 
     try:
         result = subprocess.run(
@@ -183,7 +194,11 @@ def create(
        for confirmation before calling this function.
     """
     gcloud_cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "create",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "create",
         name,
         f"--zone={zone}",
         f"--accelerator-type={accelerator_type}",
@@ -246,7 +261,11 @@ def delete(
     Uses ``--quiet`` to skip interactive confirmation from gcloud itself.
     """
     gcloud_cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "delete",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "delete",
         name,
         f"--zone={zone}",
         "--quiet",
@@ -286,10 +305,14 @@ def describe(
     zone: str,
     project: str | None = None,
     timeout: float | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Get TPU VM description as parsed JSON.  Returns *None* if not found."""
     gcloud_cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "describe",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "describe",
         name,
         f"--zone={zone}",
         "--format=json",
@@ -308,7 +331,8 @@ def describe(
         )
         if result.returncode != 0:
             return None
-        return json.loads(result.stdout)
+        data: dict[str, Any] = json.loads(result.stdout)
+        return data
     except (subprocess.TimeoutExpired, json.JSONDecodeError):
         return None
 
@@ -410,7 +434,11 @@ def forward_port(
         return pids
 
     cmd = [
-        "gcloud", "compute", "tpus", "tpu-vm", "ssh",
+        "gcloud",
+        "compute",
+        "tpus",
+        "tpu-vm",
+        "ssh",
         tpu_name,
         f"--zone={zone}",
         f"--worker={worker}",
@@ -448,7 +476,9 @@ def forward_port(
             stderr = ""
             if proc.stderr is not None:
                 stderr = proc.stderr.read() or ""
-            return TunnelResult(returncode=rc, pid=None, command=cmd, stderr=stderr.strip())
+            return TunnelResult(
+                returncode=rc, pid=None, command=cmd, stderr=stderr.strip()
+            )
 
         listeners = _listener_pids(local_port)
         if proc.pid in listeners:

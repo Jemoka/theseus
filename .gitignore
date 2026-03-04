@@ -11,3 +11,6 @@ wheels/
 
 # Documentation build artifacts
 site/
+
+# Internal company-specific docs
+examples/volcano_c.md

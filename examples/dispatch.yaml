@@ -27,6 +27,11 @@ clusters:
     work: /home/user/theseus-work
     log: /home/user/theseus-logs
 
+  k8s:
+    root: /workspace/theseus-data     # paths on the PVC
+    work: /workspace/theseus-work
+    log: /workspace/theseus-logs
+
   hpc:
     root: /mnt/juicefs/theseus
     work: /scratch/theseus
@@ -125,3 +130,38 @@ hosts:
     # metadata:                 # instance metadata key-value pairs (optional)
     #   startup-script: "echo hello"
     uv_groups: [tpu]            # uv sync --group tpu
+
+  # Kubernetes Volcano batch scheduler - gang-scheduled distributed training
+  # Requires: Volcano installed on the K8s cluster, a PVC for code/data,
+  # and kubectl configured to access the cluster.
+  gpu-cluster:
+    type: volcano
+    cluster: k8s
+    namespace: training
+    queue: default
+    image: nvcr.io/nvidia/jax:24.04-py3
+    pvc_name: training-data       # PVC for code + data
+    pvc_mount_path: /workspace    # mount point inside pods
+    num_nodes: 4
+    gpus_per_node: 8
+    chips:
+      h100: 8                     # chip_name -> count per node
+    gpu_resource_key: nvidia.com/gpu  # K8s resource name for GPUs
+    cpu: "32"
+    memory: "256Gi"
+    shm_size: "64Gi"              # /dev/shm size for NCCL
+    # priority_class: high-priority  # optional K8s PriorityClass
+    # service_account: training-sa   # optional K8s ServiceAccount
+    # kubeconfig: /path/to/kubeconfig  # optional (defaults to ~/.kube/config)
+    # context: my-cluster            # optional kubectl context
+    # node_selector:                 # optional node selection constraints
+    #   accelerator: nvidia-h100
+    # tolerations:                   # optional tolerations for taints
+    #   - key: nvidia.com/gpu
+    #     operator: Exists
+    #     effect: NoSchedule
+    # rdma: false                     # request RDMA devices for high-bandwidth inter-node comms
+    # rdma_per_node: 8                # RDMA device count per node (default 8)
+    # env:                           # extra env vars injected into pods
+    #   NCCL_DEBUG: INFO
+    uv_groups: [gpu]
