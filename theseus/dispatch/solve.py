@@ -9,11 +9,13 @@ from dataclasses import dataclass
 from loguru import logger
 
 from theseus.base.hardware import ClusterMachine, HardwareRequest, HardwareResult
+from theseus.base.chip import SUPPORTED_CHIPS
 from theseus.dispatch.config import (
     DispatchConfig,
     PartitionConfig,
     PlainHostConfig,
     SlurmHostConfig,
+    TPUHostConfig,
     RemoteInventory,
 )
 
@@ -24,7 +26,7 @@ class SolveResult:
 
     result: HardwareResult | None
     host_name: str | None  # name of selected host in config
-    host_config: PlainHostConfig | SlurmHostConfig | None
+    host_config: PlainHostConfig | SlurmHostConfig | TPUHostConfig | None
     is_slurm: bool  # whether allocation requires SLURM submission
     partition: str | None  # SLURM partition if applicable
 
@@ -173,6 +175,84 @@ def solve(
                     is_slurm=False,
                     partition=None,
                 )
+
+        elif isinstance(host_cfg, TPUHostConfig):
+            if cpu_mode:
+                # TPUs don't serve CPU-only requests
+                logger.debug(
+                    f"SOLVE | skipping TPU host '{host_name}' for cpu-only request"
+                )
+                continue
+
+            from theseus.dispatch.tpu import parse_accelerator_type
+
+            try:
+                tpu_chip_name, tpu_chips = parse_accelerator_type(
+                    host_cfg.accelerator_type
+                )
+            except ValueError:
+                logger.warning(
+                    f"SOLVE | skipping TPU host '{host_name}': "
+                    f"invalid accelerator_type '{host_cfg.accelerator_type}'"
+                )
+                continue
+
+            # Check chip type match
+            if chip_name is not None and chip_name != tpu_chip_name:
+                logger.debug(
+                    f"SOLVE | TPU host '{host_name}': chip mismatch "
+                    f"(want {chip_name}, have {tpu_chip_name})"
+                )
+                continue
+
+            # Check chip count
+            if tpu_chips < request.min_chips:
+                logger.debug(
+                    f"SOLVE | TPU host '{host_name}': insufficient chips "
+                    f"(have {tpu_chips}, need {request.min_chips})"
+                )
+                continue
+
+            # Optionally check if the TPU VM actually exists and is READY
+            if check_availability:
+                from theseus.dispatch.tpu import get_status as tpu_get_status
+
+                tpu_state = tpu_get_status(
+                    host_name, host_cfg.zone, host_cfg.project, timeout=timeout
+                )
+                # None means not found (will be created at dispatch time)
+                # READY means good to go; other states mean it's not usable now
+                if tpu_state is not None and tpu_state != "READY":
+                    logger.debug(
+                        f"SOLVE | TPU host '{host_name}': state={tpu_state}, not READY"
+                    )
+                    continue
+
+            chip_obj = SUPPORTED_CHIPS.get(tpu_chip_name) or (
+                request.chip if chip_name is None else None
+            )
+            logger.info(
+                f"SOLVE | selected TPU host '{host_name}' "
+                f"({host_cfg.accelerator_type}, {tpu_chips} chips)"
+            )
+            cluster = inventory.get_cluster(host_cfg.cluster)
+            machine_resources = {chip_obj: tpu_chips} if chip_obj else {}
+            machine = ClusterMachine(
+                name=host_name,
+                cluster=cluster,
+                resources=machine_resources,
+            )
+            return SolveResult(
+                result=HardwareResult(
+                    chip=chip_obj,
+                    hosts=[machine],
+                    total_chips=tpu_chips,
+                ),
+                host_name=host_name,
+                host_config=host_cfg,
+                is_slurm=False,
+                partition=None,
+            )
 
         elif isinstance(host_cfg, SlurmHostConfig):
             # Check if this host has an explicit chip limit

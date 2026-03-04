@@ -22,6 +22,11 @@ clusters:
     work: /tmp/theseus
     log: /var/log/theseus  # optional, defaults to {work}/logs
 
+  gcp:
+    root: /home/user/theseus-data      # paths on the TPU VM filesystem
+    work: /home/user/theseus-work
+    log: /home/user/theseus-logs
+
   hpc:
     root: /mnt/juicefs/theseus
     work: /scratch/theseus
@@ -101,3 +106,22 @@ hosts:
     type: slurm
     partitions: [a100, h100]
     uv_groups: [cuda11]         # older CUDA on this cluster
+
+  # Google Cloud TPU VM - created/managed via gcloud CLI
+  # The host name ('my-tpu-v4') is used as the TPU VM name in gcloud commands.
+  my-tpu-v4:
+    type: tpu
+    cluster: gcp
+    zone: us-central2-b         # GCP zone for TPU
+    project: my-gcp-project     # GCP project (optional, uses gcloud default)
+    accelerator_type: v4-32     # TPU type and size (4 hosts x 8 chips = 32)
+    version: tpu-ubuntu2204-base  # TPU software version
+    spot: true                  # use spot pricing (cheaper, may be preempted)
+    # preemptible: false        # alternative to spot (24h time limit)
+    # network: my-vpc           # VPC network (optional)
+    # subnetwork: my-subnet     # VPC subnetwork (optional)
+    # service_account: sa@proj.iam.gserviceaccount.com  # (optional)
+    # internal_ip: false        # use internal IP for SSH (optional)
+    # metadata:                 # instance metadata key-value pairs (optional)
+    #   startup-script: "echo hello"
+    uv_groups: [tpu]            # uv sync --group tpu

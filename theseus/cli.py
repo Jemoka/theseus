@@ -533,6 +533,21 @@ def run(
     multiple=True,
     help="Additional YAML config(s) for sequential stages within the same allocation.",
 )  # type: ignore[misc]
+@click.option(
+    "--tpu-version",
+    default=None,
+    help="Override TPU software version (e.g. 'tpu-ubuntu2204-base')",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-spot/--tpu-on-demand",
+    default=None,
+    help="Override TPU spot pricing setting",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-preemptible/--tpu-no-preemptible",
+    default=None,
+    help="Override TPU preemptible setting",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -550,6 +565,9 @@ def submit(
     dirty: bool,
     uv_targets: tuple[str, ...],
     extra_stages: tuple[str, ...],
+    tpu_version: str | None,
+    tpu_spot: bool | None,
+    tpu_preemptible: bool | None,
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -720,6 +738,12 @@ def submit(
         )
     console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
     console.print(f"[blue]Dirty:[/blue] {dirty}")
+    if tpu_version:
+        console.print(f"[blue]TPU version override:[/blue] {tpu_version}")
+    if tpu_spot is not None:
+        console.print(f"[blue]TPU spot override:[/blue] {tpu_spot}")
+    if tpu_preemptible is not None:
+        console.print(f"[blue]TPU preemptible override:[/blue] {tpu_preemptible}")
 
     # Dispatch the job
     result = dispatch(
@@ -731,6 +755,9 @@ def submit(
         mem=mem,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
         extra_cfgs=extra_cfgs if extra_cfgs else None,
+        tpu_version_override=tpu_version,
+        tpu_spot_override=tpu_spot,
+        tpu_preemptible_override=tpu_preemptible,
     )
 
     if not result.ok:
@@ -816,6 +843,21 @@ def submit(
     multiple=True,
     help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
 )  # type: ignore[misc]
+@click.option(
+    "--tpu-version",
+    default=None,
+    help="Override TPU software version (e.g. 'tpu-ubuntu2204-base')",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-spot/--tpu-on-demand",
+    default=None,
+    help="Override TPU spot pricing setting",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-preemptible/--tpu-no-preemptible",
+    default=None,
+    help="Override TPU preemptible setting",
+)  # type: ignore[misc]
 def repl(
     dispatch_config: str | None,
     chip: str | None,
@@ -831,6 +873,9 @@ def repl(
     startup_timeout: float,
     slurm_wait_timeout: float | None,
     uv_targets: tuple[str, ...],
+    tpu_version: str | None,
+    tpu_spot: bool | None,
+    tpu_preemptible: bool | None,
 ) -> None:
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
@@ -1023,6 +1068,9 @@ def repl(
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
+        tpu_version_override=tpu_version,
+        tpu_spot_override=tpu_spot,
+        tpu_preemptible_override=tpu_preemptible,
     )
 
     if not result.ok:
