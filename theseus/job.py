@@ -51,7 +51,16 @@ class BasicJob(_BaseJob, Generic[C]):
         """Run the job, assuming all hosts have setup"""
         raise NotImplementedError()
 
-    def finish(self) -> None: ...
+    def finish(self) -> None:
+        # Finalize wandb run (if active) so sequential stages or callers
+        # get a clean slate.  Safe to call even when wandb was never imported.
+        try:
+            import wandb
+
+            if wandb.run is not None:
+                wandb.finish()
+        except ImportError:
+            pass
 
     def __call__(self) -> None:
         if self.done:

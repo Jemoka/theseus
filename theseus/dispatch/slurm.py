@@ -164,8 +164,10 @@ class SlurmJob:
     # Set to False for plain SSH (skips SBATCH directives)
     is_slurm: bool = True
 
-    # Python bootstrap script content (written to _bootstrap_dispatch.py at runtime)
-    bootstrap_py: str | None = None
+    # Python bootstrap script(s): {filename: content} written to BOOTSTRAP_WORKDIR.
+    # Single-stage: {"_bootstrap_dispatch.py": content}
+    # Multi-stage:  {"_bootstrap_dispatch_stage1.py": c1, "_bootstrap_dispatch_stage2.py": c2, ...}
+    bootstrap_pys: dict[str, str] = field(default_factory=dict)
 
     def pack(self, tarball: bytes) -> "SlurmJob":
         """Return a new SlurmJob with the given tarball as payload.
@@ -307,12 +309,12 @@ base64 -d <<'__PAYLOAD_EOF__' | tar -xzf - -C "$BOOTSTRAP_WORKDIR"
 __PAYLOAD_EOF__
 """)
 
-        # Write Python bootstrap script (not included in git archive, so embedded here)
-        if self.bootstrap_py:
+        # Write Python bootstrap script(s) (not included in git archive, so embedded here)
+        for filename, content in self.bootstrap_pys.items():
             payload_extract_parts.append(f"""
-echo "[bootstrap] writing _bootstrap_dispatch.py..."
-cat > "$BOOTSTRAP_WORKDIR"/_bootstrap_dispatch.py << '__BOOTSTRAP_PY_EOF__'
-{self.bootstrap_py}
+echo "[bootstrap] writing {filename}..."
+cat > "$BOOTSTRAP_WORKDIR"/{filename} << '__BOOTSTRAP_PY_EOF__'
+{content}
 __BOOTSTRAP_PY_EOF__
 """)
 
@@ -342,6 +344,10 @@ __BOOTSTRAP_PY_EOF__
 
         # Command (use uv run to execute in the synced environment)
         script = script.replace("__COMMAND__", f"uv run {self.command}")
+
+        # Stage files for per-stage autobatch (derived from bootstrap_pys keys)
+        stage_files = " ".join(self.bootstrap_pys.keys())
+        script = script.replace("__STAGE_FILES__", stage_files)
 
         return script
 

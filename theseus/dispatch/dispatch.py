@@ -121,6 +121,42 @@ def _get_work_dir(cluster_work: str, spec: JobSpec) -> str:
     return f"{cluster_work}/{project}/{group}/{spec.name}"
 
 
+def _build_stages(
+    cfgs: list[DictConfig],
+    hardware: HardwareResult,
+    spec: JobSpec,
+) -> tuple[dict[str, str], str]:
+    """Build bootstrap .py files and command string for one or more stages.
+
+    Single-stage (backward compat): produces ``_bootstrap_dispatch.py`` with the
+    standard command ``python _bootstrap_dispatch.py``.
+
+    Multi-stage: produces ``_bootstrap_dispatch_stage{N}.py`` per stage and a
+    ``bash -c`` command that chains them with ``&&``.
+
+    Returns:
+        (bootstrap_pys dict mapping filename → content, command string)
+    """
+    n = len(cfgs)
+    if n == 1:
+        content = _generate_bootstrap(cfgs[0], hardware, spec)
+        return {"_bootstrap_dispatch.py": content}, "python _bootstrap_dispatch.py"
+
+    bootstrap_pys: dict[str, str] = {}
+    commands: list[str] = []
+    for i, cfg in enumerate(cfgs, 1):
+        stage_name = f"{spec.name}_stage{i}"
+        stage_spec = JobSpec(name=stage_name, project=spec.project, group=spec.group)
+        filename = f"_bootstrap_dispatch_stage{i}.py"
+        content = _generate_bootstrap(cfg, hardware, stage_spec)
+        bootstrap_pys[filename] = content
+        commands.append(f"python {filename}")
+
+    # Chain with && so failure in any stage stops the pipeline
+    command = "bash -c '" + " && ".join(commands) + "'"
+    return bootstrap_pys, command
+
+
 def dispatch(
     cfg: DictConfig,
     spec: JobSpec,
@@ -131,6 +167,7 @@ def dispatch(
     mem: str | None = None,
     timeout: float = 60.0,
     extra_uv_groups: list[str] | None = None,
+    extra_cfgs: list[DictConfig] | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -149,6 +186,9 @@ def dispatch(
         check_availability: Check real-time GPU availability (default: True)
         mem: Memory override for SLURM jobs (e.g., "64G", "128G")
         timeout: SSH timeout in seconds
+        extra_cfgs: Additional job configs for multi-stage pipelines.
+            When provided, all configs run sequentially in a single allocation.
+            Job names are suffixed: name_stage1, name_stage2, ...
 
     Returns:
         SlurmResult for SLURM clusters, RunResult for plain SSH hosts
@@ -156,8 +196,12 @@ def dispatch(
     Raises:
         RuntimeError: If job not found in registry or no hardware available
     """
+    all_cfgs = [cfg] + (extra_cfgs or [])
+    n_stages = len(all_cfgs)
+
     logger.info(
-        f"DISPATCH | starting dispatch for job '{spec.name}' (project={spec.project}, group={spec.group})"
+        f"DISPATCH | starting dispatch for job '{spec.name}' "
+        f"(project={spec.project}, group={spec.group}, stages={n_stages})"
     )
     target_desc = (
         "cpu-only"
@@ -166,14 +210,16 @@ def dispatch(
     )
     logger.debug(f"DISPATCH | hardware request: {target_desc}")
 
-    # 1. Validate job exists
-    job_key = cfg.job
-    if job_key not in JOBS:
-        logger.error(f"DISPATCH | job '{job_key}' not in registry")
-        raise RuntimeError(
-            f"Job '{job_key}' not in registry. Available: {list(JOBS.keys())}"
-        )
-    logger.debug(f"DISPATCH | validated job '{job_key}' exists in registry")
+    # 1. Validate all stage jobs exist in registry
+    for i, stage_cfg in enumerate(all_cfgs):
+        job_key = stage_cfg.job
+        if job_key not in JOBS:
+            stage_label = f"stage {i + 1} " if n_stages > 1 else ""
+            logger.error(f"DISPATCH | {stage_label}job '{job_key}' not in registry")
+            raise RuntimeError(
+                f"Job '{job_key}' not in registry. Available: {list(JOBS.keys())}"
+            )
+    logger.debug(f"DISPATCH | validated {n_stages} job(s) exist in registry")
 
     # 2. Solve for hardware
     logger.debug("DISPATCH | solving for hardware allocation...")
@@ -211,9 +257,9 @@ def dispatch(
         )
         logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
 
-    # 4. Generate bootstrap script (Python script that runs the job)
-    logger.debug("DISPATCH | generating bootstrap script")
-    bootstrap_py_content = _generate_bootstrap(cfg, solve_result.result, spec)
+    # 4. Generate bootstrap script(s) (Python scripts that run the job stages)
+    logger.debug(f"DISPATCH | generating {n_stages} bootstrap script(s)")
+    bootstrap_pys, command = _build_stages(all_cfgs, solve_result.result, spec)
 
     # 5. Submit based on host type
     if solve_result.is_slurm:
@@ -228,7 +274,8 @@ def dispatch(
             share_dir,
             cluster,
             juicefs_mount,
-            bootstrap_py_content,
+            bootstrap_pys,
+            command,
             mem,
             dirty,
             timeout,
@@ -242,7 +289,8 @@ def dispatch(
             cluster,
             juicefs_mount,
             spec,
-            bootstrap_py_content,
+            bootstrap_pys,
+            command,
             dirty,
             timeout,
             extra_uv_groups=extra_uv_groups or [],
@@ -257,7 +305,8 @@ def _dispatch_slurm(
     share_dir: str,
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
-    bootstrap_py_content: str,
+    bootstrap_pys: dict[str, str],
+    command: str,
     mem: str | None,
     dirty: bool,
     timeout: float,
@@ -291,10 +340,10 @@ def _dispatch_slurm(
     group = spec.group or "default"
     job_name = f"{project}-{group}-{spec.name}"
 
-    # Build SlurmJob with embedded bootstrap Python script
+    # Build SlurmJob with embedded bootstrap Python script(s)
     job = SlurmJob(
         name=job_name,
-        command="python _bootstrap_dispatch.py",
+        command=command,
         root_dir=cluster.root,
         partition=solve_result.partition,
         nodes=len(solve_result.result.hosts),
@@ -308,7 +357,7 @@ def _dispatch_slurm(
         payload_extract_to=work_dir,
         output=f"{cluster.log_dir}/{job_name}-%j.out",
         juicefs_mount=juicefs_mount,
-        bootstrap_py=bootstrap_py_content,
+        bootstrap_pys=bootstrap_pys,
         cpus_per_task=2,
         time="14-0",
     )
@@ -337,7 +386,8 @@ def _dispatch_plain(
     cluster: Cluster,
     juicefs_mount: JuiceFSMount | None,
     spec: JobSpec,
-    bootstrap_py_content: str,
+    bootstrap_pys: dict[str, str],
+    command: str,
     dirty: bool,
     timeout: float,
     extra_uv_groups: list[str] | None = None,
@@ -361,13 +411,12 @@ def _dispatch_plain(
     # Build bootstrap job (reusing SlurmJob but for SSH mode)
     job = SlurmJob(
         name="theseus-dispatch",
-        command="python _bootstrap_dispatch.py",
+        command=command,
         root_dir=cluster.root,
         is_slurm=False,  # SSH mode - no SBATCH directives
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
-        bootstrap_py=bootstrap_py_content,
     )
 
     # Generate bootstrap script (without SBATCH directives since partition=None)
@@ -397,16 +446,17 @@ def _dispatch_plain(
         )
         return write_result
 
-    # Write _bootstrap_dispatch.py to remote (not included in git archive)
-    bootstrap_py_remote = f"{work_dir}/_bootstrap_dispatch.py"
-    logger.debug(f"DISPATCH | writing _bootstrap_dispatch.py to {bootstrap_py_remote}")
-    write_py_cmd = f"cat > {bootstrap_py_remote} << 'BOOTSTRAP_PY_EOF'\n{bootstrap_py_content}BOOTSTRAP_PY_EOF"
-    write_py_result = run(write_py_cmd, ssh_alias, timeout=timeout)
-    if not write_py_result.ok:
-        logger.error(
-            f"DISPATCH | failed to write bootstrap Python script: {write_py_result.stderr}"
-        )
-        return write_py_result
+    # Write bootstrap Python script(s) to remote (not included in git archive)
+    for filename, content in bootstrap_pys.items():
+        remote_path = f"{work_dir}/{filename}"
+        logger.debug(f"DISPATCH | writing {filename} to {remote_path}")
+        write_py_cmd = f"cat > {remote_path} << 'BOOTSTRAP_PY_EOF'\n{content}BOOTSTRAP_PY_EOF"
+        write_py_result = run(write_py_cmd, ssh_alias, timeout=timeout)
+        if not write_py_result.ok:
+            logger.error(
+                f"DISPATCH | failed to write {filename}: {write_py_result.stderr}"
+            )
+            return write_py_result
 
     # Run bootstrap script with nohup (non-blocking)
     logger.debug(f"DISPATCH | launching job via nohup, logs at {log_file}")

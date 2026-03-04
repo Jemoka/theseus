@@ -331,6 +331,13 @@ def configure(
 @click.option(
     "-g", "--group", default=None, help="Group under the project this run belongs to"
 )  # type: ignore[misc]
+@click.option(
+    "-s",
+    "--stage",
+    "extra_stages",
+    multiple=True,
+    help="Additional YAML config(s) for sequential stages.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
     name: str,
@@ -339,6 +346,7 @@ def run(
     job: str | None,
     project: str | None,
     group: str | None,
+    extra_stages: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
@@ -380,9 +388,8 @@ def run(
         console.print(f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n")
         sys.exit(1)
 
-    job_obj = jobs[job]
-
     # Apply CLI overrides
+    cfg_cli = None
     if overrides:
         cfg_cli = OmegaConf.from_dotlist(list(overrides))
         cfg = OmegaConf.merge(cfg, cfg_cli)
@@ -393,21 +400,85 @@ def run(
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
 
-    # Print what we're about to dispatch
+    # Load extra stage configs (for multi-stage pipelines)
+    extra_cfgs: List[Any] = []
+    for stage_path in extra_stages:
+        if not Path(stage_path).exists():
+            console.print(
+                f"\n[red]Error: Stage config '{stage_path}' not found[/red]\n"
+            )
+            sys.exit(1)
+        stage_cfg = OmegaConf.load(stage_path)
+        if "job" not in stage_cfg:
+            console.print(
+                f"\n[red]Error: Stage config '{stage_path}' has no 'job' key[/red]\n"
+            )
+            sys.exit(1)
+        stage_job = stage_cfg.job
+        if stage_job not in jobs:
+            console.print(
+                f"\n[red]Error: Stage job '{stage_job}' not found in registry[/red]"
+            )
+            console.print(
+                f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
+            )
+            sys.exit(1)
+        if cfg_cli is not None:
+            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+        extra_cfgs.append(stage_cfg)
+
+    # Build list of all stages: [(cfg, stage_name, job_key)]
+    all_cfgs = [cfg] + extra_cfgs
+    n_stages = len(all_cfgs)
+    if n_stages == 1:
+        stages = [(cfg, name, cfg.job)]
+    else:
+        stages = [
+            (c, f"{name}_stage{i}", c.job) for i, c in enumerate(all_cfgs, 1)
+        ]
+
+    # Print what we're about to run
     console.print()
-    console.print(f"[blue]Running job '{job}':[/blue]")
-    console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
+    if n_stages > 1:
+        console.print(f"[blue]Running {n_stages}-stage pipeline '{name}':[/blue]")
+        for stage_cfg, stage_name, stage_job in stages:
+            console.print(f"\n[blue]Stage ({stage_name}) — job '{stage_job}':[/blue]")
+            console.print(
+                Syntax(OmegaConf.to_yaml(stage_cfg), "yaml", background_color="default")
+            )
+    else:
+        console.print(f"[blue]Running job '{job}':[/blue]")
+        console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
     console.print(f"[blue]Output path:[/blue] {out_path}")
     console.print()
 
-    # Run the job within the configuration context
-    # BasicJob.__init__ will call configure() to hydrate args from the context
-    with configuration(cfg):
-        job_instance = job_obj.local(out_path, name=name, project=project, group=group)
-        job_instance()
+    # Run each stage sequentially within its configuration context
+    for stage_cfg, stage_name, stage_job in stages:
+        if n_stages > 1:
+            console.print(f"\n[blue]Starting stage '{stage_name}' (job: {stage_job})...[/blue]")
+            # Reset random state for each stage so behaviour matches standalone runs
+            random.seed(0)
+            np.random.seed(0)
+        stage_job_obj = jobs[stage_job]
+        with configuration(stage_cfg):
+            job_instance = stage_job_obj.local(
+                out_path, name=stage_name, project=project, group=group
+            )
+            job_instance()
+        # Finalize wandb run between stages (if active) so the next stage
+        # gets a fresh wandb.init() rather than resuming the previous one
+        if n_stages > 1:
+            try:
+                import wandb
+
+                if wandb.run is not None:
+                    wandb.finish()
+            except ImportError:
+                pass
+            console.print(f"[green]Stage '{stage_name}' completed[/green]")
 
     console.print()
-    console.print(f"\n[green]Job '{job}' completed successfully[/green]")
+    console.print(f"\n[green]Job '{name}' completed successfully[/green]")
     console.print()
 
 
@@ -455,6 +526,13 @@ def run(
     multiple=True,
     help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
 )  # type: ignore[misc]
+@click.option(
+    "-s",
+    "--stage",
+    "extra_stages",
+    multiple=True,
+    help="Additional YAML config(s) for sequential stages within the same allocation.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -471,6 +549,7 @@ def submit(
     exclude_cluster: str | None,
     dirty: bool,
     uv_targets: tuple[str, ...],
+    extra_stages: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -548,7 +627,7 @@ def submit(
         cfg.request.n_shards = request_n_shards
         OmegaConf.set_struct(cfg, True)
 
-    # Apply CLI overrides
+    # Apply CLI overrides to primary config
     if overrides:
         cfg_cli = OmegaConf.from_dotlist(list(overrides))
         cfg = OmegaConf.merge(cfg, cfg_cli)
@@ -558,6 +637,35 @@ def submit(
         for override in overrides:
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
+
+    # Load extra stage configs (for multi-stage pipelines)
+    extra_cfgs: list[Any] = []
+    for stage_path in extra_stages:
+        if not Path(stage_path).exists():
+            console.print(
+                f"\n[red]Error: Stage config '{stage_path}' not found[/red]\n"
+            )
+            sys.exit(1)
+        stage_cfg = OmegaConf.load(stage_path)
+        # Each stage must have a job key
+        if "job" not in stage_cfg:
+            console.print(
+                f"\n[red]Error: Stage config '{stage_path}' has no 'job' key[/red]\n"
+            )
+            sys.exit(1)
+        stage_job = stage_cfg.job
+        if stage_job not in jobs:
+            console.print(
+                f"\n[red]Error: Stage job '{stage_job}' not found in registry[/red]"
+            )
+            console.print(
+                f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
+            )
+            sys.exit(1)
+        # Apply same CLI overrides to all stages
+        if overrides:
+            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+        extra_cfgs.append(stage_cfg)
 
     # Parse cluster filters
     preferred_clusters = [c.strip() for c in cluster.split(",")] if cluster else []
@@ -581,9 +689,21 @@ def submit(
     )
 
     # Print what we're about to dispatch
+    n_stages = 1 + len(extra_cfgs)
     console.print()
-    console.print(f"[blue]Submitting job '{job}':[/blue]")
-    console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
+    if n_stages > 1:
+        console.print(
+            f"[blue]Submitting {n_stages}-stage pipeline '{name}':[/blue]"
+        )
+        for i, stage_cfg in enumerate([cfg] + extra_cfgs, 1):
+            stage_label = f"{name}_stage{i}"
+            console.print(f"\n[blue]Stage {i} ({stage_label}) — job '{stage_cfg.job}':[/blue]")
+            console.print(
+                Syntax(OmegaConf.to_yaml(stage_cfg), "yaml", background_color="default")
+            )
+    else:
+        console.print(f"[blue]Submitting job '{job}':[/blue]")
+        console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
     if request_chips == 0:
         console.print("[blue]Hardware:[/blue] cpu-only (n_chips=0)")
     elif request_chip is None:
@@ -610,6 +730,7 @@ def submit(
         dirty=dirty,
         mem=mem,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
+        extra_cfgs=extra_cfgs if extra_cfgs else None,
     )
 
     if not result.ok:
@@ -1308,7 +1429,7 @@ def bootstrap(
         root_dir=root_path,
         payload_extract_to=work_dir,
         juicefs_mount=juicefs_mount,
-        bootstrap_py=bootstrap_py_content,
+        bootstrap_pys={"_bootstrap_dispatch.py": bootstrap_py_content},
         uv_groups=effective_uv_groups,
     )
 
