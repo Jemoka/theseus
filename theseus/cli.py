@@ -843,6 +843,21 @@ def submit(
     multiple=True,
     help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
 )  # type: ignore[misc]
+@click.option(
+    "--tpu-version",
+    default=None,
+    help="Override TPU software version (e.g. 'tpu-ubuntu2204-base')",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-spot/--tpu-on-demand",
+    default=None,
+    help="Override TPU spot pricing setting",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-preemptible/--tpu-no-preemptible",
+    default=None,
+    help="Override TPU preemptible setting",
+)  # type: ignore[misc]
 def repl(
     dispatch_config: str | None,
     chip: str | None,
@@ -858,6 +873,9 @@ def repl(
     startup_timeout: float,
     slurm_wait_timeout: float | None,
     uv_targets: tuple[str, ...],
+    tpu_version: str | None,
+    tpu_spot: bool | None,
+    tpu_preemptible: bool | None,
 ) -> None:
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
@@ -1050,6 +1068,9 @@ def repl(
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
+        tpu_version_override=tpu_version,
+        tpu_spot_override=tpu_spot,
+        tpu_preemptible_override=tpu_preemptible,
     )
 
     if not result.ok:

@@ -45,6 +45,7 @@ Usage:
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -863,12 +864,14 @@ def _wait_for_jupyter_log(
     log_path: str,
     timeout: float,
     ssh_timeout: float,
+    run_fn: Callable[..., RunResult] | None = None,
 ) -> tuple[str | None, int | None, str | None, str | None]:
     """Poll a remote log file until Jupyter startup metadata appears."""
+    _run = run_fn or run
     start = time.time()
     missing_file_grace_until = start + min(timeout, 20.0)
     while (time.time() - start) < timeout:
-        read_result = run(f"tail -n 200 {log_path}", host, timeout=ssh_timeout)
+        read_result = _run(f"tail -n 200 {log_path}", host, timeout=ssh_timeout)
         if not read_result.ok:
             stderr = (read_result.stderr or "").strip()
             if (
@@ -904,14 +907,18 @@ def _wait_for_jupyter_log(
 
 
 def _resolve_remote_notebook_pid(
-    host: str, port: int, ssh_timeout: float
+    host: str,
+    port: int,
+    ssh_timeout: float,
+    run_fn: Callable[..., RunResult] | None = None,
 ) -> int | None:
     """Resolve the remote notebook PID bound to the selected port."""
+    _run = run_fn or run
     pid_cmd = (
         f"(lsof -ti :{port} 2>/dev/null | head -n 1) || "
         f"(ss -ltnp 2>/dev/null | grep ':{port} ' | sed -n 's/.*pid=\\([0-9]\\+\\).*/\\1/p' | head -n 1)"
     )
-    pid_result = run(pid_cmd, host, timeout=ssh_timeout)
+    pid_result = _run(pid_cmd, host, timeout=ssh_timeout)
     if not pid_result.ok:
         return None
     for line in pid_result.stdout.splitlines():
@@ -922,10 +929,14 @@ def _resolve_remote_notebook_pid(
 
 
 def _read_remote_mailbox_job_id(
-    host: str, work_dir: str, ssh_timeout: float
+    host: str,
+    work_dir: str,
+    ssh_timeout: float,
+    run_fn: Callable[..., RunResult] | None = None,
 ) -> str | None:
+    _run = run_fn or run
     path = f"{work_dir}/.theseus_repl_mailbox_job_id"
-    read_result = run(f"cat {path}", host, timeout=ssh_timeout)
+    read_result = _run(f"cat {path}", host, timeout=ssh_timeout)
     if not read_result.ok:
         return None
     value = read_result.stdout.strip()
@@ -945,6 +956,9 @@ def dispatch_repl(
     slurm_wait_timeout: float | None = None,
     sync_enabled: bool = False,
     extra_uv_groups: list[str] | None = None,
+    tpu_version_override: str | None = None,
+    tpu_spot_override: bool | None = None,
+    tpu_preemptible_override: bool | None = None,
 ) -> ReplResult:
     """Dispatch an interactive Jupyter session on selected infrastructure."""
     solve_result = solve_or_raise(
@@ -970,6 +984,34 @@ def dispatch_repl(
             mount_point=cluster.root,
             cache_size=cluster_config.cache_size,
             cache_dir=cluster_config.cache_dir,
+        )
+
+    if isinstance(solve_result.host_config, TPUHostConfig):
+        from theseus.dispatch.tpu import parse_accelerator_type
+
+        _, n_chips = parse_accelerator_type(
+            solve_result.host_config.accelerator_type
+        )
+        if n_chips > 4:
+            raise RuntimeError(
+                f"REPL is only supported on single-host TPUs (<=4 chips), "
+                f"but '{solve_result.host_config.accelerator_type}' has {n_chips} chips"
+            )
+        return _dispatch_repl_tpu(
+            solve_result=solve_result,
+            spec=spec,
+            work_dir=work_dir,
+            cluster=cluster,
+            juicefs_mount=juicefs_mount,
+            local_port=local_port,
+            dirty=dirty,
+            timeout=timeout,
+            startup_timeout=startup_timeout,
+            sync_enabled=sync_enabled,
+            extra_uv_groups=extra_uv_groups or [],
+            tpu_version_override=tpu_version_override,
+            tpu_spot_override=tpu_spot_override,
+            tpu_preemptible_override=tpu_preemptible_override,
         )
 
     if solve_result.is_slurm:
@@ -1164,6 +1206,307 @@ def _dispatch_repl_plain(
         is_slurm=False,
         selected_host=host_name,
         ssh_host=ssh_alias,
+        log_path=log_file,
+        remote_pid=remote_pid,
+        remote_port=remote_port,
+        token=token,
+        remote_url=remote_url,
+        local_port=local_port,
+        local_url=local_url,
+        tunnel_pid=tunnel_result.pid,
+        cluster_name=cluster.name,
+        cluster_root=cluster.root,
+        cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+        work_dir=work_dir,
+        mailbox_job_id=mailbox_job_id,
+    )
+
+
+def _dispatch_repl_tpu(
+    solve_result: SolveResult,
+    spec: JobSpec,
+    work_dir: str,
+    cluster: Cluster,
+    juicefs_mount: JuiceFSMount | None,
+    local_port: int,
+    dirty: bool,
+    timeout: float,
+    startup_timeout: float,
+    sync_enabled: bool,
+    extra_uv_groups: list[str] | None = None,
+    tpu_version_override: str | None = None,
+    tpu_spot_override: bool | None = None,
+    tpu_preemptible_override: bool | None = None,
+) -> ReplResult:
+    """Dispatch a Jupyter REPL on a single-host TPU VM (4 chips only)."""
+    from theseus.dispatch import tpu as tpu_mod
+
+    assert solve_result.host_config is not None
+    assert isinstance(solve_result.host_config, TPUHostConfig)
+
+    host_config = solve_result.host_config
+    tpu_name = solve_result.host_name
+    assert tpu_name is not None
+    zone = host_config.zone
+    project = host_config.project
+    internal_ip = host_config.internal_ip
+    log_dir = cluster.log_dir
+
+    # Apply CLI overrides
+    version = tpu_version_override or host_config.version
+    spot = tpu_spot_override if tpu_spot_override is not None else host_config.spot
+    preemptible = (
+        tpu_preemptible_override
+        if tpu_preemptible_override is not None
+        else host_config.preemptible
+    )
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project_name = spec.project or "general"
+    group = spec.group or "default"
+    log_file = f"{log_dir}/{project_name}_{group}_{spec.name}_{timestamp}.log"
+
+    # Display name for ReplResult (user-facing identifier)
+    ssh_host = f"tpu:{tpu_name}"
+
+    def _fail(stderr: str) -> ReplResult:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=tpu_name,
+            ssh_host=ssh_host,
+            log_path=log_file,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
+            stderr=stderr,
+        )
+
+    # Build a run_fn that wraps tpu.run for the helpers.
+    def _tpu_run(cmd: str, _host: str, timeout: float | None = None) -> RunResult:
+        return tpu_mod.run(
+            cmd, tpu_name, zone, project,
+            worker="0", internal_ip=internal_ip, timeout=timeout,
+        )
+
+    # ------------------------------------------------------------------ #
+    # 1. Ensure TPU VM exists and is READY
+    # ------------------------------------------------------------------ #
+    tpu_state = tpu_mod.get_status(tpu_name, zone, project, timeout=30.0)
+    if tpu_state is None:
+        from rich.console import Console
+        from rich.prompt import Confirm
+
+        _console = Console()
+        _console.print()
+        _console.print(
+            f"[yellow]TPU VM [bold]'{tpu_name}'[/bold] does not exist.[/yellow]"
+        )
+        _console.print(
+            f"[yellow]  type : {host_config.accelerator_type}[/yellow]"
+        )
+        _console.print(f"[yellow]  zone : {zone}[/yellow]")
+        _console.print(
+            f"[yellow]  version : {version}[/yellow]"
+        )
+        if spot:
+            _console.print("[yellow]  pricing: [bold]spot[/bold] (may be preempted)[/yellow]")
+        elif preemptible:
+            _console.print(
+                "[yellow]  pricing: [bold]preemptible[/bold] (may be preempted, 24h limit)[/yellow]"
+            )
+        else:
+            _console.print("[yellow]  pricing: [bold]on-demand[/bold][/yellow]")
+        _console.print()
+        _console.print(
+            "[bold red]Creating this TPU VM will incur Google Cloud costs.[/bold red]"
+        )
+        if not Confirm.ask(
+            "[bold]Create TPU VM and continue?[/bold]", default=False
+        ):
+            return _fail("TPU VM creation cancelled by user")
+
+        logger.info(f"REPL | creating TPU VM '{tpu_name}'")
+        create_result = tpu_mod.create(
+            name=tpu_name,
+            zone=zone,
+            accelerator_type=host_config.accelerator_type,
+            version=version,
+            project=project,
+            spot=spot,
+            preemptible=preemptible,
+            network=host_config.network,
+            subnetwork=host_config.subnetwork,
+            service_account=host_config.service_account,
+            metadata=host_config.metadata or None,
+            timeout=600.0,
+        )
+        if not create_result.ok:
+            return _fail(f"TPU VM creation failed: {create_result.stderr}")
+
+        if not tpu_mod.wait_ready(tpu_name, zone, project, timeout=600.0):
+            return _fail(f"TPU VM '{tpu_name}' did not become READY in time")
+
+    elif tpu_state != "READY":
+        logger.info(
+            f"REPL | TPU VM '{tpu_name}' state={tpu_state}, waiting..."
+        )
+        if not tpu_mod.wait_ready(tpu_name, zone, project, timeout=300.0):
+            return _fail(
+                f"TPU VM '{tpu_name}' did not become READY (state was {tpu_state})"
+            )
+    else:
+        logger.info(f"REPL | TPU VM '{tpu_name}' is READY")
+
+    # ------------------------------------------------------------------ #
+    # 2. Build bootstrap script for Jupyter
+    # ------------------------------------------------------------------ #
+    job = SlurmJob(
+        name="theseus-repl",
+        command=_repl_command(sync_enabled),
+        root_dir=cluster.root,
+        is_slurm=False,
+        uv_groups=host_config.uv_groups + (extra_uv_groups or []),
+        juicefs_mount=juicefs_mount,
+        workdir=work_dir,
+    )
+    script = job.to_script()
+
+    # ------------------------------------------------------------------ #
+    # 3. Ship code to worker 0 only (single-host REPL)
+    # ------------------------------------------------------------------ #
+    if dirty:
+        ship_result = tpu_mod.ship_dirty(
+            tpu_name, work_dir, zone, project, internal_ip, timeout=timeout
+        )
+    else:
+        ship_result = tpu_mod.ship(
+            tpu_name, work_dir, zone, project, internal_ip, timeout=timeout
+        )
+    if not ship_result.ok:
+        return _fail(f"failed to ship code: {ship_result.stderr}")
+
+    # ------------------------------------------------------------------ #
+    # 4. Write bootstrap script to worker 0 via SCP
+    # ------------------------------------------------------------------ #
+    import tempfile as _tmpmod
+
+    with _tmpmod.TemporaryDirectory() as tmpdir:
+        from pathlib import Path as _Path
+
+        bootstrap_local = _Path(tmpdir) / "_bootstrap_repl.sh"
+        bootstrap_local.write_text(script)
+
+        scp_result = tpu_mod.copy_to(
+            bootstrap_local,
+            tpu_name,
+            f"{work_dir}/_bootstrap_repl.sh",
+            zone,
+            project,
+            worker="0",
+            internal_ip=internal_ip,
+            timeout=timeout,
+        )
+        if not scp_result.ok:
+            return _fail(f"failed to write bootstrap: {scp_result.stderr}")
+
+    # ------------------------------------------------------------------ #
+    # 5. Launch Jupyter on worker 0
+    # ------------------------------------------------------------------ #
+    run_cmd = (
+        f"mkdir -p {log_dir} && "
+        f"chmod +x {work_dir}/_bootstrap_repl.sh && "
+        f"nohup {work_dir}/_bootstrap_repl.sh > {log_file} 2>&1 & echo $!"
+    )
+    launch_result = tpu_mod.run(
+        run_cmd, tpu_name, zone, project,
+        worker="0", internal_ip=internal_ip, timeout=timeout,
+    )
+    if not launch_result.ok:
+        return _fail(f"failed to launch Jupyter: {launch_result.stderr}")
+
+    launcher_pid = None
+    for line in reversed(launch_result.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.isdigit():
+            launcher_pid = int(line)
+            break
+
+    # ------------------------------------------------------------------ #
+    # 6. Wait for Jupyter startup (reuse helper with _tpu_run)
+    # ------------------------------------------------------------------ #
+    remote_url, remote_port, token, log_wait_error = _wait_for_jupyter_log(
+        ssh_host, log_file, timeout=startup_timeout, ssh_timeout=timeout,
+        run_fn=_tpu_run,
+    )
+    if log_wait_error:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=tpu_name,
+            ssh_host=ssh_host,
+            log_path=log_file,
+            remote_pid=launcher_pid,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
+            stderr=log_wait_error,
+        )
+    if remote_port is None:
+        remote_port = 8888
+
+    remote_pid = _resolve_remote_notebook_pid(
+        ssh_host, remote_port, timeout, run_fn=_tpu_run,
+    )
+    if remote_pid is None:
+        remote_pid = launcher_pid
+
+    mailbox_job_id = None
+    if sync_enabled:
+        mailbox_job_id = _read_remote_mailbox_job_id(
+            ssh_host, work_dir, timeout, run_fn=_tpu_run,
+        )
+    if mailbox_job_id is None and remote_pid is not None:
+        mailbox_job_id = str(remote_pid)
+
+    # ------------------------------------------------------------------ #
+    # 7. Port forwarding via gcloud SSH tunnel
+    # ------------------------------------------------------------------ #
+    tunnel_result = tpu_mod.forward_port(
+        tpu_name, zone,
+        local_port=local_port, remote_port=remote_port,
+        project=project, worker="0", internal_ip=internal_ip,
+    )
+    if not tunnel_result.ok:
+        return ReplResult(
+            ok=False,
+            is_slurm=False,
+            selected_host=tpu_name,
+            ssh_host=ssh_host,
+            log_path=log_file,
+            remote_pid=remote_pid,
+            remote_port=remote_port,
+            token=token,
+            remote_url=remote_url,
+            local_port=local_port,
+            cluster_name=cluster.name,
+            cluster_root=cluster.root,
+            cluster_mount=juicefs_mount.redis_url if juicefs_mount else None,
+            work_dir=work_dir,
+            stderr=tunnel_result.stderr or "failed to start gcloud SSH tunnel",
+        )
+
+    local_url = f"http://localhost:{local_port}/lab"
+    if token:
+        local_url = f"{local_url}?token={token}"
+
+    return ReplResult(
+        ok=True,
+        is_slurm=False,
+        selected_host=tpu_name,
+        ssh_host=ssh_host,
         log_path=log_file,
         remote_pid=remote_pid,
         remote_port=remote_port,

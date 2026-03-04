@@ -10,6 +10,7 @@ Assumes the user has gcloud installed and authenticated locally.
 import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
 import time
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from theseus.dispatch.ssh import RunResult
+from theseus.dispatch.ssh import RunResult, TunnelResult
 
 
 def parse_accelerator_type(accel_type: str) -> tuple[str, int]:
@@ -350,6 +351,130 @@ def wait_ready(
         time.sleep(poll_interval)
     logger.error(f"TPU | timed out waiting for '{name}' to become READY")
     return False
+
+
+# ---------------------------------------------------------------------------
+# Port forwarding (mirrors ssh.forward_port for TPU)
+# ---------------------------------------------------------------------------
+
+
+def forward_port(
+    tpu_name: str,
+    zone: str,
+    local_port: int,
+    remote_port: int,
+    project: str | None = None,
+    worker: str = "0",
+    internal_ip: bool = False,
+) -> TunnelResult:
+    """Start a background SSH tunnel via ``gcloud compute tpus tpu-vm ssh``.
+
+    Forwards *local_port* on the dispatching machine to *remote_port* on the
+    TPU VM worker.  Only runs on a single worker (default ``0``) since REPL
+    sessions are single-host.
+    """
+    if local_port <= 0 or remote_port <= 0:
+        return TunnelResult(
+            returncode=-1,
+            pid=None,
+            command=[],
+            stderr="local_port and remote_port must be positive integers",
+        )
+
+    # Fail fast if local port already in use.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", local_port))
+        except OSError as e:
+            return TunnelResult(
+                returncode=-1,
+                pid=None,
+                command=[],
+                stderr=f"local port {local_port} is already in use: {e}",
+            )
+
+    def _listener_pids(port: int) -> set[int]:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return set()
+        pids: set[int] = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pids.add(int(line))
+        return pids
+
+    cmd = [
+        "gcloud", "compute", "tpus", "tpu-vm", "ssh",
+        tpu_name,
+        f"--zone={zone}",
+        f"--worker={worker}",
+        f"--ssh-flag=-L {local_port}:localhost:{remote_port}",
+        "--ssh-flag=-N",
+    ]
+    if project:
+        cmd.append(f"--project={project}")
+    if internal_ip:
+        cmd.append("--internal-ip")
+
+    logger.debug(
+        f"TPU | forwarding local:{local_port} -> {tpu_name}(worker={worker}):{remote_port}"
+    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except Exception as e:
+        return TunnelResult(returncode=-1, pid=None, command=cmd, stderr=str(e))
+
+    # Wait for tunnel listener to appear locally.
+    wait_seconds = float(os.environ.get("THESEUS_SSH_TUNNEL_WAIT_SECONDS", "20.0"))
+    wait_seconds = max(5.0, wait_seconds)
+    deadline = time.time() + wait_seconds
+    sleep_s = 0.1
+    while time.time() < deadline:
+        rc = proc.poll()
+        if rc is not None:
+            stderr = ""
+            if proc.stderr is not None:
+                stderr = proc.stderr.read() or ""
+            return TunnelResult(returncode=rc, pid=None, command=cmd, stderr=stderr.strip())
+
+        listeners = _listener_pids(local_port)
+        if proc.pid in listeners:
+            logger.debug(f"TPU | tunnel established (pid={proc.pid})")
+            return TunnelResult(returncode=0, pid=proc.pid, command=cmd, stderr="")
+        time.sleep(sleep_s)
+        sleep_s = min(sleep_s * 1.5, 1.0)
+
+    # Timed out.
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    stderr = ""
+    if proc.stderr is not None:
+        try:
+            stderr = proc.stderr.read() or ""
+        except Exception:
+            stderr = ""
+    return TunnelResult(
+        returncode=-1,
+        pid=None,
+        command=cmd,
+        stderr=stderr.strip()
+        or f"gcloud ssh tunnel did not open local listener in time ({wait_seconds:.1f}s)",
+    )
 
 
 # ---------------------------------------------------------------------------
