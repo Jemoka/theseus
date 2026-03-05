@@ -1544,7 +1544,7 @@ def _dispatch_repl_tpu(
     script = job.to_script()
 
     # ------------------------------------------------------------------ #
-    # 3. Ship code to worker 0 only (single-host REPL)
+    # 3. Ship code to TPU workers (single-host REPL)
     # ------------------------------------------------------------------ #
     if dirty:
         ship_result = tpu_mod.ship_dirty(
