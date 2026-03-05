@@ -6,12 +6,14 @@ This document covers every moving part of `theseus.dispatch` — from the CLI co
 
 ## Overview
 
-Theseus can run jobs in three ways:
+Theseus can run jobs in five ways:
 
 | Mode | Command | What happens |
 |---|---|---|
 | Local | `theseus run` | Job runs in-process on the current machine |
-| Remote batch | `theseus submit` | Code is shipped to a remote host and a job is queued (SLURM) or launched in the background (plain SSH) |
+| Remote batch (SSH/SLURM) | `theseus submit` | Code is shipped to a remote host and a job is queued (SLURM) or launched in the background (plain SSH) |
+| Remote batch (TPU VM) | `theseus submit` | Code is shipped to a Google Cloud TPU VM (created on demand if needed) and launched on all workers |
+| Remote batch (Volcano) | `theseus submit` | Code is shipped to a Kubernetes PVC and a Volcano Job is submitted via `kubectl` |
 | Remote REPL | `theseus repl` | Same ship flow, but launches Jupyter Lab and sets up a local port-forward so you can open it in your browser |
 
 The remote flows (`submit` and `repl`) share the same pipeline: **config loading → hardware solving → code shipping → bootstrap generation → execution**.
@@ -56,7 +58,52 @@ hosts:
       h100: 8
     uv_groups: [cuda12]
 
-priority: [login1, workstation]
+  tpu-pod:
+    type: tpu
+    cluster: hpc
+    zone: us-central2-b
+    project: my-gcp-project          # optional, defaults to gcloud default
+    accelerator_type: v4-32          # TPU type and chip count
+    version: tpu-ubuntu2204-base     # TPU software version
+    spot: true                       # use Spot VM pricing
+    network: my-vpc                  # optional VPC network
+    subnetwork: my-subnet            # optional VPC subnetwork
+    service_account: sa@project.iam  # optional GCP service account
+    internal_ip: false               # use internal IP for SSH/SCP
+    metadata:                        # optional instance metadata
+      startup-script: "echo hello"
+
+  k8s-cluster:
+    type: volcano
+    cluster: hpc
+    namespace: training
+    queue: gpu-queue                 # Volcano queue name
+    image: my-registry/train:latest  # container image
+    pvc_name: training-pvc           # PVC for code + data
+    pvc_mount_path: /workspace       # mount point in pods
+    chips:
+      h100: 8                        # chip count per node
+    num_nodes: 1                     # default replicas (auto-scaled by solver)
+    gpus_per_node: 8                 # alternative to chips mapping
+    gpu_resource_key: nvidia.com/gpu # K8s resource name for GPUs
+    cpu: "32"                        # optional CPU request
+    memory: 256Gi                    # optional memory request
+    shm_size: 64Gi                   # /dev/shm size
+    priority_class: high-priority    # optional K8s priority class
+    kubeconfig: ~/.kube/config       # optional kubeconfig path
+    context: my-cluster              # optional kubectl context
+    rdma: true                       # request RDMA network devices
+    rdma_per_node: 8                 # RDMA device count per node
+    node_selector:
+      gpu-type: h100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    env:
+      NCCL_DEBUG: INFO
+
+priority: [login1, workstation, tpu-pod, k8s-cluster]
 
 gres_mapping:
   h100: gpu:h100
@@ -66,7 +113,7 @@ gres_mapping:
 **Key concepts:**
 
 - **Clusters** define filesystem layout (`root`, `work`, `log`). Multiple hosts can share a cluster.
-- **Hosts** are either `type: plain` (direct SSH) or `type: slurm` (SLURM login node). They reference a cluster by name.
+- **Hosts** come in four types: `type: plain` (direct SSH), `type: slurm` (SLURM login node), `type: tpu` (Google Cloud TPU VM), or `type: volcano` (Kubernetes Volcano scheduler). They reference a cluster by name.
 - **Priority** controls which host the solver tries first.
 - **`gres_mapping`** translates chip names (e.g. `h100`) to SLURM GRES strings (e.g. `gpu:h100`).
 
@@ -95,6 +142,8 @@ A `HardwareRequest` specifies:
 3. For each host in order:
    - **Plain host:** Check configured chip count. If `check_availability=True`, SSH in and run `nvidia-smi` — if any GPU has a process using ≥ 100 MiB, the host is considered busy and skipped.
    - **SLURM host:** Query partition GPU types (via `sinfo`). Filter to partitions that have the requested GRES type. If `check_availability=True`, call `squeue`/`sinfo` to count free GPUs per partition.
+   - **TPU host:** Parse `accelerator_type` (e.g. `v4-32` → chip `tpu-v4`, 32 chips). Match against the requested chip type. If `check_availability=True`, call `tpu.get_status()` — skip if the TPU is in a non-ready state (`CREATING`, `TERMINATED`, `FAILED`, `DELETING`).
+   - **Volcano host:** Skipped entirely for interactive (REPL) sessions. For batch jobs: look up `chips[chip_name]` or `gpus_per_node` to get chips per node, compute `num_nodes = ceil(min_chips / chips_per_node)`. If `check_availability=True`, query the Volcano Queue CRD for available GPU counts.
 4. Return the first host that can satisfy `min_chips`. If none can immediately satisfy the request but SLURM hosts exist, fall back to the SLURM host with the most available GPUs and let the scheduler queue it.
 
 `solve_or_raise()` wraps `solve()` and raises `RuntimeError` if no solution is found.
@@ -238,6 +287,114 @@ So all nodes share the same tarball but each extracts to their own scratch `WORK
 
 ---
 
+## Flow C: Google Cloud TPU VM Dispatch (`_dispatch_tpu`)
+
+Used when the solved host is `type: tpu`. TPU pods consist of multiple workers that must all run the same code simultaneously.
+
+```
+Local                           Google Cloud TPU VM (all workers)
+─────────────────────────────   ──────────────────────────────────────────────
+1. Check TPU state          →   gcloud compute tpus tpu-vm describe
+   (create if not exists)   →   gcloud compute tpus tpu-vm create
+                            →   poll until READY (up to 600 s)
+2. ship() or ship_dirty()   →   gcloud tpu-vm scp to ALL workers
+                                tar -xzf - -C WORK_DIR on each worker
+3. write _bootstrap.sh      →   gcloud tpu-vm scp to ALL workers
+4. write _bootstrap_dispatch.py → gcloud tpu-vm scp to ALL workers
+5. launch on ALL workers    →   gcloud tpu-vm ssh --worker=all
+                                nohup _bootstrap.sh > LOG_FILE 2>&1 &
+                                (returns immediately)
+Returns RunResult with log path
+```
+
+**Key differences from plain SSH:**
+
+- **Multi-worker coordination:** Code, bootstrap scripts, and the launch command are sent to **all** TPU pod workers simultaneously using `gcloud compute tpus tpu-vm ssh --worker=all` and `scp --worker=all`.
+- **On-demand creation:** If the TPU VM doesn't exist, it is created via `gcloud compute tpus tpu-vm create` with the configured `accelerator_type`, `version`, `zone`, and pricing options. The user is prompted for cost confirmation before creation.
+- **gcloud-based:** All remote operations use `gcloud compute tpus tpu-vm` commands rather than direct SSH.
+- **Spot/preemptible support:** The TPU can be created with `--spot` or `--preemptible` flags for cost savings.
+- **Environment:** Sets `THESEUS_TPU_MODE=1` so the bootstrap script can detect TPU execution.
+
+**Inside `_bootstrap.sh` on each TPU worker:**
+
+Same as plain SSH (install uv, optional JuiceFS mount, extract payload, `uv sync`, run `_bootstrap_dispatch.py`), but all workers execute in parallel. JAX handles multi-worker TPU coordination automatically.
+
+**CLI overrides:**
+
+```bash
+theseus submit job.yaml --tpu-version tpu-ubuntu2204-base --tpu-spot
+```
+
+| Option | Effect |
+|---|---|
+| `--tpu-version` | Override TPU software version |
+| `--tpu-spot` / `--tpu-on-demand` | Override spot pricing setting |
+| `--tpu-preemptible` / `--tpu-no-preemptible` | Override preemptible setting |
+
+TPU REPL is also supported — the flow is the same as plain SSH REPL but uses `gcloud tpu-vm ssh` for port forwarding.
+
+---
+
+## Flow D: Volcano (Kubernetes) Dispatch (`_dispatch_volcano`)
+
+Used when the solved host is `type: volcano`. Volcano is a Kubernetes-native batch scheduling system. Code is stored on a Persistent Volume Claim (PVC) and executed inside pods managed by Volcano.
+
+```
+Local                        Kubernetes Cluster
+────────────────────────────  ──────────────────────────────────────────────────
+1. snapshot(git archive)  →   helper Volcano Job (busybox):
+                                mounts PVC
+                                receives tarball via kubectl exec | tar
+                                writes _bootstrap.sh + _bootstrap_dispatch.py
+                                exits and is cleaned up
+
+2. render volcano_job.yaml    fill template with host config, bootstrap cmd,
+                              resources, env vars, node selectors, tolerations
+
+3. kubectl apply -f -     →   Volcano scheduler queues the Job
+                              allocates nodes when resources available
+                              launches pods (one per replica/node)
+
+                              [inside each pod]
+                              PVC mounted at pvc_mount_path
+                              bash -l _bootstrap.sh
+                                install uv
+                                uv sync
+                                python _bootstrap_dispatch.py
+```
+
+**Key concepts:**
+
+- **PVC-based code delivery:** Unlike SSH-based flows, code is shipped to a Kubernetes PVC via a temporary helper Volcano Job. The helper mounts the PVC, receives the tarball via `kubectl exec -i ... tar -xpf -`, writes bootstrap files, and exits.
+- **Multi-node scaling:** The solver computes `num_nodes = ceil(min_chips / chips_per_node)` and the rendered Volcano Job YAML gets that many replicas. Each replica pod gets `gpus_per_node` GPUs.
+- **Volcano scheduler plugins:** The Job template enables `ssh`, `svc`, and `env` plugins for multi-node coordination (pod-to-pod SSH, headless service, environment variable injection for distributed training).
+- **No interactive REPL:** Volcano hosts are skipped for REPL sessions — only batch jobs are supported.
+- **Environment:** Sets `THESEUS_VOLCANO_MODE=1` so the bootstrap script can detect Kubernetes execution.
+
+**Volcano Job template (`theseus/dispatch/volcano_job.yaml`):**
+
+The template is rendered with placeholders filled from `VolcanoHostConfig`:
+
+- Container image, command, resource requests (GPU, CPU, memory)
+- PVC volume mount
+- Optional shared memory volume (`/dev/shm` with configurable size)
+- Node selectors, tolerations, priority class, service account
+- RDMA network device requests (if `rdma: true`)
+- Custom environment variables
+
+**CLI overrides:**
+
+```bash
+theseus submit job.yaml --volcano-image my-registry/train:v2 --volcano-namespace prod
+```
+
+| Option | Effect |
+|---|---|
+| `--volcano-image` | Override container image |
+| `--volcano-namespace` | Override Kubernetes namespace |
+
+---
+
 ## Bootstrap Python Execution (`theseus/dispatch/bootstrap.py`)
 
 Once `bootstrap.sh` has set up the environment and installed dependencies, it runs:
@@ -286,7 +443,7 @@ Probes have adaptive timeouts based on how long previous OOM runs took, with coo
 
 ---
 
-## Flow C: REPL Dispatch (`dispatch_repl`)
+## Flow E: REPL Dispatch (`dispatch_repl`)
 
 REPL dispatch follows the same solve + ship flow but instead of running `python _bootstrap_dispatch.py`, the bootstrap script's `__COMMAND__` is set to launch Jupyter Lab:
 
@@ -379,7 +536,21 @@ theseus submit my-run train.yaml
          │                          ssh: sbatch sbatch.sh
          │                          → SlurmResult(job_id)
          │
-         └── is_slurm=False →  _dispatch_plain()
+         ├── type=tpu       →  _dispatch_tpu()
+         │                        tpu.get_status() / tpu.create() / tpu.wait_ready()
+         │                        tpu.ship() / ship_dirty() (to all workers)
+         │                        tpu.copy_to() bootstrap files (to all workers)
+         │                        tpu.run(nohup _bootstrap.sh, worker=all)
+         │                        → RunResult(log_path)
+         │
+         ├── type=volcano   →  _dispatch_volcano()
+         │                        volcano.ship_and_write_to_pvc()
+         │                          helper Job: mount PVC, extract tarball, write scripts
+         │                        volcano.render_volcano_job()
+         │                        volcano.apply_job(kubectl apply -f -)
+         │                        → VolcanoResult(job_name)
+         │
+         └── type=plain     →  _dispatch_plain()
                                   sync.ship() / ship_dirty()
                                   ssh: cat > _bootstrap.sh
                                   ssh: cat > _bootstrap_dispatch.py
@@ -415,5 +586,8 @@ theseus submit my-run train.yaml
 | `theseus/dispatch/bootstrap.py` | Template that runs on the remote node: load embedded config, reconstruct hardware, run job |
 | `theseus/dispatch/bootstrap.sh` | Shell wrapper: install uv/juicefs, mount JuiceFS, extract payload, run Python |
 | `theseus/dispatch/sbatch.sh` | SLURM batch script template: SBATCH directives + `srun bootstrap.sh` |
+| `theseus/dispatch/tpu.py` | Google Cloud TPU VM operations: `create()`, `delete()`, `get_status()`, `wait_ready()`, `run()`, `copy_to()`, `ship()`, `ship_dirty()`, `forward_port()` |
+| `theseus/dispatch/volcano.py` | Kubernetes Volcano operations: `apply_job()`, `delete_job()`, `get_job_status()`, `get_pod_logs()`, `wait_completed()`, `render_volcano_job()`, `ship_and_write_to_pvc()` |
+| `theseus/dispatch/volcano_job.yaml` | Volcano Job template: pod spec with PVC mount, resource requests, scheduler plugins |
 | `theseus/dispatch/mailbox/mailbox.py` | Mailbox protocol: register synced REPL sessions, publish code patches |
 | `theseus/dispatch/mailbox/sidecar.py` | Remote sidecar: watch inbox, apply patches to live REPL working directory |

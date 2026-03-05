@@ -153,14 +153,42 @@ When you run `theseus submit` targeting a TPU host:
 
 ## Monitoring Jobs
 
-TPU jobs run as background processes on the VM. To check on them:
+### Log file naming
+
+TPU jobs run as background processes on the VM. Logs are written to:
+
+```
+{log_dir}/{project}_{group}_{name}_{timestamp}.log
+```
+
+Where `project` defaults to `"general"` and `group` defaults to `"default"` if
+not specified. For example:
+
+```bash
+theseus submit my_run experiment.yaml --project myproj --group exp1
+# -> /home/user/theseus-logs/myproj_exp1_my_run_20250304_143022.log
+
+theseus submit train_gpt experiment.yaml
+# -> /home/user/theseus-logs/general_default_train_gpt_20250304_143022.log
+```
+
+The exact path (including timestamp) is printed when the job is submitted.
+
+### Checking on a job
 
 ```bash
 # SSH into worker 0:
 gcloud compute tpus tpu-vm ssh my-tpu-v4 --zone=us-central2-b --worker=0
 
+# List log files to find the right one:
+ls -lt /home/user/theseus-logs/
+
 # Tail the log file:
-tail -f /home/user/theseus-logs/<project>_<group>_<name>_<timestamp>.log
+tail -f /home/user/theseus-logs/myproj_exp1_my_run_20250304_143022.log
+
+# Or do it in one command without an interactive shell:
+gcloud compute tpus tpu-vm ssh my-tpu-v4 --zone=us-central2-b --worker=0 \
+  --command="tail -f /home/user/theseus-logs/myproj_exp1_my_run_*.log"
 
 # Check if the process is still running:
 gcloud compute tpus tpu-vm ssh my-tpu-v4 --zone=us-central2-b --worker=0 \

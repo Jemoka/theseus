@@ -208,6 +208,32 @@ theseus submit my-run experiment.yaml --cluster k8s
 
 ## Monitoring Jobs
 
+### Job naming
+
+The Kubernetes job name is derived from your submit arguments:
+
+```
+{project}-{group}-{name}
+```
+
+Lowercased, underscores replaced with hyphens, truncated to 63 characters
+(Kubernetes DNS label limit). `project` defaults to `"general"` and `group`
+defaults to `"default"` if not specified.
+
+For example:
+
+```bash
+theseus submit my_run experiment.yaml --project myproj --group exp1
+# -> job name: myproj-exp1-my-run
+
+theseus submit train_gpt experiment.yaml
+# -> job name: general-default-train-gpt
+```
+
+Use this name in all `kubectl` commands below.
+
+### kubectl commands
+
 ```bash
 # List Volcano jobs:
 kubectl get vcjob -n training

@@ -84,3 +84,62 @@ By default theseus ships your working tree including uncommitted changes (`--dir
 ```bash
 theseus submit my-gpt-run run.yaml --clean
 ```
+
+## Monitoring Jobs
+
+### Job and log naming
+
+The job name and log file path are derived from your submit arguments.
+
+**SLURM** jobs are named `{project}-{group}-{name}` and log to:
+
+```
+{log_dir}/{project}-{group}-{name}-%j.out
+```
+
+where `%j` is the SLURM job ID. `project` defaults to `"general"` and `group`
+defaults to `"default"` if not specified. For example:
+
+```bash
+theseus submit my_run run.yaml --project myproj --group exp1
+# -> SLURM job name: myproj-exp1-my_run
+# -> log file:       /scratch/theseus/myproj-exp1-my_run-12345678.out
+```
+
+**SSH (plain)** jobs log to:
+
+```
+{log_dir}/{project}_{group}_{name}_{timestamp}.log
+```
+
+For example:
+
+```bash
+theseus submit my_run run.yaml
+# -> /tmp/theseus/general_default_my_run_20250304_143022.log
+```
+
+The exact path is printed when the job is submitted.
+
+### SLURM
+
+```bash
+# Check job status:
+squeue -u $USER
+
+# Tail the log (find the path in the submit output, or list the log dir):
+tail -f /scratch/theseus/myproj-exp1-my_run-12345678.out
+
+# Cancel a job:
+scancel <job-id>
+```
+
+### SSH (plain)
+
+```bash
+# SSH into the host and tail the log:
+ssh mybox "tail -f /tmp/theseus/general_default_my_run_*.log"
+
+# Check if the process is still running:
+ssh mybox "ps aux | grep python"
+```
