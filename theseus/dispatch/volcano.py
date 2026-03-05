@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from loguru import logger
 
 from theseus.dispatch.ssh import RunResult

@@ -395,7 +395,8 @@ def _dispatch_slurm(
     group = spec.group or "default"
     job_name = f"{project}-{group}-{spec.name}"
 
-    # Build SlurmJob with embedded bootstrap Python script(s)
+    # SLURM needs bootstrap_pys for heredoc embedding (self-contained sbatch
+    # script).  stage_files enables per-stage autobatch in bootstrap.sh.
     job = SlurmJob(
         name=job_name,
         command=command,
@@ -412,6 +413,7 @@ def _dispatch_slurm(
         payload_extract_to=work_dir,
         output=f"{cluster.log_dir}/{job_name}-%j.out",
         juicefs_mount=juicefs_mount,
+        stage_files=list(bootstrap_pys.keys()),
         bootstrap_pys=bootstrap_pys,
         cpus_per_task=2,
         time="14-0",
@@ -464,15 +466,17 @@ def _dispatch_plain(
 
     logger.debug(f"DISPATCH | SSH dispatch: host={ssh_alias}, work_dir={work_dir}")
 
-    # Build bootstrap job (reusing SlurmJob but for SSH mode)
+    # bootstrap_pys omitted — files are written to disk separately below.
+    # stage_files gives bootstrap.sh per-stage autobatch iteration.
     job = SlurmJob(
         name="theseus-dispatch",
         command=command,
         root_dir=cluster.root,
-        is_slurm=False,  # SSH mode - no SBATCH directives
+        is_slurm=False,
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
+        stage_files=list(bootstrap_pys.keys()),
     )
 
     # Generate bootstrap script (without SBATCH directives since partition=None)
@@ -595,7 +599,8 @@ def _dispatch_volcano(
         f"pvc={host_config.pvc_name}, work_dir={work_dir}"
     )
 
-    # 1. Build bootstrap.sh script
+    # bootstrap_pys omitted — files are shipped to PVC via ship_and_write_to_pvc.
+    # stage_files gives bootstrap.sh per-stage autobatch iteration.
     job = SlurmJob(
         name="theseus-dispatch",
         command=command,
@@ -603,6 +608,7 @@ def _dispatch_volcano(
         is_slurm=False,
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         workdir=f"{host_config.pvc_mount_path}/{remote_subdir}",
+        stage_files=list(bootstrap_pys.keys()),
     )
     script = job.to_script()
 
@@ -810,6 +816,8 @@ def _dispatch_tpu(
     # ------------------------------------------------------------------ #
     # 2. Build bootstrap script (same as plain SSH, with TPU env var)
     # ------------------------------------------------------------------ #
+    # bootstrap_pys omitted — files are SCP'd to all workers separately below.
+    # stage_files gives bootstrap.sh per-stage autobatch iteration.
     job = SlurmJob(
         name="theseus-dispatch",
         command=command,
@@ -818,7 +826,7 @@ def _dispatch_tpu(
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
-        bootstrap_pys=bootstrap_pys,
+        stage_files=list(bootstrap_pys.keys()),
         env={"THESEUS_TPU_MODE": "1"},
     )
     script = job.to_script()
