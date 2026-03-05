@@ -1,0 +1,48 @@
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: __NAMESPACE__
+spec:
+  schedulerName: volcano
+  queue: __QUEUE__
+  minAvailable: __NUM_REPLICAS__
+  plugins:
+    ssh: []
+    svc: []
+    env: []
+  tasks:
+    - replicas: __NUM_REPLICAS__
+      name: worker
+      policies:
+        - event: TaskCompleted
+          action: CompleteJob
+      template:
+        spec:
+          schedulerName: volcano
+          __PRIORITY_CLASS__
+          __SERVICE_ACCOUNT__
+          restartPolicy: Never
+          __NODE_SELECTOR__
+          __TOLERATIONS__
+          containers:
+            - name: worker
+              image: __IMAGE__
+              command: ["bash", "-lc"]
+              args:
+                - __BOOTSTRAP_COMMAND__
+              resources:
+                requests: &resources
+                  __RESOURCES__
+                limits: *resources
+              env:
+                __ENV_VARS__
+              volumeMounts:
+                - name: workspace
+                  mountPath: __PVC_MOUNT_PATH__
+                __SHM_MOUNT__
+          volumes:
+            - name: workspace
+              persistentVolumeClaim:
+                claimName: __PVC_NAME__
+            __SHM_VOLUME__

@@ -433,9 +433,7 @@ def run(
     if n_stages == 1:
         stages = [(cfg, name, cfg.job)]
     else:
-        stages = [
-            (c, f"{name}_stage{i}", c.job) for i, c in enumerate(all_cfgs, 1)
-        ]
+        stages = [(c, f"{name}_stage{i}", c.job) for i, c in enumerate(all_cfgs, 1)]
 
     # Print what we're about to run
     console.print()
@@ -448,14 +446,18 @@ def run(
             )
     else:
         console.print(f"[blue]Running job '{job}':[/blue]")
-        console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
+        console.print(
+            Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default")
+        )
     console.print(f"[blue]Output path:[/blue] {out_path}")
     console.print()
 
     # Run each stage sequentially within its configuration context
     for stage_cfg, stage_name, stage_job in stages:
         if n_stages > 1:
-            console.print(f"\n[blue]Starting stage '{stage_name}' (job: {stage_job})...[/blue]")
+            console.print(
+                f"\n[blue]Starting stage '{stage_name}' (job: {stage_job})...[/blue]"
+            )
             # Reset random state for each stage so behaviour matches standalone runs
             random.seed(0)
             np.random.seed(0)
@@ -533,6 +535,31 @@ def run(
     multiple=True,
     help="Additional YAML config(s) for sequential stages within the same allocation.",
 )  # type: ignore[misc]
+@click.option(
+    "--tpu-version",
+    default=None,
+    help="Override TPU software version (e.g. 'tpu-ubuntu2204-base')",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-spot/--tpu-on-demand",
+    default=None,
+    help="Override TPU spot pricing setting",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-preemptible/--tpu-no-preemptible",
+    default=None,
+    help="Override TPU preemptible setting",
+)  # type: ignore[misc]
+@click.option(
+    "--volcano-image",
+    default=None,
+    help="Override Volcano container image",
+)  # type: ignore[misc]
+@click.option(
+    "--volcano-namespace",
+    default=None,
+    help="Override Volcano job namespace",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -550,6 +577,11 @@ def submit(
     dirty: bool,
     uv_targets: tuple[str, ...],
     extra_stages: tuple[str, ...],
+    tpu_version: str | None,
+    tpu_spot: bool | None,
+    tpu_preemptible: bool | None,
+    volcano_image: str | None,
+    volcano_namespace: str | None,
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -692,18 +724,20 @@ def submit(
     n_stages = 1 + len(extra_cfgs)
     console.print()
     if n_stages > 1:
-        console.print(
-            f"[blue]Submitting {n_stages}-stage pipeline '{name}':[/blue]"
-        )
+        console.print(f"[blue]Submitting {n_stages}-stage pipeline '{name}':[/blue]")
         for i, stage_cfg in enumerate([cfg] + extra_cfgs, 1):
             stage_label = f"{name}_stage{i}"
-            console.print(f"\n[blue]Stage {i} ({stage_label}) — job '{stage_cfg.job}':[/blue]")
+            console.print(
+                f"\n[blue]Stage {i} ({stage_label}) — job '{stage_cfg.job}':[/blue]"
+            )
             console.print(
                 Syntax(OmegaConf.to_yaml(stage_cfg), "yaml", background_color="default")
             )
     else:
         console.print(f"[blue]Submitting job '{job}':[/blue]")
-        console.print(Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default"))
+        console.print(
+            Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default")
+        )
     if request_chips == 0:
         console.print("[blue]Hardware:[/blue] cpu-only (n_chips=0)")
     elif request_chip is None:
@@ -720,6 +754,16 @@ def submit(
         )
     console.print(f"[blue]Dispatch config:[/blue] {dispatch_config}")
     console.print(f"[blue]Dirty:[/blue] {dirty}")
+    if tpu_version:
+        console.print(f"[blue]TPU version override:[/blue] {tpu_version}")
+    if tpu_spot is not None:
+        console.print(f"[blue]TPU spot override:[/blue] {tpu_spot}")
+    if tpu_preemptible is not None:
+        console.print(f"[blue]TPU preemptible override:[/blue] {tpu_preemptible}")
+    if volcano_image:
+        console.print(f"[blue]Volcano image override:[/blue] {volcano_image}")
+    if volcano_namespace:
+        console.print(f"[blue]Volcano namespace override:[/blue] {volcano_namespace}")
 
     # Dispatch the job
     result = dispatch(
@@ -731,6 +775,11 @@ def submit(
         mem=mem,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
         extra_cfgs=extra_cfgs if extra_cfgs else None,
+        tpu_version_override=tpu_version,
+        tpu_spot_override=tpu_spot,
+        tpu_preemptible_override=tpu_preemptible,
+        volcano_image_override=volcano_image,
+        volcano_namespace_override=volcano_namespace,
     )
 
     if not result.ok:
@@ -816,6 +865,21 @@ def submit(
     multiple=True,
     help="Extra uv dependency group(s) to add on top of dispatch spec uv_groups; can repeat.",
 )  # type: ignore[misc]
+@click.option(
+    "--tpu-version",
+    default=None,
+    help="Override TPU software version (e.g. 'tpu-ubuntu2204-base')",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-spot/--tpu-on-demand",
+    default=None,
+    help="Override TPU spot pricing setting",
+)  # type: ignore[misc]
+@click.option(
+    "--tpu-preemptible/--tpu-no-preemptible",
+    default=None,
+    help="Override TPU preemptible setting",
+)  # type: ignore[misc]
 def repl(
     dispatch_config: str | None,
     chip: str | None,
@@ -831,6 +895,9 @@ def repl(
     startup_timeout: float,
     slurm_wait_timeout: float | None,
     uv_targets: tuple[str, ...],
+    tpu_version: str | None,
+    tpu_spot: bool | None,
+    tpu_preemptible: bool | None,
 ) -> None:
     """Start a remote Jupyter REPL on selected dispatch infrastructure."""
     from theseus.dispatch import dispatch_repl, load_dispatch_config
@@ -1023,6 +1090,9 @@ def repl(
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
+        tpu_version_override=tpu_version,
+        tpu_spot_override=tpu_spot,
+        tpu_preemptible_override=tpu_preemptible,
     )
 
     if not result.ok:

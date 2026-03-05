@@ -83,13 +83,69 @@ class SlurmHostConfig:
 
 
 @dataclass
+class TPUHostConfig:
+    """Configuration for a Google Cloud TPU VM.
+
+    The host name (dict key in ``hosts:``) is used as the TPU VM name in
+    ``gcloud`` commands.
+    """
+
+    cluster: str  # cluster name reference
+    type: Literal["tpu"] = "tpu"
+    zone: str = ""  # GCP zone (e.g., "us-central2-b")
+    project: str | None = None  # GCP project (defaults to gcloud default)
+    accelerator_type: str = ""  # e.g., "v4-32", "v5e-16"
+    version: str = ""  # TPU software/runtime version
+    spot: bool = False  # use Spot VM pricing
+    preemptible: bool = False  # use preemptible pricing
+    network: str | None = None  # VPC network
+    subnetwork: str | None = None  # VPC subnetwork
+    service_account: str | None = None  # GCP service account
+    internal_ip: bool = False  # use internal IP for SSH/SCP
+    metadata: dict[str, str] = field(default_factory=dict)  # instance metadata
+    uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+
+
+@dataclass
+class VolcanoHostConfig:
+    """Configuration for a Kubernetes Volcano batch scheduler host."""
+
+    cluster: str  # cluster name reference
+    type: Literal["volcano"] = "volcano"
+    namespace: str = "default"
+    queue: str = ""
+    image: str = ""  # container image
+    pvc_name: str = ""  # PVC for code + data
+    pvc_mount_path: str = "/workspace"  # mount point in pods
+    service_account: str | None = None
+    node_selector: dict[str, str] = field(default_factory=dict)
+    tolerations: list[dict[str, str]] = field(default_factory=list)
+    chips: dict[str, int] = field(default_factory=dict)  # chip_name -> count per node
+    num_nodes: int = 1
+    gpus_per_node: int = 0
+    gpu_resource_key: str = "nvidia.com/gpu"  # K8s resource name for GPUs
+    cpu: str | None = None
+    memory: str | None = None
+    shm_size: str | None = None  # /dev/shm size (e.g. "64Gi")
+    priority_class: str | None = None
+    kubeconfig: str | None = None
+    context: str | None = None
+    rdma: bool = False  # request RDMA network devices (rdma/rdma_shared_device_a)
+    rdma_per_node: int = 8  # RDMA device count per node (when rdma=True)
+    env: dict[str, str] = field(default_factory=dict)
+    uv_groups: list[str] = field(default_factory=list)
+
+
+@dataclass
 class DispatchConfig:
     """Top-level dispatch configuration."""
 
     mount: str | None = None  # Local JuiceFS mount point for mailbox sync workflows
     proxy: str | None = None  # SCP proxy root for mailbox sync workflows
     clusters: dict[str, ClusterConfig] = field(default_factory=dict)
-    hosts: dict[str, PlainHostConfig | SlurmHostConfig] = field(default_factory=dict)
+    hosts: dict[
+        str, PlainHostConfig | SlurmHostConfig | TPUHostConfig | VolcanoHostConfig
+    ] = field(default_factory=dict)
     priority: list[str] = field(default_factory=list)  # host names in priority order
     gres_mapping: dict[str, str] = field(
         default_factory=dict
@@ -134,7 +190,9 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
         )
     logger.debug(f"CONFIG | parsed {len(clusters)} clusters")
 
-    hosts: dict[str, PlainHostConfig | SlurmHostConfig] = {}
+    hosts: dict[
+        str, PlainHostConfig | SlurmHostConfig | TPUHostConfig | VolcanoHostConfig
+    ] = {}
     for name, host_cfg in cfg.get("hosts", {}).items():
         host_type = host_cfg.get("type", "plain")
 
@@ -182,11 +240,62 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 cpu_partitions=cpu_partitions,
                 annotations=annotations,
             )
+        elif host_type == "tpu":
+            metadata = dict(host_cfg.get("metadata", {}))
+            hosts[name] = TPUHostConfig(
+                cluster=host_cfg.cluster,
+                type="tpu",
+                zone=host_cfg.get("zone", ""),
+                project=host_cfg.get("project"),
+                accelerator_type=host_cfg.get("accelerator_type", ""),
+                version=host_cfg.get("version", ""),
+                spot=host_cfg.get("spot", False),
+                preemptible=host_cfg.get("preemptible", False),
+                network=host_cfg.get("network"),
+                subnetwork=host_cfg.get("subnetwork"),
+                service_account=host_cfg.get("service_account"),
+                internal_ip=host_cfg.get("internal_ip", False),
+                metadata=metadata,
+                uv_groups=uv_groups,
+            )
+        elif host_type == "volcano":
+            chips = dict(host_cfg.get("chips", {}))
+            node_selector = dict(host_cfg.get("node_selector", {}))
+            tolerations = list(host_cfg.get("tolerations", []))
+            env = dict(host_cfg.get("env", {}))
+            hosts[name] = VolcanoHostConfig(
+                cluster=host_cfg.cluster,
+                type="volcano",
+                namespace=host_cfg.get("namespace", "default"),
+                queue=host_cfg.get("queue", ""),
+                image=host_cfg.get("image", ""),
+                pvc_name=host_cfg.get("pvc_name", ""),
+                pvc_mount_path=host_cfg.get("pvc_mount_path", "/workspace"),
+                service_account=host_cfg.get("service_account"),
+                node_selector=node_selector,
+                tolerations=tolerations,
+                chips=chips,
+                num_nodes=host_cfg.get("num_nodes", 1),
+                gpus_per_node=host_cfg.get("gpus_per_node", 0),
+                gpu_resource_key=host_cfg.get("gpu_resource_key", "nvidia.com/gpu"),
+                cpu=host_cfg.get("cpu"),
+                memory=host_cfg.get("memory"),
+                shm_size=host_cfg.get("shm_size"),
+                priority_class=host_cfg.get("priority_class"),
+                kubeconfig=host_cfg.get("kubeconfig"),
+                context=host_cfg.get("context"),
+                rdma=host_cfg.get("rdma", False),
+                rdma_per_node=host_cfg.get("rdma_per_node", 8),
+                env=env,
+                uv_groups=uv_groups,
+            )
 
     plain_count = sum(1 for h in hosts.values() if isinstance(h, PlainHostConfig))
     slurm_count = sum(1 for h in hosts.values() if isinstance(h, SlurmHostConfig))
+    tpu_count = sum(1 for h in hosts.values() if isinstance(h, TPUHostConfig))
+    volcano_count = sum(1 for h in hosts.values() if isinstance(h, VolcanoHostConfig))
     logger.debug(
-        f"CONFIG | parsed {len(hosts)} hosts ({plain_count} plain, {slurm_count} slurm)"
+        f"CONFIG | parsed {len(hosts)} hosts ({plain_count} plain, {slurm_count} slurm, {tpu_count} tpu, {volcano_count} volcano)"
     )
 
     priority = list(cfg.get("priority", []))
@@ -233,7 +342,9 @@ class RemoteInventory:
             )
         return self._clusters[name]
 
-    def get_host(self, name: str) -> PlainHostConfig | SlurmHostConfig:
+    def get_host(
+        self, name: str
+    ) -> PlainHostConfig | SlurmHostConfig | TPUHostConfig | VolcanoHostConfig:
         """Get host configuration by name."""
         if name not in self.config.hosts:
             raise KeyError(f"Unknown host: {name}")

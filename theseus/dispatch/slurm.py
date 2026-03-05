@@ -164,9 +164,16 @@ class SlurmJob:
     # Set to False for plain SSH (skips SBATCH directives)
     is_slurm: bool = True
 
-    # Python bootstrap script(s): {filename: content} written to BOOTSTRAP_WORKDIR.
-    # Single-stage: {"_bootstrap_dispatch.py": content}
-    # Multi-stage:  {"_bootstrap_dispatch_stage1.py": c1, "_bootstrap_dispatch_stage2.py": c2, ...}
+    # Stage file names for per-stage execution in bootstrap.sh.  When set,
+    # bootstrap.sh iterates each file with per-stage autobatch search
+    # instead of running MAIN_COMMAND as a single bash -c chain.
+    # All backends should pass this; it's just a list of filenames.
+    stage_files: list[str] = field(default_factory=list)
+
+    # Python bootstrap script(s): {filename: content} embedded in the
+    # generated shell script via heredoc.  Only needed when the script must
+    # be self-contained (SLURM packed jobs).  Other backends write the
+    # files to disk separately and only need stage_files above.
     bootstrap_pys: dict[str, str] = field(default_factory=dict)
 
     def pack(self, tarball: bytes) -> "SlurmJob":
@@ -345,8 +352,10 @@ __BOOTSTRAP_PY_EOF__
         # Command (use uv run to execute in the synced environment)
         script = script.replace("__COMMAND__", f"uv run {self.command}")
 
-        # Stage files for per-stage autobatch (derived from bootstrap_pys keys)
-        stage_files = " ".join(self.bootstrap_pys.keys())
+        # Stage files for per-stage autobatch iteration in bootstrap.sh.
+        # Prefer explicit stage_files; fall back to bootstrap_pys keys for
+        # backwards compatibility (SLURM passes both).
+        stage_files = " ".join(self.stage_files or list(self.bootstrap_pys.keys()))
         script = script.replace("__STAGE_FILES__", stage_files)
 
         return script
