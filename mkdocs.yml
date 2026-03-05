@@ -71,7 +71,13 @@ nav:
   - Getting Started: index.md
   - Tutorials:
     - Overview: Tutorials/index.md
-    - Running Experiments: Tutorials/running.md
+    - Running Experiments:
+      - Overview: Tutorials/running.md
+      - Local: Tutorials/running-local.md
+      - Remote (SSH & SLURM): Tutorials/running-remote.md
+      - Remote (Volcano / K8s): Tutorials/volcano.md
+      - Remote (TPU): Tutorials/tpu.md
+      - Interactive REPL: Tutorials/running-repl.md
     - Adding Things:
       - Overview: Tutorials/adding.md
       - Model: Tutorials/adding-model.md

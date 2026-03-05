@@ -21,8 +21,8 @@ For dependencies, we recommend using uv to perform installation; this depends on
 
 You have two options:
 
-1. **Run theseus on the machine its installed in**: You can install it directly onto your infrastructure, and thus sync with dependency group relating to the hardware; this enables [running experiments locally](Tutorials/running.md/#locally)
-2. **Run theseus on a remote machine or SLURM**: You can leverage the remote dispatch infrastructure to [run on a remote cluster](Tutorials/running.md/#dispatch-remotely); if you do, you have to install the `cpu` variant on your head node / local machine, and use the dispatch CLI there.
+1. **Run theseus on the machine its installed in**: You can install it directly onto your infrastructure, and thus sync with dependency group relating to the hardware; this enables [running experiments locally](Tutorials/running-local.md)
+2. **Run theseus on a remote machine or SLURM**: You can leverage the remote dispatch infrastructure to [run on a remote cluster](Tutorials/running-remote.md); if you do, you have to install the `cpu` variant on your head node / local machine, and use the dispatch CLI there.
 
 For most use-cases, the first option will do just fine. For specific cases where remote infrastructure is not a normal shell (e.g., SLURM), the remote dispatch would work better.
 
