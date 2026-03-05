@@ -233,7 +233,7 @@ def wait_completed(
             logger.debug(f"VOLCANO | job '{job_name}' phase: {phase}")
             if phase in terminal_states:
                 return phase
-        if timeout and (time.time() - start) > timeout:
+        if timeout is not None and (time.time() - start) > timeout:
             logger.warning(f"VOLCANO | timed out waiting for job '{job_name}'")
             return None
         time.sleep(poll_interval)
