@@ -800,6 +800,43 @@ def _dispatch_tpu(
                 stderr=f"TPU VM '{tpu_name}' did not become READY in time",
             )
 
+    elif tpu_state in ("PREEMPTED", "TERMINATED"):
+        # Preempted/terminated TPUs won't recover on their own — delete and recreate.
+        logger.info(
+            f"DISPATCH | TPU VM '{tpu_name}' is {tpu_state}, deleting and recreating..."
+        )
+        del_result = tpu_mod.delete(tpu_name, zone, project, timeout=300.0)
+        if not del_result.ok:
+            logger.error(
+                f"DISPATCH | failed to delete {tpu_state} TPU: {del_result.stderr}"
+            )
+            return del_result
+
+        create_result = tpu_mod.create(
+            name=tpu_name,
+            zone=zone,
+            accelerator_type=host_config.accelerator_type,
+            version=version,
+            project=project,
+            spot=spot,
+            preemptible=preemptible,
+            network=host_config.network,
+            subnetwork=host_config.subnetwork,
+            service_account=host_config.service_account,
+            metadata=host_config.metadata or None,
+            timeout=600.0,
+        )
+        if not create_result.ok:
+            logger.error(f"DISPATCH | TPU VM recreation failed: {create_result.stderr}")
+            return create_result
+
+        if not tpu_mod.wait_ready(tpu_name, zone, project, timeout=600.0):
+            return RunResult(
+                returncode=1,
+                stdout="",
+                stderr=f"TPU VM '{tpu_name}' did not become READY after recreation",
+            )
+
     elif tpu_state != "READY":
         logger.info(
             f"DISPATCH | TPU VM '{tpu_name}' exists but state={tpu_state}, waiting..."

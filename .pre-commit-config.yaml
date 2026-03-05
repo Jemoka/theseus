@@ -15,7 +15,7 @@ repos:
     rev: v1.16.1
     hooks:
       -  id: mypy
-         additional_dependencies: ["pydantic", "flax"]
+         additional_dependencies: ["pydantic", "flax", "types-PyYAML"]
          args: [
            "--python-version=3.11",
            "--strict",

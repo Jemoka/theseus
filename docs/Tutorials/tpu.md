@@ -43,8 +43,10 @@ clusters:
     log: /home/user/theseus-logs      # log directory
 
 hosts:
-  # The host name is used as the TPU VM name in gcloud commands.
-  # Pick something descriptive — this is what shows up in `gcloud compute tpus list`.
+  # The host key below becomes the TPU VM name in Google Cloud.
+  # This is the name used in all gcloud commands (create, ssh, delete, etc.)
+  # and what shows up in `gcloud compute tpus tpu-vm list`.
+  # Pick something descriptive — you cannot change it after creation.
   my-tpu-v4:
     type: tpu
 
@@ -98,6 +100,22 @@ hosts:
 priority:
   - my-tpu-v4
 ```
+
+## TPU VM Naming
+
+The **host key** in your config IS the TPU VM name in Google Cloud. There is no
+separate `name` field — the YAML key is used directly:
+
+```yaml
+hosts:
+  my-tpu-v4:     # <- this creates/uses a GCP TPU VM named "my-tpu-v4"
+    type: tpu
+    ...
+```
+
+This is the name that appears in `gcloud compute tpus tpu-vm list` and that you
+use in all `gcloud` commands (`ssh`, `describe`, `delete`, etc.). If the VM
+doesn't exist yet, theseus will prompt you to create it with this name.
 
 ## Submitting a Job
 
