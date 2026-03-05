@@ -115,8 +115,11 @@ hosts:
     gpus_per_node: 8
 
     # Chip mapping used by the solver to match hardware requests.
-    # Keys must match theseus chip names (h100, a100-sxm4-80gb, etc.).
-    # Values = count per node (should match gpus_per_node for GPU chips).
+    # Keys are theseus chip labels — arbitrary names that must match what you
+    # pass to --chip on the CLI (e.g. h100, a100-sxm4-80gb).
+    # They are NOT Kubernetes resource keys (that's gpu_resource_key below).
+    # Values = GPU count **per node** (not total). The solver computes the
+    # total as chips_per_node * num_nodes automatically.
     chips:
       h100: 8
 
