@@ -133,6 +133,7 @@ class VolcanoHostConfig:
     context: str | None = None
     rdma: bool = False  # request RDMA network devices (rdma/rdma_shared_device_a)
     rdma_per_node: int = 8  # RDMA device count per node (when rdma=True)
+    labels: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     uv_groups: list[str] = field(default_factory=list)
 
@@ -264,6 +265,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             chips = dict(host_cfg.get("chips", {}))
             node_selector = dict(host_cfg.get("node_selector", {}))
             tolerations = list(host_cfg.get("tolerations", []))
+            labels = dict(host_cfg.get("labels", {}))
             env = dict(host_cfg.get("env", {}))
             hosts[name] = VolcanoHostConfig(
                 cluster=host_cfg.cluster,
@@ -288,6 +290,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 context=host_cfg.get("context"),
                 rdma=host_cfg.get("rdma", False),
                 rdma_per_node=host_cfg.get("rdma_per_node", 8),
+                labels=labels,
                 env=env,
                 uv_groups=uv_groups,
             )

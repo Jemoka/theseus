@@ -263,6 +263,18 @@ def render_volcano_job(
     rendered = rendered.replace("__PVC_MOUNT_PATH__", host_config.pvc_mount_path)
     rendered = rendered.replace("__BOOTSTRAP_COMMAND__", bootstrap_command)
 
+    # Labels
+    if host_config.labels:
+        label_lines = ["labels:"]
+        for k, v in host_config.labels.items():
+            label_lines.append(f'  {k}: "{v}"')
+        rendered = rendered.replace(
+            "__LABELS__",
+            "\n    ".join(label_lines),
+        )
+    else:
+        rendered = rendered.replace("  __LABELS__\n", "")
+
     # Priority class
     if host_config.priority_class:
         rendered = rendered.replace(

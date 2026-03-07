@@ -151,6 +151,9 @@ hosts:
     cpu: "32"
     memory: "256Gi"
     shm_size: "64Gi"              # /dev/shm size for NCCL
+    # labels:                          # optional labels on the Volcano Job metadata
+    #   team: ml-training
+    #   project: theseus
     # priority_class: high-priority  # optional K8s PriorityClass
     # service_account: training-sa   # optional K8s ServiceAccount
     # kubeconfig: /path/to/kubeconfig  # optional (defaults to ~/.kube/config)
