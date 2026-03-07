@@ -56,7 +56,10 @@ cuda12 = [
     {include-group = "huggingface"}
 ]
 tpu = [
-    "jax[tpu]>=0.4.23"
+    "jax[tpu]>=0.4.23",
+    "torch>=2.9.1",
+    "torchax>=0.0.11",
+    {include-group = "huggingface"}
 ]
 cpu = [
     "jax>=0.4.23",
@@ -126,6 +129,7 @@ conflicts = [
 [tool.uv.sources]
 torch = [
   { index = "pytorch-cpu", group = "cpu" },
+  { index = "pytorch-cpu", group = "tpu" },
   { index = "pytorch-cu128", group = "cuda12" },
   { index = "pytorch-cu130", group = "cuda13" },
 ]
