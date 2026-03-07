@@ -139,6 +139,30 @@ cleanup() {
         echo "[bootstrap] drain wait ${CLEANUP_DRAIN_SECONDS}s to finish cleanup..."
         sleep "$CLEANUP_DRAIN_SECONDS"
     fi
+
+    # Self-delete TPU VM when job finishes (only worker 0 issues the delete).
+    if [[ "${THESEUS_TPU_SELF_DELETE:-0}" == "1" ]]; then
+        echo "[bootstrap] cleanup step=tpu-self-delete"
+        _METADATA="http://metadata.google.internal/computeMetadata/v1"
+        _MH="Metadata-Flavor: Google"
+        _INSTANCE_NAME=$(curl -sf -H "$_MH" "$_METADATA/instance/name" 2>/dev/null || true)
+        if [[ "$_INSTANCE_NAME" == *"-w-0" ]] || [[ "$_INSTANCE_NAME" == *"-0" ]]; then
+            _TPU_NAME=$(echo "$_INSTANCE_NAME" | sed 's/-w-[0-9]*$//')
+            _PROJECT=$(curl -sf -H "$_MH" "$_METADATA/project/project-id" 2>/dev/null || true)
+            _ZONE=$(curl -sf -H "$_MH" "$_METADATA/instance/zone" 2>/dev/null | awk -F/ '{print $NF}' || true)
+            if [[ -n "$_TPU_NAME" ]] && [[ -n "$_ZONE" ]] && [[ -n "$_PROJECT" ]]; then
+                echo "[bootstrap] worker-0 deleting TPU VM '$_TPU_NAME' (zone=$_ZONE, project=$_PROJECT)..."
+                gcloud compute tpus tpu-vm delete "$_TPU_NAME" \
+                    --zone="$_ZONE" --project="$_PROJECT" --quiet --async 2>&1 || \
+                    echo "[bootstrap] WARNING: TPU self-delete failed (rc=$?)"
+            else
+                echo "[bootstrap] WARNING: could not resolve TPU metadata for self-delete"
+            fi
+        else
+            echo "[bootstrap] skipping self-delete (not worker-0, instance=$_INSTANCE_NAME)"
+        fi
+    fi
+
     echo "[bootstrap] cleanup step=exit"
 
     return 0

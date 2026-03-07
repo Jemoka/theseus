@@ -754,6 +754,7 @@ def _dispatch_tpu(
     # 1. Ensure TPU VM exists and is READY
     # ------------------------------------------------------------------ #
     tpu_state = tpu_mod.get_status(tpu_name, zone, project, timeout=30.0)
+    created_tpu = False  # Track whether we created the TPU (for self-delete)
     if tpu_state is None:
         # TPU does not exist — prompt the user before incurring cost
         from rich.console import Console
@@ -813,6 +814,7 @@ def _dispatch_tpu(
                 stdout="",
                 stderr=f"TPU VM '{tpu_name}' did not become READY in time",
             )
+        created_tpu = True
 
     elif tpu_state in ("PREEMPTED", "TERMINATED"):
         # Preempted/terminated TPUs won't recover on their own — delete and recreate.
@@ -850,6 +852,7 @@ def _dispatch_tpu(
                 stdout="",
                 stderr=f"TPU VM '{tpu_name}' did not become READY after recreation",
             )
+        created_tpu = True
 
     elif tpu_state != "READY":
         logger.info(
@@ -878,7 +881,10 @@ def _dispatch_tpu(
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
-        env={"THESEUS_TPU_MODE": "1"},
+        env={
+            "THESEUS_TPU_MODE": "1",
+            **({"THESEUS_TPU_SELF_DELETE": "1"} if created_tpu else {}),
+        },
         uv_cache_dir=uv_cache_dir,
     )
     script = job.to_script()
