@@ -121,6 +121,7 @@ conflicts = [
   # Exactly one of these “flavors” may be used at a time.
   [
     { group = "cpu" },
+    { group = "tpu" },
     { group = "cuda12" },
     { group = "cuda13" },
   ]
