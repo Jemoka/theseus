@@ -176,6 +176,9 @@ class SlurmJob:
     # files to disk separately and only need stage_files above.
     bootstrap_pys: dict[str, str] = field(default_factory=dict)
 
+    # UV cache directory override (exported as UV_CACHE_DIR if set)
+    uv_cache_dir: str | None = None
+
     def pack(self, tarball: bytes) -> "SlurmJob":
         """Return a new SlurmJob with the given tarball as payload.
 
@@ -299,11 +302,12 @@ JUICEFS_MOUNT_POINT="$MOUNT_POINT"
         script = script.replace("__MODULES__", modules_str)
 
         # Environment variables
+        env_lines = []
+        if self.uv_cache_dir:
+            env_lines.append(f"export UV_CACHE_DIR={self.uv_cache_dir}")
         if self.env:
-            env_str = "\n".join(f"export {k}={v}" for k, v in self.env.items())
-        else:
-            env_str = ""
-        script = script.replace("__ENV_VARS__", env_str)
+            env_lines.extend(f"export {k}={v}" for k, v in self.env.items())
+        script = script.replace("__ENV_VARS__", "\n".join(env_lines))
 
         # Payload extraction (for SLURM with embedded payload)
         payload_extract_parts = []

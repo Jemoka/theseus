@@ -276,6 +276,7 @@ def dispatch(
     bootstrap_pys, command = _build_stages(all_cfgs, solve_result.result, spec)
 
     # 5. Submit based on host type
+    uv_cache_dir = cluster_config.uv_dir
     if isinstance(solve_result.host_config, VolcanoHostConfig):
         if juicefs_mount is not None:
             logger.warning(
@@ -297,6 +298,7 @@ def dispatch(
             extra_uv_groups=extra_uv_groups or [],
             volcano_image_override=volcano_image_override,
             volcano_namespace_override=volcano_namespace_override,
+            uv_cache_dir=uv_cache_dir,
         )
     elif isinstance(solve_result.host_config, TPUHostConfig):
         logger.info(
@@ -316,6 +318,7 @@ def dispatch(
             tpu_version_override=tpu_version_override,
             tpu_spot_override=tpu_spot_override,
             tpu_preemptible_override=tpu_preemptible_override,
+            uv_cache_dir=uv_cache_dir,
         )
     elif solve_result.is_slurm:
         logger.info(
@@ -335,6 +338,7 @@ def dispatch(
             dirty,
             timeout,
             extra_uv_groups=extra_uv_groups or [],
+            uv_cache_dir=uv_cache_dir,
         )
     else:
         logger.info(f"DISPATCH | submitting via SSH to {solve_result.host_config.ssh}")
@@ -349,6 +353,7 @@ def dispatch(
             dirty,
             timeout,
             extra_uv_groups=extra_uv_groups or [],
+            uv_cache_dir=uv_cache_dir,
         )
 
 
@@ -366,6 +371,7 @@ def _dispatch_slurm(
     dirty: bool,
     timeout: float,
     extra_uv_groups: list[str] | None = None,
+    uv_cache_dir: str | None = None,
 ) -> SlurmResult:
     """Dispatch job via SLURM."""
     assert solve_result.host_config is not None
@@ -417,6 +423,7 @@ def _dispatch_slurm(
         bootstrap_pys=bootstrap_pys,
         cpus_per_task=2,
         time="14-0",
+        uv_cache_dir=uv_cache_dir,
     )
 
     result = submit_packed(
@@ -448,6 +455,7 @@ def _dispatch_plain(
     dirty: bool,
     timeout: float,
     extra_uv_groups: list[str] | None = None,
+    uv_cache_dir: str | None = None,
 ) -> RunResult:
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
     assert solve_result.host_config is not None
@@ -477,6 +485,7 @@ def _dispatch_plain(
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
+        uv_cache_dir=uv_cache_dir,
     )
 
     # Generate bootstrap script (without SBATCH directives since partition=None)
@@ -555,6 +564,7 @@ def _dispatch_volcano(
     extra_uv_groups: list[str] | None = None,
     volcano_image_override: str | None = None,
     volcano_namespace_override: str | None = None,
+    uv_cache_dir: str | None = None,
 ) -> RunResult:
     """Dispatch job to a Kubernetes Volcano cluster.
 
@@ -609,6 +619,7 @@ def _dispatch_volcano(
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         workdir=f"{host_config.pvc_mount_path}/{remote_subdir}",
         stage_files=list(bootstrap_pys.keys()),
+        uv_cache_dir=uv_cache_dir,
     )
     script = job.to_script()
 
@@ -696,6 +707,7 @@ def _dispatch_tpu(
     tpu_version_override: str | None = None,
     tpu_spot_override: bool | None = None,
     tpu_preemptible_override: bool | None = None,
+    uv_cache_dir: str | None = None,
 ) -> RunResult:
     """Dispatch job to a Google Cloud TPU VM.
 
@@ -865,6 +877,7 @@ def _dispatch_tpu(
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
         env={"THESEUS_TPU_MODE": "1"},
+        uv_cache_dir=uv_cache_dir,
     )
     script = job.to_script()
 
@@ -1197,6 +1210,7 @@ def dispatch_repl(
             cache_dir=cluster_config.cache_dir,
         )
 
+    uv_cache_dir = cluster_config.uv_dir
     if isinstance(solve_result.host_config, TPUHostConfig):
         from theseus.dispatch.tpu import parse_accelerator_type
 
@@ -1228,6 +1242,7 @@ def dispatch_repl(
             tpu_version_override=tpu_version_override,
             tpu_spot_override=tpu_spot_override,
             tpu_preemptible_override=tpu_preemptible_override,
+            uv_cache_dir=uv_cache_dir,
         )
 
     if solve_result.is_slurm:
@@ -1246,6 +1261,7 @@ def dispatch_repl(
             slurm_wait_timeout=slurm_wait_timeout,
             sync_enabled=sync_enabled,
             extra_uv_groups=extra_uv_groups or [],
+            uv_cache_dir=uv_cache_dir,
         )
 
     return _dispatch_repl_plain(
@@ -1260,6 +1276,7 @@ def dispatch_repl(
         startup_timeout=startup_timeout,
         sync_enabled=sync_enabled,
         extra_uv_groups=extra_uv_groups or [],
+        uv_cache_dir=uv_cache_dir,
     )
 
 
@@ -1275,6 +1292,7 @@ def _dispatch_repl_plain(
     startup_timeout: float,
     sync_enabled: bool,
     extra_uv_groups: list[str] | None = None,
+    uv_cache_dir: str | None = None,
 ) -> ReplResult:
     assert solve_result.host_name is not None
     assert solve_result.host_config is not None
@@ -1298,6 +1316,7 @@ def _dispatch_repl_plain(
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
+        uv_cache_dir=uv_cache_dir,
     )
     script = job.to_script()
 
@@ -1453,6 +1472,7 @@ def _dispatch_repl_tpu(
     tpu_version_override: str | None = None,
     tpu_spot_override: bool | None = None,
     tpu_preemptible_override: bool | None = None,
+    uv_cache_dir: str | None = None,
 ) -> ReplResult:
     """Dispatch a Jupyter REPL on a single-host TPU VM (4 chips only)."""
     from theseus.dispatch import tpu as tpu_mod
@@ -1585,6 +1605,7 @@ def _dispatch_repl_tpu(
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
         juicefs_mount=juicefs_mount,
         workdir=work_dir,
+        uv_cache_dir=uv_cache_dir,
     )
     script = job.to_script()
 
@@ -1771,6 +1792,7 @@ def _dispatch_repl_slurm(
     slurm_wait_timeout: float | None,
     sync_enabled: bool,
     extra_uv_groups: list[str] | None = None,
+    uv_cache_dir: str | None = None,
 ) -> ReplResult:
     from theseus.dispatch.slurm import cancel, wait_until_running
 
@@ -1814,6 +1836,7 @@ def _dispatch_repl_slurm(
         juicefs_mount=juicefs_mount,
         cpus_per_task=2,
         time="14-0",
+        uv_cache_dir=uv_cache_dir,
     )
 
     submit_result: SlurmResult = submit_packed(

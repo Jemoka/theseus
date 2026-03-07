@@ -38,6 +38,7 @@ class ClusterConfig:
     mount: str | None = None  # Redis connection string for JuiceFS mount at root
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
+    uv_dir: str | None = None  # UV_CACHE_DIR override for uv
 
 
 @dataclass
@@ -187,6 +188,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             mount=cluster_cfg.get("mount"),
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
+            uv_dir=cluster_cfg.get("uv_dir"),
         )
     logger.debug(f"CONFIG | parsed {len(clusters)} clusters")
 

@@ -40,6 +40,7 @@ clusters:
     mount: redis://:password@redis.example.com:6379/0  # JuiceFS redis connection
     cache_size: 100G  # JuiceFS --cache-size
     cache_dir: /scratch/juicefs-cache  # JuiceFS --cache-dir
+    uv_dir: /scratch/uv-cache  # UV_CACHE_DIR override for uv
 
 hosts:
   # Plain SSH host - direct GPU access, no scheduler
