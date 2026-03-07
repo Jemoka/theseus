@@ -244,6 +244,7 @@ def render_volcano_job(
     host_config: VolcanoHostConfig,
     bootstrap_command: str,
     work_dir: str,
+    n_chips: int | None = None,
 ) -> str:
     """Render the volcano_job.yaml template with concrete values.
 
@@ -251,7 +252,8 @@ def render_volcano_job(
     """
     template = VOLCANO_JOB_TEMPLATE.read_text()
 
-    num_replicas = host_config.num_nodes
+    cpu_only = n_chips is not None and n_chips == 0
+    num_replicas = 1 if cpu_only else host_config.num_nodes
 
     # Basic substitutions
     rendered = template.replace("__JOB_NAME__", job_name)
@@ -325,16 +327,24 @@ def render_volcano_job(
 
     # Resources
     resource_lines = []
-    if host_config.cpu:
-        resource_lines.append(f'cpu: "{host_config.cpu}"')
-    if host_config.memory:
-        resource_lines.append(f'memory: "{host_config.memory}"')
-    if host_config.gpus_per_node > 0:
-        resource_lines.append(
-            f"{host_config.gpu_resource_key}: {host_config.gpus_per_node}"
-        )
-    if host_config.rdma:
-        resource_lines.append(f"rdma/rdma_shared_device_a: {host_config.rdma_per_node}")
+    if cpu_only:
+        eff_cpu = host_config.cpu_cpu or "8"
+        eff_mem = host_config.cpu_memory or "64Gi"
+        resource_lines.append(f'cpu: "{eff_cpu}"')
+        resource_lines.append(f'memory: "{eff_mem}"')
+    else:
+        if host_config.cpu:
+            resource_lines.append(f'cpu: "{host_config.cpu}"')
+        if host_config.memory:
+            resource_lines.append(f'memory: "{host_config.memory}"')
+        if host_config.gpus_per_node > 0:
+            resource_lines.append(
+                f"{host_config.gpu_resource_key}: {host_config.gpus_per_node}"
+            )
+        if host_config.rdma:
+            resource_lines.append(
+                f"rdma/rdma_shared_device_a: {host_config.rdma_per_node}"
+            )
     rendered = rendered.replace(
         "__RESOURCES__",
         "\n                  ".join(resource_lines) if resource_lines else "{}",
@@ -354,7 +364,7 @@ def render_volcano_job(
     )
 
     # Shared memory (/dev/shm) volume
-    if host_config.shm_size:
+    if host_config.shm_size and not cpu_only:
         rendered = rendered.replace(
             "__SHM_MOUNT__",
             "- name: dshm\n                  mountPath: /dev/shm",
@@ -382,6 +392,7 @@ def ship_and_write_to_pvc(
     kubeconfig: str | None = None,
     context: str | None = None,
     timeout: float = 120.0,
+    helper_resources: dict[str, str] | None = None,
 ) -> RunResult:
     """Ship code + bootstrap files to a PVC via a temporary Volcano Job.
 
@@ -393,6 +404,17 @@ def ship_and_write_to_pvc(
     """
     helper_name = f"theseus-pvc-loader-{int(time.time())}"
     dest_path = f"{pvc_mount_path}/{remote_subdir}"
+
+    _res = helper_resources or {
+        "requests.cpu": "1",
+        "requests.memory": "1Gi",
+        "limits.cpu": "1",
+        "limits.memory": "1Gi",
+    }
+    container_resources: dict[str, dict[str, str]] = {}
+    for dotted_key, value in _res.items():
+        section, _, resource = dotted_key.partition(".")
+        container_resources.setdefault(section, {})[resource] = value
 
     # 1. Create helper Volcano Job — single replica, sleeps until we're done
     helper_yaml = yaml.dump(
@@ -426,6 +448,7 @@ def ship_and_write_to_pvc(
                                             f"echo 'ready' && "
                                             f"sleep infinity"
                                         ],
+                                        "resources": container_resources,
                                         "volumeMounts": [
                                             {
                                                 "name": "workspace",

@@ -126,6 +126,8 @@ class VolcanoHostConfig:
     gpu_resource_key: str = "nvidia.com/gpu"  # K8s resource name for GPUs
     cpu: str | None = None
     memory: str | None = None
+    cpu_cpu: str | None = None  # CPU request for cpu-only jobs (n_chips=0)
+    cpu_memory: str | None = None  # memory request for cpu-only jobs (n_chips=0)
     shm_size: str | None = None  # /dev/shm size (e.g. "64Gi")
     priority_class: str | None = None
     kubeconfig: str | None = None
@@ -135,6 +137,14 @@ class VolcanoHostConfig:
     labels: dict[str, str] = field(default_factory=dict)
     env: dict[str, str] = field(default_factory=dict)
     uv_groups: list[str] = field(default_factory=list)
+    helper_resources: dict[str, str] = field(
+        default_factory=lambda: {
+            "requests.cpu": "1",
+            "requests.memory": "1Gi",
+            "limits.cpu": "1",
+            "limits.memory": "1Gi",
+        }
+    )  # resource requests/limits for PVC loader helper pod
 
 
 @dataclass
@@ -282,6 +292,8 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 gpu_resource_key=host_cfg.get("gpu_resource_key", "nvidia.com/gpu"),
                 cpu=host_cfg.get("cpu"),
                 memory=host_cfg.get("memory"),
+                cpu_cpu=host_cfg.get("cpu_cpu"),
+                cpu_memory=host_cfg.get("cpu_memory"),
                 shm_size=host_cfg.get("shm_size"),
                 priority_class=host_cfg.get("priority_class"),
                 kubeconfig=host_cfg.get("kubeconfig"),
@@ -291,6 +303,17 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 labels=labels,
                 env=env,
                 uv_groups=uv_groups,
+                helper_resources=dict(
+                    host_cfg.get(
+                        "helper_resources",
+                        {
+                            "requests.cpu": "1",
+                            "requests.memory": "1Gi",
+                            "limits.cpu": "1",
+                            "limits.memory": "1Gi",
+                        },
+                    )
+                ),
             )
 
     plain_count = sum(1 for h in hosts.values() if isinstance(h, PlainHostConfig))

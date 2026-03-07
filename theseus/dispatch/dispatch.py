@@ -639,6 +639,7 @@ def _dispatch_volcano(
         kubeconfig=kubeconfig,
         context=context,
         timeout=timeout,
+        helper_resources=host_config.helper_resources,
     )
     if not ship_result.ok:
         logger.error(f"DISPATCH | failed to ship to PVC: {ship_result.stderr}")
@@ -653,6 +654,7 @@ def _dispatch_volcano(
         host_config=host_config,
         bootstrap_command=bootstrap_cmd,
         work_dir=work_dir,
+        n_chips=solve_result.result.total_chips if solve_result.result else None,
     )
 
     # 5. Submit via kubectl apply
