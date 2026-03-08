@@ -1,9 +1,14 @@
 from typing import Optional, Any
 
 import jax
+import jax.numpy as jnp
 import flax.linen as nn
 
-from theseus.model.attention.forking import ForkingAttention
+from theseus.model.attention.forking import (
+    ForkingAttention,
+    ATTN_DTYPE,
+    key_padding_bias,
+)
 
 
 class ScratchSparseCrossAttention(ForkingAttention):
@@ -25,6 +30,64 @@ class ScratchSparseCrossAttention(ForkingAttention):
         return super().postprocess_attn(
             y, padding_mask, deterministic, token_index=token_index, **kwargs
         )
+
+    def attn(
+        self,
+        q: jax.Array,
+        k: jax.Array,
+        v: jax.Array,
+        mask: Optional[jax.Array] = None,
+        **kwargs: Any,
+    ) -> jax.Array:
+        """Cross-attention with causal mask based on token positions, not array indices.
+
+        The inherited ForkingAttention.attn uses a standard lower-triangular mask
+        on array positions, which is incorrect for cross-attention where Q (post
+        top-k selection) and K (original sequence) have different position mappings.
+        This override builds the causal mask from actual token indices so that a
+        query at original position p can only attend to keys at positions <= p.
+        """
+        cumulative_scores: jax.Array = kwargs.get("cumulative_scores")  # type: ignore
+        token_index: jax.Array = kwargs.get("token_index")  # type: ignore
+        query_token_index: jax.Array = kwargs.get("query_token_index")  # type: ignore
+
+        if (
+            cumulative_scores is None
+            or token_index is None
+            or query_token_index is None
+        ):
+            raise ValueError(
+                "cumulative_scores, token_index, and query_token_index must be "
+                "provided for ScratchSparseCrossAttention"
+            )
+
+        # Build causal mask from token positions:
+        # query at original position i can attend to key at original position j iff i >= j
+        # query_token_index: (B, Q_len), token_index: (B, K_len)
+        causal_mask = (
+            query_token_index[:, :, None] >= token_index[:, None, :]
+        )  # (B, Q_len, K_len)
+        causal_mask = causal_mask[
+            :, None, :, :
+        ]  # (B, 1, Q_len, K_len) for head broadcasting
+
+        if mask is not None:
+            padding_bias = key_padding_bias(mask)  # (B, 1, 1, T_mask)
+            padding_bias = jnp.take_along_axis(
+                padding_bias, token_index[:, None, None, :], axis=-1
+            )
+            padding_keep = padding_bias == 0  # True where valid
+            causal_mask = causal_mask & padding_keep
+
+        # Scale v by cumulative scores
+        v = jnp.einsum("bthd,bt->bthd", v, jnp.exp(cumulative_scores))
+
+        q = q.astype(ATTN_DTYPE)
+        k = k.astype(ATTN_DTYPE)
+        v = v.astype(ATTN_DTYPE)
+
+        y = jax.nn.dot_product_attention(q, k, v, mask=causal_mask)
+        return y
 
     @nn.compact
     def __call__(  # type: ignore[override]
