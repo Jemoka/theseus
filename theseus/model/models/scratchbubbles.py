@@ -93,7 +93,7 @@ class Scratchbubbles(Thoughtbubbles):
         plt.tight_layout()
 
         # make the rest of the plot
-        plots = super().plot(intermediates)
+        plots = Thoughtbubbles.plot(intermediates)
         plots.update({"analysis/embeddings": fig})
 
         return plots

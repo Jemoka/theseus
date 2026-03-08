@@ -21,11 +21,6 @@ class ScratchSparseCrossAttention(ForkingAttention):
     ) -> jax.Array:
         token_index: jax.Array = kwargs.get("query_token_index")  # type: ignore
         if kwargs.get("token_index") is not None and token_index is not None:
-            jax.debug.print(
-                "token index shape: {}, query_token_index shpe: {}",
-                kwargs["token_index"].shape,
-                token_index.shape,
-            )
             del kwargs["token_index"]
         return super().postprocess_attn(
             y, padding_mask, deterministic, token_index=token_index, **kwargs

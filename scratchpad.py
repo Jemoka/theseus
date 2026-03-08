@@ -50,19 +50,32 @@ self = Mocker()
 
 
 cfg = OmegaConf.load("./configs/forking/small.yaml")
-q = init("thoughtbubbles/train/pretrain", "test", config=cfg)
+q = init("scratchbubbles/train/pretrain", "test", config=cfg)
 
-from theseus.config import configure
-self.sb = configure(Scratchbubbles)
+# from theseus.config import configure
+# self.sb = configure(Scratchbubbles)
+q.config.training.per_device_batch_size = 2
+q.config.training.batch_size = 16
+q.config.logging.report_interval = 1
+q.config.logging.validation_interval = 2
+q.config.training.evaluate = False
+q.config.logging.wandb = False
+# disable structarl and addt pltos
+OmegaConf.set_struct(q.config, False)
+q.config.logging.plots = OmegaConf.create({"save": True})
+OmegaConf.set_struct(q.config, True)
+# and then wee?
+job = q()
+1+1
 
 
-x = jnp.ones((4, q.config.architecture.block_size), dtype=jnp.int32)
-y = jnp.ones((4, q.config.architecture.block_size), dtype=jnp.int32)
-padding_mask = jnp.ones((4, q.config.architecture.block_size), dtype=bool)
+# x = jnp.ones((4, q.config.architecture.block_size), dtype=jnp.int32)
+# y = jnp.ones((4, q.config.architecture.block_size), dtype=jnp.int32)
+# padding_mask = jnp.ones((4, q.config.architecture.block_size), dtype=bool)
 
-intermediates = self.sb.intermediates(x, y, padding_mask)
+# intermediates = self.sb.intermediates(x, y, padding_mask)
 
-[i for i in intermediates["plots"].keys()]
+# [i for i in intermediates["plots"].keys()]
 
 # self.model = j.model
 
