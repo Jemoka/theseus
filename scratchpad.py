@@ -33,29 +33,31 @@ import jax.nn as jnn
 import flax.linen as nn
 
 # from theseus.experiments.models.forking import PretrainThoughtbubbles
-from theseus.experiments.continual.abcd import ABCDTrainer
+# from theseus.experiments.continual.abcd import ABCDTrainer
 # from theseus.evaluation.base import Evaluator
 # from theseus.training.backbone import BackbonedTrainer
+from theseus.registry import JOBS
 
-q = init(ABCDTrainer, "abcdtest", project="playground")
-q.config.eval.evaluations = ["tinystories", "sst2"]
-q.config.architecture.n_layers = 10
-q.config.architecture.n_embd = 128
-q.config.training.per_device_batch_size = 32
-q.config.logging.validation_interval = 2
-q.config.logging.report_interval = 1
-q.config.logging.wandb = True
-q.config.training.validation_steps = 32
-q.config.logging.plots.save = True
-q.config.training.tokens = [200000, 200000, 200000, 200000, 200000]
-q.config.optimization.constant_pct = 0.02
+from omegaconf import OmegaConf
 
+cfg = OmegaConf.load("./configs/forking/small.yaml")
+
+
+q = init("thoughtbubbles/train/pretrain", "test", config=cfg)
+q.config.training.per_device_batch_size = 2
 j = q.create()
-j()
+config = q.config
+
+from theseus.mock import Mocker
+self = Mocker()
+self.model = j.model
+
+
 
 # from theseus.mock import Mocker
 # self = Mocker()
 # self.model = j.model
+# 1+1
 
 # batch = j.batch()
 # intermediates = self.model.intermediates(batch["x"],batch["y"],batch["padding_mask"])

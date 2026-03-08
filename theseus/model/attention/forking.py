@@ -89,8 +89,6 @@ class ForkingAttention(RopeAttention):
                 "cumulative_scores and token_index must be provided for ForkingAttention"
             )
 
-        T = q.shape[1]
-
         # Build attention bias/mask
         if mask is not None:
             # padding_mask = mask[:, None, None, :]
@@ -98,11 +96,16 @@ class ForkingAttention(RopeAttention):
             padding_bias = jnp.take_along_axis(
                 padding_bias, token_index[:, None, None, :], axis=-1
             )
-            attn_bias = causal_bias(self.max_block_size)[:, :, :T, :T] + padding_bias
+            attn_bias = (
+                causal_bias(self.max_block_size)[:, :, : q.shape[1], : k.shape[1]]
+                + padding_bias
+            )
             boolean_mask = attn_bias == 0
             attn_bias = None
         else:
-            attn_bias = causal_bias(self.max_block_size)[:, :, :T, :T]
+            attn_bias = causal_bias(self.max_block_size)[
+                :, :, : q.shape[1], : k.shape[1]
+            ]
             boolean_mask = None
 
         # Scale v by cumulative scores: (B, T, H, D) * (B, T) → (B, T, H, D)

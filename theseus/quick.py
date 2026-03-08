@@ -66,6 +66,7 @@ class QuickJob:
         name: str,
         project: str | None = None,
         group: str | None = None,
+        config: DictConfig | None = None,
     ):
         self._job_cls = job_cls
         self._job_name = job_name
@@ -76,12 +77,15 @@ class QuickJob:
         self._instance: Any = None
         self._config_token: Token[Any] | None = None
 
-        # Build config from job class
-        job_config = job_cls.config()
-        if isinstance(job_config, (list, tuple)):
-            self.config: DictConfig = build(*job_config)
+        if config is not None:
+            self.config: DictConfig = config
         else:
-            self.config = build(job_config)
+            # Build config from job class
+            job_config = job_cls.config()
+            if isinstance(job_config, (list, tuple)):
+                self.config = build(*job_config)
+            else:
+                self.config = build(job_config)
 
     def close(self) -> None:
         """Reset the global config context set by init()."""
@@ -166,6 +170,7 @@ def quick(
     out_path: str | None = None,
     project: str | None = None,
     group: str | None = None,
+    config: DictConfig | None = None,
 ) -> Generator[QuickJob, None, None]:
     """Context manager for quick job execution.
 
@@ -175,6 +180,7 @@ def quick(
         out_path: Output path for job results. If None, uses $THESEUS_ROOT or "."
         project: Optional project name
         group: Optional group name
+        config: Optional OmegaConf config to use instead of the job's default
 
     Yields:
         QuickJob instance with .config attribute for modification
@@ -185,7 +191,7 @@ def quick(
             j()
     """
     job_cls, job_name = _resolve_job(job, name)
-    quick_job = QuickJob(job_cls, job_name, out_path, name, project, group)
+    quick_job = QuickJob(job_cls, job_name, out_path, name, project, group, config)
 
     with configuration(quick_job.config):
         yield quick_job
@@ -197,6 +203,7 @@ def init(
     out_path: str | None = None,
     project: str | None = None,
     group: str | None = None,
+    config: DictConfig | None = None,
 ) -> QuickJob:
     """Non-context-manager variant of quick().
 
@@ -208,6 +215,7 @@ def init(
         out_path: Output path for job results. If None, uses $THESEUS_ROOT or "."
         project: Optional project name
         group: Optional group name
+        config: Optional OmegaConf config to use instead of the job's default
 
     Returns:
         QuickJob instance with .config attribute for modification.
@@ -220,6 +228,6 @@ def init(
         j.close()
     """
     job_cls, job_name = _resolve_job(job, name)
-    quick_job = QuickJob(job_cls, job_name, out_path, name, project, group)
+    quick_job = QuickJob(job_cls, job_name, out_path, name, project, group, config)
     quick_job._config_token = _current_config.set(quick_job.config)
     return quick_job

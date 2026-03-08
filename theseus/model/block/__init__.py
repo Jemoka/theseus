@@ -3,6 +3,7 @@ from .forking import ThoughtBlock, ForkingBlock
 from .qwen import QwenDecoderBlock
 from .llama import LlamaDecoderBlock
 from .gpt_neox import GPTNeoXDecoderBlock
+from .scratching import ScratchingBlock
 
 __all__ = [
     "Block",
@@ -11,4 +12,5 @@ __all__ = [
     "QwenDecoderBlock",
     "LlamaDecoderBlock",
     "GPTNeoXDecoderBlock",
+    "ScratchingBlock",
 ]

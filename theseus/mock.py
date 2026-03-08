@@ -145,6 +145,23 @@ class InlineMockLinenModule:
         out_key, self.key = jax.random.split(self.key)
         return _mock_shape(output_shape, out_key)  # type: ignore[no-untyped-call]
 
+    def evaluate(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        static_kwargs, dynamic_kwargs = _split_kwargs(kwargs)  # type: ignore[no-untyped-call]
+        init_fn = functools.partial(self.obj.init, **static_kwargs)
+        apply_fn = functools.partial(self.obj.apply, **static_kwargs)
+
+        if self.param_tree is None:
+            key, self.key = jax.random.split(self.key)
+            self.param_tree = jax.eval_shape(init_fn, key, *args, **dynamic_kwargs)
+
+        # Materialize the param tree with fake values, then actually run apply
+        if jax.tree.leaves(self.param_tree):
+            param_key, self.key = jax.random.split(self.key)
+            params = _mock_shape(self.param_tree, param_key)  # type: ignore[no-untyped-call]
+        else:
+            params = self.param_tree
+        return apply_fn(params, *args, **dynamic_kwargs)
+
     def __repr__(self):  # type: ignore[no-untyped-def]
         return f"Mocked {self.name}"
 

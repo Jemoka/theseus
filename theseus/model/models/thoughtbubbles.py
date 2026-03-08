@@ -206,6 +206,7 @@ class Thoughtbubbles(GPT):
 
         # Embed tokens and initialize forking state
         x, cumulative_scores, token_index = self.embed(idx, deterministic, **kwargs)
+        self.sow("plots", "embeddings", x)
 
         # Process through transformer blocks
         x, cumulative_scores, token_index = self.decode(
