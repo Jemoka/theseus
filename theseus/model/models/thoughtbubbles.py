@@ -43,7 +43,11 @@ class Thoughtbubbles(GPT):
         import seaborn as sns
 
         ### plot cumulative scores
-        scores = [i["new_cumulative_scores"] for i in intermediates["plots"].values()]
+        scores = [
+            i["new_cumulative_scores"]
+            for i in intermediates["plots"].values()
+            if isinstance(i, dict)
+        ]
         scores = jnp.exp(jnp.stack(jnp.array(scores))[:, 0, 0])  # type: ignore
         fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot(111)

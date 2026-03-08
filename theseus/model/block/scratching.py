@@ -139,13 +139,14 @@ class ScratchingBlock(ForkingBlock):
         )  # the new forked tokens, in particular the non-zero entries, is what we used to gather
 
         # do the local mixing things to figure out the identity of the forked tokens
+        query_token_index = jnp.take_along_axis(token_index, orig_indices, axis=-1)
         forked_embds = self.ssca(
             Q,
             K,
             V,
             padding_mask=padding_mask,
             token_index=token_index,
-            query_token_index=token_index.repeat(2, axis=1),
+            query_token_index=query_token_index,
             cumulative_scores=cumulative_scores,
         )  # get rid of heads
 
