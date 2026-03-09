@@ -854,10 +854,17 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def load(self, suffix: Path) -> None:
         """load from a checkpoint, if available"""
 
-        state, metadata = self.get_tree_and_metadata(suffix, self.state)
+        old_state = self.state
+        state, metadata = self.get_tree_and_metadata(suffix, old_state)
 
         self.state = state
         self.state = self.state.replace(params=self._cast_params(self.state.params))
+
+        # Explicitly free old state's device buffers so they don't linger
+        # until GC and cause OOM when train_step allocates working memory.
+        jax.tree_util.tree_map(lambda x: x.delete(), old_state)
+        del old_state
+
         self.global_step_counter_ = metadata.get("steps", 0)
         self.best_val_score_ = metadata.get("score", float("-inf"))
 
