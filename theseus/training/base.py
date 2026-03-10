@@ -220,9 +220,18 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         return variables, var_sharding
 
     def _cast_params(self, params: PyTree[jax.Array]) -> PyTree[jax.Array]:
-        """Cast all params to the model's configured param dtype."""
+        """Cast all params to the model's configured param dtype.
+
+        Uses jax.jit so the cast preserves each array's sharding; an eager
+        tree_map(astype) can silently move arrays to a single device.
+        """
         target = jnp.dtype(self.model.param_dtype)
-        return jax.tree_util.tree_map(lambda x: x.astype(target), params)  # type: ignore[no-any-return]
+
+        @jax.jit
+        def _cast(p: PyTree[jax.Array]) -> PyTree[jax.Array]:
+            return jax.tree_util.tree_map(lambda x: x.astype(target), p)  # type: ignore[no-any-return]
+
+        return _cast(params)  # type: ignore[no-any-return]
 
     def _init_model(self) -> PyTree[jax.Array]:
         """Initialize model and random keys, return initial sharded params."""
@@ -865,7 +874,22 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         jax.tree_util.tree_map(lambda x: x.delete(), old_state)
         del old_state
 
-        self.global_step_counter_ = metadata.get("steps", 0)
+        raw_steps = metadata.get("steps", 0)
+        # Align to accumulate_steps so the training loop's modulo guards
+        # (logging, checkpointing, validation) actually fire. Misalignment
+        # happens when restoring from a checkpoint saved with a different
+        # accumulate_steps value.
+        self.global_step_counter_ = (
+            raw_steps // self.accumulate_steps
+        ) * self.accumulate_steps
+        if raw_steps != self.global_step_counter_:
+            logger.warning(
+                "CHECKPOINT | aligned global_step_counter from {} to {} "
+                "(accumulate_steps={})",
+                raw_steps,
+                self.global_step_counter_,
+                self.accumulate_steps,
+            )
         self.best_val_score_ = metadata.get("score", float("-inf"))
 
         if self.main_process():
