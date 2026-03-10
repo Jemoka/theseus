@@ -431,6 +431,13 @@ should_search_batch_size() {
         return 1
     fi
 
+    # AUTO_BATCH probing is incompatible with multi-host TPU pods:
+    # jax.distributed.initialize() requires all workers to register
+    # simultaneously, but autobatch probes run independently per worker.
+    if [[ "${THESEUS_TPU_MODE:-0}" == "1" ]]; then
+        return 1
+    fi
+
     if [[ -z "$py_file" ]] || [[ ! -f "$py_file" ]]; then
         return 1
     fi

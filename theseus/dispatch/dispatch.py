@@ -302,6 +302,24 @@ def dispatch(
             uv_cache_dir=uv_cache_dir,
         )
     elif isinstance(solve_result.host_config, TPUHostConfig):
+        # AUTO_BATCH (per_device_batch_size=-1) is incompatible with multi-host
+        # TPU pods: the autobatch prober spawns subprocesses independently on
+        # each worker, but jax.distributed.initialize() requires all workers to
+        # register simultaneously, causing DEADLINE_EXCEEDED.
+        for i, stage_cfg in enumerate(all_cfgs):
+            bs = OmegaConf.select(
+                stage_cfg, "training.per_device_batch_size", default=None
+            )
+            if bs is not None and int(bs) < 0:
+                stage_label = f" (stage {i + 1})" if n_stages > 1 else ""
+                raise RuntimeError(
+                    f"AUTO_BATCH (per_device_batch_size=-1) is not supported for "
+                    f"TPU dispatch{stage_label}. Multi-host TPU pods require all "
+                    f"workers to call jax.distributed.initialize() simultaneously, "
+                    f"which is incompatible with the autobatch probing loop. "
+                    f"Please set an explicit per_device_batch_size in your config."
+                )
+
         logger.info(
             f"DISPATCH | submitting via GCloud TPU to '{solve_result.host_name}'"
         )
@@ -721,20 +739,49 @@ def _dispatch_volcano(
     )
     if existing is not None:
         phase = existing.get("status", {}).get("state", {}).get("phase", "Unknown")
-        logger.error(
-            f"DISPATCH | Volcano Job '{job_name}' already exists in namespace "
-            f"'{namespace}' (phase: {phase}). Volcano does not allow patching "
-            f"immutable fields on an existing job. Delete it first with:\n"
-            f"  kubectl delete vcjob {job_name} -n {namespace}"
+
+        from rich.console import Console
+        from rich.prompt import Confirm
+
+        _console = Console()
+        _console.print()
+        _console.print(
+            f"[yellow]Volcano Job [bold]'{job_name}'[/bold] already exists "
+            f"in namespace [bold]'{namespace}'[/bold] (phase: [bold]{phase}[/bold]).[/yellow]"
         )
-        return RunResult(
-            returncode=1,
-            stdout="",
-            stderr=(
-                f"Volcano Job '{job_name}' already exists (phase: {phase}). "
-                f"Delete it first: kubectl delete vcjob {job_name} -n {namespace}"
-            ),
+        _console.print(
+            "[yellow]Volcano does not allow patching immutable fields on an existing job.[/yellow]"
         )
+        _console.print()
+
+        replace = Confirm.ask(
+            "[bold]Delete the existing job and submit a new one?[/bold]",
+            default=False,
+        )
+        if not replace:
+            _console.print("[red]Aborted.[/red]")
+            return RunResult(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    f"Volcano Job '{job_name}' already exists (phase: {phase}). "
+                    f"User chose not to replace it."
+                ),
+            )
+
+        _console.print(f"[cyan]Deleting existing Volcano Job '{job_name}'...[/cyan]")
+        del_result = volcano_mod.delete_job(
+            job_name=job_name,
+            namespace=namespace,
+            kubeconfig=kubeconfig,
+            context=context,
+        )
+        if not del_result.ok:
+            logger.error(
+                f"DISPATCH | failed to delete existing job: {del_result.stderr}"
+            )
+            return del_result
+        _console.print(f"[green]Deleted '{job_name}'. Submitting new job...[/green]")
 
     # 6. Submit via kubectl apply
     logger.info(f"DISPATCH | submitting Volcano Job '{job_name}'")
