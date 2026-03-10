@@ -712,7 +712,31 @@ def _dispatch_volcano(
         n_chips=solve_result.result.total_chips if solve_result.result else None,
     )
 
-    # 5. Submit via kubectl apply
+    # 5. Check for existing job and bail if one already exists
+    existing = volcano_mod.get_job_status(
+        job_name=job_name,
+        namespace=namespace,
+        kubeconfig=kubeconfig,
+        context=context,
+    )
+    if existing is not None:
+        phase = existing.get("status", {}).get("state", {}).get("phase", "Unknown")
+        logger.error(
+            f"DISPATCH | Volcano Job '{job_name}' already exists in namespace "
+            f"'{namespace}' (phase: {phase}). Volcano does not allow patching "
+            f"immutable fields on an existing job. Delete it first with:\n"
+            f"  kubectl delete vcjob {job_name} -n {namespace}"
+        )
+        return RunResult(
+            returncode=1,
+            stdout="",
+            stderr=(
+                f"Volcano Job '{job_name}' already exists (phase: {phase}). "
+                f"Delete it first: kubectl delete vcjob {job_name} -n {namespace}"
+            ),
+        )
+
+    # 6. Submit via kubectl apply
     logger.info(f"DISPATCH | submitting Volcano Job '{job_name}'")
     apply_result = volcano_mod.apply_job(
         yaml_content=rendered_yaml,
