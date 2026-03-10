@@ -99,7 +99,7 @@ def run(
             stderr=result.stderr,
         )
     except subprocess.TimeoutExpired:
-        logger.warning(f"TPU | command timed out after {timeout}s on {tpu_name}")
+        logger.debug(f"TPU | command timed out after {timeout}s on {tpu_name}")
         return RunResult(
             returncode=-1,
             stdout="",

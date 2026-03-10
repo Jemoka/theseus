@@ -170,7 +170,7 @@ def dispatch(
     dirty: bool = False,
     check_availability: bool = True,
     mem: str | None = None,
-    timeout: float = 60.0,
+    timeout: float = 30.0,
     extra_uv_groups: list[str] | None = None,
     extra_cfgs: list[DictConfig] | None = None,
     tpu_version_override: str | None = None,
@@ -484,7 +484,7 @@ def _launch_and_verify(
         return result
 
     # Timed out.  The job may well be running; verify before declaring failure.
-    logger.warning(
+    logger.debug(
         f"DISPATCH | launch command timed out on {label}, verifying job is running..."
     )
     verify = verifier(verify_cmd, min(timeout, 30.0))
