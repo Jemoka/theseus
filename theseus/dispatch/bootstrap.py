@@ -146,6 +146,32 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
             total_chips=detected.total_chips,
         )
 
+    # Multi-host: the solver only serializes one host, but at runtime there may
+    # be multiple JAX processes (e.g. multi-host TPU). Expand the hosts list so
+    # that hosts[jax.process_index()] is always valid.
+    import jax
+
+    process_count = jax.process_count()
+    if len(reconstructed.hosts) < process_count and reconstructed.hosts:
+        template = reconstructed.hosts[0]
+        expanded = []
+        for i in range(process_count):
+            if i < len(reconstructed.hosts):
+                expanded.append(reconstructed.hosts[i])
+            else:
+                expanded.append(
+                    ClusterMachine(
+                        name=f"host-{i}",
+                        cluster=template.cluster,
+                        resources=template.resources,
+                    )
+                )
+        reconstructed = HardwareResult(
+            chip=reconstructed.chip,
+            hosts=expanded,
+            total_chips=reconstructed.total_chips,
+        )
+
     return reconstructed
 
 

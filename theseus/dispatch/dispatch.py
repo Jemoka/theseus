@@ -44,6 +44,7 @@ Usage:
 
 import json
 import re
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -444,6 +445,43 @@ def _dispatch_slurm(
     return result
 
 
+def _launch_and_verify(
+    launch_cmd: str,
+    verify_cmd: str,
+    launcher: Callable[[str, float], RunResult],
+    verifier: Callable[[str, float], RunResult],
+    timeout: float,
+    label: str,
+) -> RunResult:
+    """Launch a backgrounded job, falling back to remote verification if SSH hangs.
+
+    Some SSH/gcloud connections don't return even after the remote shell
+    backgrounds the process and exits.  When the launch times out we don't
+    assume failure — instead we run *verify_cmd* on the remote to check
+    whether the job is actually running.
+    """
+    result = launcher(launch_cmd, timeout)
+    if result.returncode != -1:
+        # Returned (success or real failure) — no hang.
+        return result
+
+    # Timed out.  The job may well be running; verify before declaring failure.
+    logger.warning(
+        f"DISPATCH | launch command timed out on {label}, verifying job is running..."
+    )
+    verify = verifier(verify_cmd, min(timeout, 30.0))
+    if verify.ok:
+        logger.info(
+            f"DISPATCH | verified job is running on {label} (launch SSH hung but job is alive)"
+        )
+        return RunResult(returncode=0, stdout="", stderr="")
+
+    logger.error(
+        f"DISPATCH | launch timed out and job not found on {label}: {verify.stderr}"
+    )
+    return result
+
+
 def _dispatch_plain(
     solve_result: SolveResult,
     work_dir: str,
@@ -534,9 +572,16 @@ def _dispatch_plain(
     run_cmd = (
         f"mkdir -p {log_dir} && "
         f"chmod +x {bootstrap_remote} && "
-        f"nohup {bootstrap_remote} > {log_file} 2>&1 &"
+        f"setsid nohup {bootstrap_remote} > {log_file} 2>&1 < /dev/null &"
     )
-    result = run(run_cmd, ssh_alias, timeout=timeout)
+    result = _launch_and_verify(
+        run_cmd,
+        verify_cmd="pgrep -f '_bootstrap.sh' > /dev/null 2>&1",
+        launcher=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
+        verifier=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
+        timeout=timeout,
+        label=f"SSH '{ssh_alias}'",
+    )
 
     # Include log path in stdout for user reference
     if result.ok:
@@ -572,7 +617,6 @@ def _dispatch_volcano(
     YAML template, and submits via ``kubectl apply``.
     """
     import dataclasses
-    import subprocess
 
     from theseus.dispatch import volcano as volcano_mod
     from theseus.dispatch.sync import snapshot
@@ -962,16 +1006,31 @@ def _dispatch_tpu(
     run_cmd = (
         f"mkdir -p {log_dir} && "
         f"chmod +x {work_dir}/_bootstrap.sh && "
-        f"nohup {work_dir}/_bootstrap.sh > {log_file} 2>&1 &"
+        f"setsid nohup {work_dir}/_bootstrap.sh > {log_file} 2>&1 < /dev/null &"
     )
-    result = tpu_mod.run(
+    result = _launch_and_verify(
         run_cmd,
-        tpu_name,
-        zone,
-        project,
-        worker="all",
-        internal_ip=internal_ip,
+        verify_cmd="pgrep -f '_bootstrap.sh' > /dev/null 2>&1",
+        launcher=lambda cmd, t: tpu_mod.run(
+            cmd,
+            tpu_name,
+            zone,
+            project,
+            worker="all",
+            internal_ip=internal_ip,
+            timeout=t,
+        ),
+        verifier=lambda cmd, t: tpu_mod.run(
+            cmd,
+            tpu_name,
+            zone,
+            project,
+            worker="0",
+            internal_ip=internal_ip,
+            timeout=t,
+        ),
         timeout=timeout,
+        label=f"TPU '{tpu_name}'",
     )
 
     if result.ok:
@@ -1366,7 +1425,7 @@ def _dispatch_repl_plain(
     run_cmd = (
         f"mkdir -p {log_dir} && "
         f"chmod +x {bootstrap_remote} && "
-        f"nohup {bootstrap_remote} > {log_file} 2>&1 & echo $!"
+        f"setsid nohup {bootstrap_remote} > {log_file} 2>&1 < /dev/null & echo $!"
     )
     launch_result = run(run_cmd, ssh_alias, timeout=timeout)
     if not launch_result.ok:
@@ -1661,7 +1720,7 @@ def _dispatch_repl_tpu(
     run_cmd = (
         f"mkdir -p {log_dir} && "
         f"chmod +x {work_dir}/_bootstrap_repl.sh && "
-        f"nohup {work_dir}/_bootstrap_repl.sh > {log_file} 2>&1 & echo $!"
+        f"setsid nohup {work_dir}/_bootstrap_repl.sh > {log_file} 2>&1 < /dev/null & echo $!"
     )
     launch_result = tpu_mod.run(
         run_cmd,
