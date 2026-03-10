@@ -135,9 +135,18 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         except EOFError:
             self.key = jax.random.PRNGKey(0)
 
-        # Load checkpoint using Orbax
+        # Load checkpoint using Orbax, preserving sharding from template.
+        # Convert template leaves to ShapeDtypeStruct with sharding so arrays
+        # restore directly onto the correct devices instead of landing on CPU.
         checkpointer = ocp.StandardCheckpointer()
-        restored = checkpointer.restore(path / "checkpoint", target=template_tree)
+
+        def _to_sharded_struct(x: Any) -> Any:
+            if isinstance(x, jax.Array):
+                return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding)  # type: ignore
+            return x
+
+        sharded_target = jax.tree_util.tree_map(_to_sharded_struct, template_tree)
+        restored = checkpointer.restore(path / "checkpoint", target=sharded_target)
 
         # Load metadata
         with open(path / "config.json", "r") as df:
