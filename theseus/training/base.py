@@ -647,7 +647,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
 
             # handle graphing / plotting
             if self.main_process():
-                plots_meta = jax.device_get(meta)
+                plots_meta = jax.experimental.multihost_utils.process_allgather(meta)
                 self.plotter.submit(plots_meta, step=step)
 
             loss_sum = jax.device_get(loss_sum)
