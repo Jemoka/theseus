@@ -299,6 +299,7 @@ def main() -> None:
         )
 
         # SideChannelQwen forward-backward (using pretrained weights)
+        # With gate=0, loss should match vanilla Qwen exactly.
         print()
         print("=" * 60)
         print("TEST 6: SideChannelQwen forward-backward with pretrained weights")
@@ -309,7 +310,22 @@ def main() -> None:
 
         targets_qwen = jnp.roll(idx, -1, axis=1)
 
-        def qwen_loss_fn(params: dict) -> jax.Array:
+        # First compute base Qwen loss for reference
+        def base_qwen_loss_fn(params: dict) -> jax.Array:
+            _, loss = qwen_model.apply(
+                {"params": params},
+                idx,
+                targets=targets_qwen,
+                padding_mask=attn_bool,
+                deterministic=True,
+            )
+            return loss
+
+        base_loss_val = float(base_qwen_loss_fn(qwen_params))
+        print(f"  Base Qwen loss: {base_loss_val:.4f}")
+
+        # Now compute SideChannelQwen loss (gate=0, should match base)
+        def sc_qwen_loss_fn(params: dict) -> jax.Array:
             _, loss = sc_model.apply(
                 {"params": params},
                 idx,
@@ -321,13 +337,22 @@ def main() -> None:
             )
             return loss
 
-        qwen_loss, qwen_grads = jax.value_and_grad(qwen_loss_fn, allow_int=True)(
+        qwen_loss, qwen_grads = jax.value_and_grad(sc_qwen_loss_fn, allow_int=True)(
             sc_params
         )
         qwen_loss_val = float(qwen_loss)
         print(f"  SideChannelQwen loss: {qwen_loss_val:.4f}")
         assert qwen_loss_val > 0, "Loss is zero or negative!"
         assert not np.isnan(qwen_loss_val), "Loss is NaN!"
+
+        # Parity: SideChannelQwen with gate=0 should match base Qwen
+        loss_diff = abs(qwen_loss_val - base_loss_val)
+        print(f"  Loss diff (SC vs base): {loss_diff:.6f}")
+        assert loss_diff < 0.01, (
+            f"SideChannelQwen loss ({qwen_loss_val:.4f}) doesn't match "
+            f"base Qwen loss ({base_loss_val:.4f}), diff={loss_diff:.6f}"
+        )
+        print("  PASS: SideChannelQwen loss matches base Qwen (gate=0 parity)")
 
         # Check cross-attn gate gradients in SideChannelQwen
         qwen_gate_grads = []
@@ -341,8 +366,6 @@ def main() -> None:
 
         if qwen_gate_grads:
             print(f"  Qwen cross-attn gate grad norms: {qwen_gate_grads}")
-            # Gate grads are expected to be 0 when cross-attn weights are zero-init
-            # (parity test mode). In actual training, model.init() gives random init.
 
         # Verify base Qwen params have non-zero gradients
         qwen_flat_grads = jax.tree_util.tree_leaves(
