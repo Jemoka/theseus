@@ -1,9 +1,10 @@
 """
-SideChannelQwen: Qwen with Perceiver-compressed cross-attention side channels.
+SideChannelQwen: Qwen with cross-attention side channels.
 
 Extends Qwen: layers in cross_attn_layers use SideChannelQwenBlock.
+A lightweight SideChannelEncoder compresses raw side-channel tokens.
 Supports from_pretrained: loads base Qwen weights, initializes cross-attention
-layers and perceiver fresh (gates at 0 = no initial contribution).
+layers and encoder fresh (gates at 0 = no initial contribution).
 """
 
 from typing import Optional, Tuple, List, Any, Type
@@ -19,28 +20,25 @@ from theseus.config import field, configure, patch
 from theseus.model.models.contrib.qwen import Qwen, _from_hf_state_dict
 from theseus.model.block.qwen import QwenDecoderBlock
 from theseus.model.block.sidechannel import SideChannelQwenBlock
-from theseus.model.attention.perceiver import PerceiverResampler
+from theseus.model.attention.perceiver import SideChannelEncoder
 from theseus.model.layers import RMSNorm
 from theseus.model.axes import Axes
 
 
 class SideChannelQwen(Qwen):
-    """Qwen with cross-attention side channels for DMA-CoT.
+    """Qwen with cross-attention side channels.
 
     Selected layers (via cross_attn_layers) use SideChannelQwenBlock instead
-    of QwenDecoderBlock. A PerceiverResampler compresses raw inputs.
+    of QwenDecoderBlock. A lightweight encoder (learned-query cross-attn + MLP)
+    compresses side-channel tokens.
 
-    from_pretrained loads base Qwen weights; cross-attention layers and
-    perceiver are initialized fresh with tanh gates at 0 (preserving
-    pretrained behavior exactly at init).
+    from_pretrained loads base Qwen weights; cross-attention layers and encoder
+    are initialized fresh with tanh gates at 0 (preserving pretrained behavior
+    exactly at init).
     """
 
     n_channels: int = field("architecture/sidechannel/n_channels", default=4)
     n_latents: int = field("architecture/sidechannel/n_latents", default=128)
-    perceiver_layers: int = field(
-        "architecture/sidechannel/perceiver_layers", default=2
-    )
-    perceiver_heads: int = field("architecture/sidechannel/perceiver_heads", default=8)
     cross_attn_layers: List[int] = field(
         "architecture/sidechannel/cross_attn_layers",
         default_factory=lambda: [3, 7, 11, 15, 19, 23, 27, 31],
@@ -48,7 +46,7 @@ class SideChannelQwen(Qwen):
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
-        return [QwenDecoderBlock, SideChannelQwenBlock, PerceiverResampler, RMSNorm]
+        return [QwenDecoderBlock, SideChannelQwenBlock, SideChannelEncoder, RMSNorm]
 
     def setup(self) -> None:
         assert self.vocab_size is not None
@@ -76,8 +74,8 @@ class SideChannelQwen(Qwen):
 
         self.drop = nn.Dropout(rate=self.dropout)
 
-        # Perceiver resampler
-        self.perceiver = configure(PerceiverResampler)
+        # Side-channel encoder
+        self.encoder = configure(SideChannelEncoder)
 
         # Layer types for sliding window
         self.layer_types = [
@@ -105,7 +103,7 @@ class SideChannelQwen(Qwen):
     def encode_channels(
         self, sidechannel: jax.Array, deterministic: bool = False
     ) -> jax.Array:
-        """Encode raw side-channel token IDs through Perceiver.
+        """Encode raw side-channel token IDs through encoder.
 
         Args:
             sidechannel: (B, N, L) token IDs for N channels
@@ -116,14 +114,12 @@ class SideChannelQwen(Qwen):
         """
         B, N, L = sidechannel.shape
 
-        # Embed via shared wte
         flat_tokens = sidechannel.reshape(B * N, L)
         flat_embedded = jnp.take(self.wte, flat_tokens, axis=0).astype(
             self._activation_dtype
         )
 
-        # Perceiver: (B*N, L, C) -> (B*N, K, C)
-        flat_compressed = self.perceiver(flat_embedded, deterministic=deterministic)
+        flat_compressed = self.encoder(flat_embedded, deterministic=deterministic)
 
         return flat_compressed.reshape(  # type: ignore[no-any-return]
             B, N, self.n_latents, self.n_embd
@@ -198,7 +194,7 @@ class SideChannelQwen(Qwen):
 
         x = self.embed(idx, deterministic)
 
-        # Encode side channels (always call perceiver to ensure params exist)
+        # Encode side channels (always call encoder to ensure params exist)
         if sidechannel is None:
             sidechannel = jnp.zeros((b, self.n_channels, 1), dtype=idx.dtype)
         channel_states = self.encode_channels(sidechannel, deterministic)
@@ -223,10 +219,10 @@ class SideChannelQwen(Qwen):
         param_dtype: str = "float32",
         activation_dtype: str = "bfloat16",
     ) -> Any:
-        """Load pretrained Qwen weights, adding fresh cross-attention + perceiver params.
+        """Load pretrained Qwen weights, adding fresh cross-attention + encoder params.
 
         The base Qwen weights are loaded into the self-attention, MLP, norms, and
-        embeddings. Cross-attention layers (rms_cross, cross_attn) and the perceiver
+        embeddings. Cross-attention layers (rms_cross, cross_attn) and the encoder
         are initialized fresh. Since tanh gates start at 0, the model produces
         identical outputs to vanilla Qwen at initialization.
         """
@@ -285,7 +281,7 @@ class SideChannelQwen(Qwen):
             # Load base Qwen weights into the shared params
             # _from_hf_state_dict fills: wte, lm_head, blocks_*/rms_1, blocks_*/rms_2,
             # blocks_*/attn/*, blocks_*/mlp/*, ln_f
-            # It skips keys that don't exist in HF (rms_cross, cross_attn, perceiver)
+            # It skips keys that don't exist in HF (rms_cross, cross_attn, encoder)
             params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
 
             return model, params

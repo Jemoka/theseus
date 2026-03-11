@@ -1,10 +1,10 @@
 """
-SideChannelGPT: GPT with Perceiver-compressed cross-attention side channels.
+SideChannelGPT: GPT with cross-attention side channels.
 
 Selected layers (configured via cross_attn_layers) use SideChannelBlock
-instead of standard Block. A PerceiverResampler compresses raw side-channel
-token inputs into fixed-size latent vectors. A learned null_channel parameter
-is used when no side-channel input is provided.
+instead of standard Block. A lightweight SideChannelEncoder compresses raw
+side-channel tokens into fixed-size latent vectors via learned-query
+cross-attention + MLP.
 """
 
 from typing import Optional, Tuple, List, Any, Type
@@ -16,7 +16,7 @@ import flax.linen as nn
 from theseus.model.models.base import GPT
 from theseus.model.block import Block
 from theseus.model.block.sidechannel import SideChannelBlock
-from theseus.model.attention.perceiver import PerceiverResampler
+from theseus.model.attention.perceiver import SideChannelEncoder
 from theseus.model.layers import LayerNorm
 from theseus.model.axes import Axes
 
@@ -24,13 +24,13 @@ from theseus.config import field, configure
 
 
 class SideChannelGPT(GPT):
-    """GPT with Perceiver-compressed cross-attention side channels.
+    """GPT with cross-attention side channels.
 
-    Cross-attention layers are selected via cross_attn_layers (same pattern
-    as Thoughtbubbles' fork field). Layers not in the list use standard Block.
+    Side-channel tokens are processed by a lightweight encoder (learned queries
+    cross-attend to embedded tokens + MLP), then injected via single-head
+    gated cross-attention at selected layers.
 
-    The tanh gates in cross-attention are initialized to 0, so the model
-    behaves identically to vanilla GPT at initialization.
+    Tanh gates initialized to 0 => vanilla GPT behavior at init.
     """
 
     n_channels: int = field("architecture/sidechannel/n_channels", default=4)
@@ -42,7 +42,7 @@ class SideChannelGPT(GPT):
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
-        return [Block, SideChannelBlock, PerceiverResampler, LayerNorm]
+        return [Block, SideChannelBlock, SideChannelEncoder, LayerNorm]
 
     def setup(self) -> None:
         assert self.vocab_size is not None
@@ -73,8 +73,8 @@ class SideChannelGPT(GPT):
 
         self.drop = nn.Dropout(rate=self.dropout)
 
-        # Perceiver resampler for compressing side-channel inputs
-        self.perceiver = configure(PerceiverResampler)
+        # Side-channel encoder
+        self.encoder = configure(SideChannelEncoder)
 
         # Create blocks: SideChannelBlock for cross_attn_layers, Block otherwise
         cross_set = set(self.cross_attn_layers)
@@ -88,7 +88,7 @@ class SideChannelGPT(GPT):
     def encode_channels(
         self, sidechannel: jax.Array, deterministic: bool = False
     ) -> jax.Array:
-        """Encode raw side-channel token IDs through Perceiver.
+        """Encode raw side-channel token IDs through encoder.
 
         Args:
             sidechannel: (B, N, L) token IDs for N channels
@@ -99,17 +99,13 @@ class SideChannelGPT(GPT):
         """
         B, N, L = sidechannel.shape
 
-        # Embed each channel's tokens via shared wte
-        # (B, N, L) -> (B*N, L) -> embed -> (B*N, L, C)
         flat_tokens = sidechannel.reshape(B * N, L)
         flat_embedded = jnp.take(self.wte, flat_tokens, axis=0).astype(
             self._activation_dtype
         )
 
-        # Run through perceiver: (B*N, L, C) -> (B*N, K, C)
-        flat_compressed = self.perceiver(flat_embedded, deterministic=deterministic)
+        flat_compressed = self.encoder(flat_embedded, deterministic=deterministic)
 
-        # Reshape back: (B*N, K, C) -> (B, N, K, C)
         return flat_compressed.reshape(  # type: ignore[no-any-return]
             B, N, self.n_latents, self.n_embd
         )
@@ -171,7 +167,7 @@ class SideChannelGPT(GPT):
         # Embed tokens
         x = self.embed(idx, deterministic, **kwargs)
 
-        # Encode side channels (always call perceiver to ensure params exist)
+        # Encode side channels (always call encoder to ensure params exist)
         if sidechannel is None:
             sidechannel = jnp.zeros((b, self.n_channels, 1), dtype=idx.dtype)
         channel_states = self.encode_channels(sidechannel, deterministic)

@@ -75,11 +75,11 @@ def main() -> None:
             "sidechannel": {
                 "n_channels": 4,
                 "n_latents": 16,
-                "perceiver_layers": 1,
-                "perceiver_heads": 4,
+                "encoder_layers": 1,
+                "encoder_heads": 4,
                 "cross_attn_layers": [3, 7, 11, 15],
-                "n_head": cfg.num_attention_heads,
-                "n_kv_head": cfg.num_key_value_heads,
+                "n_head": 1,
+                "n_kv_head": 1,
                 "attn_bias": False,
             },
         }
@@ -201,8 +201,8 @@ def main() -> None:
                 "sidechannel": {
                     "n_channels": 2,
                     "n_latents": 8,
-                    "perceiver_layers": 1,
-                    "perceiver_heads": 2,
+                    "encoder_layers": 1,
+                    "encoder_heads": 2,
                     "cross_attn_layers": [1, 3],
                     "n_head": 4,
                     "n_kv_head": 4,
@@ -278,21 +278,21 @@ def main() -> None:
         print(f"  Non-zero gradient params: {num_nonzero}/{len(flat_norms)}")
         assert num_nonzero > 0, "All gradients are zero!"
 
-        # Check perceiver and cross-attn gate gradients specifically
+        # Check encoder and cross-attn gate gradients specifically
         gate_grad_norm = float(
             jnp.linalg.norm(gpt_grads["params"]["blocks_1"]["cross_attn"]["gate"])
         )
-        perceiver_grad_norm = float(
-            jnp.linalg.norm(gpt_grads["params"]["perceiver"]["latent_queries"])
+        encoder_grad_norm = float(
+            jnp.linalg.norm(gpt_grads["params"]["encoder"]["latent_queries"])
         )
         print(f"  Cross-attn gate grad norm: {gate_grad_norm:.6f}")
-        print(f"  Perceiver latent_queries grad norm: {perceiver_grad_norm:.6f}")
+        print(f"  Encoder latent_queries grad norm: {encoder_grad_norm:.6f}")
         assert gate_grad_norm > 0, "Gate gradient is zero — no learning signal!"
-        # Perceiver grad is expected to be 0 at init because tanh(0)=0 blocks
+        # Encoder grad is expected to be 0 at init because tanh(0)=0 blocks
         # gradient flow. Once the gate opens during training, gradients will flow.
         print(
             "  PASS: loss ~ ln(V), gate grad non-zero (will learn to open), "
-            "perceiver grad blocked by gate=0 (expected)"
+            "encoder grad blocked by gate=0 (expected)"
         )
 
         # SideChannelQwen forward-backward (using pretrained weights)

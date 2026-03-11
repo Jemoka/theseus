@@ -1,12 +1,9 @@
 """
-Grouped Sidechannel Cross-Attention with tanh-gating and KV caching.
+Gated single-head cross-attention for side-channel inputs.
 
-Implements the gated cross-attention mechanism from DMA-CoT:
-- Q from decoder hidden state, K/V from Perceiver-compressed channel states
-- NO RoPE (channel states are semantic summaries, not sequential tokens)
-- Tanh-gated output: output = tanh(alpha) * xattn_result (alpha init=0)
-- Per-position channel selection via sidechannel_mask for blockwise masking
-- Separate KV cache in "cross_cache" collection for inference
+Q from decoder hidden state, K/V from encoder-compressed channel states.
+Tanh-gated: output = tanh(alpha) * xattn(x, channels), alpha init=0.
+Per-position channel selection via sidechannel_mask for blockwise masking.
 """
 
 import math
@@ -24,18 +21,14 @@ from theseus.model.module import Module
 class GroupedSidechannelCrossAttention(Module):
     """Gated cross-attention for side-channel inputs.
 
-    Based on GroupedSelfAttention projection patterns but specialized for
-    cross-attention: Q from decoder, K/V from external channel states.
-
-    The tanh gate is initialized to 0, so at initialization this module
-    contributes nothing to the residual stream, preserving pretrained
-    model behavior exactly.
+    Single-head by default for lightweight cross-attention.
+    Tanh gate initialized to 0 => no contribution at init.
     """
 
     n_embd: int = field("architecture/n_embd", default=2048)
     n_layers: int = field("architecture/n_layers", default=32)
-    n_head: int = field("architecture/sidechannel/n_head", default=-1)
-    n_kv_head: int = field("architecture/sidechannel/n_kv_head", default=-1)
+    n_head: int = field("architecture/sidechannel/n_head", default=1)
+    n_kv_head: int = field("architecture/sidechannel/n_kv_head", default=1)
     n_latents: int = field("architecture/sidechannel/n_latents", default=128)
     dropout: float = field("architecture/dropout", default=0.0)
     bias: bool = field("architecture/bias", default=True)
@@ -50,10 +43,8 @@ class GroupedSidechannelCrossAttention(Module):
         return []
 
     def setup(self) -> None:
-        # Default n_head to architecture n_head if not specified
-        n_head_main: int = field("architecture/n_head", default=16)
-        n_head = self.n_head if self.n_head > 0 else n_head_main
-        n_kv_head = self.n_kv_head if self.n_kv_head > 0 else n_head
+        n_head = self.n_head
+        n_kv_head = self.n_kv_head
 
         assert self.n_embd % n_head == 0
         head_dim = self.n_embd // n_head
@@ -121,41 +112,6 @@ class GroupedSidechannelCrossAttention(Module):
             self._param_dtype,
         )
 
-    def _repeat_kv(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Repeat KV heads to match query heads for GQA."""
-        if self.n_rep == 1:
-            return x
-        b, t, kvh, d = x.shape
-        x = x[:, :, :, None, :]
-        x = jnp.broadcast_to(x, (b, t, kvh, self.n_rep, d))
-        return x.reshape(b, t, kvh * self.n_rep, d)
-
-    @nn.compact
-    def _cached_cross_kv(
-        self,
-        k: jax.Array,
-        v: jax.Array,
-    ) -> Tuple[jax.Array, jax.Array]:
-        """Cache cross-attention K/V in 'cross_cache' collection.
-
-        Channel states change infrequently, so we cache their projections.
-        K, V shape: (B, K_latents, n_kv_head, D)
-        """
-        if not self.is_mutable_collection("cross_cache"):
-            return k, v
-
-        cached_key = self.variable(
-            "cross_cache", "cached_key", jnp.zeros, k.shape, k.dtype
-        )
-        cached_value = self.variable(
-            "cross_cache", "cached_value", jnp.zeros, v.shape, v.dtype
-        )
-
-        cached_key.value = k
-        cached_value.value = v
-
-        return k, v
-
     def __call__(
         self,
         x: jax.Array,
@@ -170,33 +126,27 @@ class GroupedSidechannelCrossAttention(Module):
             x: (B, T, C) decoder hidden states
             channel_states: (B, N, K, C) N channels with K latent vectors each
             channel_mask: (B, T) int in [0..N-1], which channel each position
-                         attends to. Enables blockwise masking during training.
-                         If None, all positions attend to channel 0.
+                         attends to. If None, all attend to channel 0.
             deterministic: whether to apply dropout
 
         Returns:
-            (B, T, C) gated cross-attention output (to be added to residual)
+            (B, T, C) gated cross-attention output
         """
         B, T, C = x.shape
         K = channel_states.shape[2]
 
-        # Select per-position channel state using channel_mask
+        # Select per-position channel state
         if channel_mask is not None:
-            # channel_mask: (B, T) int -> index into channel_states
-            batch_idx = jnp.arange(B)[:, None]  # (B, 1)
-            # selected: (B, T, K, C) — each position gets its assigned channel
+            batch_idx = jnp.arange(B)[:, None]
             selected_channels = channel_states[batch_idx, channel_mask]  # (B, T, K, C)
         else:
-            # Default: attend to channel 0
             selected_channels = jnp.broadcast_to(
                 channel_states[:, 0:1, :, :], (B, T, K, C)
             )
 
-        # Project Q from decoder hidden states
+        # Q from decoder, K/V from channels
         q = self.q_proj(x).reshape(B, T, self.n_head_eff, self.head_dim)
 
-        # Project K, V from selected channel states
-        # Reshape: (B, T, K, C) -> (B*T, K, C) for projection, then back
         selected_flat = selected_channels.reshape(B * T, K, C)
         k = self.k_proj(selected_flat).reshape(
             B, T, K, self.n_kv_head_eff, self.head_dim
@@ -205,8 +155,7 @@ class GroupedSidechannelCrossAttention(Module):
             B, T, K, self.n_kv_head_eff, self.head_dim
         )
 
-        # Repeat KV heads for GQA
-        # k, v: (B, T, K, n_kv_head, D) -> need (B, T, K, n_head, D)
+        # Repeat KV heads if using GQA
         if self.n_rep > 1:
             k = jnp.broadcast_to(
                 k[:, :, :, :, None, :],
@@ -217,10 +166,7 @@ class GroupedSidechannelCrossAttention(Module):
                 (B, T, K, self.n_kv_head_eff, self.n_rep, self.head_dim),
             ).reshape(B, T, K, self.n_head_eff, self.head_dim)
 
-        # Attention: each position's Q (1 vector) attends to K latent vectors K, V
-        # q: (B, T, H, D), k: (B, T, K, H, D), v: (B, T, K, H, D)
-        # Reshape for per-position attention:
-        # q: (B*T, 1, H, D), k: (B*T, K, H, D), v: (B*T, K, H, D)
+        # Per-position attention: each Q attends to K latent vectors
         q_flat = q.reshape(B * T, 1, self.n_head_eff, self.head_dim)
         k_flat = k.reshape(B * T, K, self.n_head_eff, self.head_dim)
         v_flat = v.reshape(B * T, K, self.n_head_eff, self.head_dim)
@@ -229,21 +175,17 @@ class GroupedSidechannelCrossAttention(Module):
         k_flat = k_flat.astype(self._activation_dtype)
         v_flat = v_flat.astype(self._activation_dtype)
 
-        # dot_product_attention: (B*T, 1, H, D) x (B*T, K, H, D) -> (B*T, 1, H, D)
         y = jax.nn.dot_product_attention(q_flat, k_flat, v_flat)
 
-        # Reshape back: (B*T, 1, H, D) -> (B, T, H, D) -> (B, T, C)
         y = y.reshape(B, T, self.n_head_eff, self.head_dim)
         y = y.reshape(B, T, C)
 
-        # Output projection
         y = self.o_proj(y)
 
-        # Apply dropout
         if not deterministic and self.dropout > 0:
             y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
 
-        # Apply tanh gate
+        # Tanh gate
         gate_val = jnp.tanh(self.gate)
         y = gate_val * y
 

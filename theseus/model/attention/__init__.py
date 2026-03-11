@@ -4,7 +4,7 @@ from .forking import ForkingAttention
 from .grouped import GroupedSelfAttention
 from .scratching import ScratchSparseCrossAttention
 from .sidechannel import GroupedSidechannelCrossAttention
-from .perceiver import PerceiverResampler
+from .perceiver import SideChannelEncoder, PerceiverResampler
 
 __all__ = [
     "SelfAttention",
@@ -13,5 +13,6 @@ __all__ = [
     "GroupedSelfAttention",
     "ScratchSparseCrossAttention",
     "GroupedSidechannelCrossAttention",
+    "SideChannelEncoder",
     "PerceiverResampler",
 ]
