@@ -30,3 +30,4 @@ from .perplexity_evals import (  # noqa: F401
     WinograndePerplexityEval,
     FineWebPerplexityEval,
 )
+from .sidechannel_perplexity import WildChatPerplexityEval  # noqa: F401

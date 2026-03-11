@@ -20,6 +20,7 @@ class DatasetStyle(Enum):
     PADDED = "padded"
     PMD = "pmd"
     CONTRASTIVE = "contrastive"
+    SIDECHANNEL = "sidechannel"
 
 
 class Dataset(ABC):
@@ -152,6 +153,14 @@ class Strategy:
                 from theseus.training.flywheel.pmd import MemmapDataset
 
                 ds = MemmapDataset(spec, block_size, sampling.name, sampling.suffix)
+            elif style_lower == DatasetStyle.SIDECHANNEL.value:
+                from theseus.training.flywheel.sidechannel import (
+                    SideChannelPaddedDataset,
+                )
+
+                ds = SideChannelPaddedDataset(
+                    spec, block_size, sampling.name, sampling.suffix
+                )
             else:
                 raise ValueError(f"Unknown dataset style: {sampling.style}")
             self.datasets.append(ds)
