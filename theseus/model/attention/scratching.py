@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 
+from theseus.config import field
 from theseus.model.attention.forking import (
     ForkingAttention,
     ATTN_DTYPE,
@@ -12,10 +13,21 @@ from theseus.model.attention.forking import (
 
 
 class ScratchSparseCrossAttention(ForkingAttention):
+    scratch_head_dim: int = field("architecture/scratch_head_dim", default=64)
+
     def setup(self) -> None:
-        # this doesn't actually need more parameters
-        # since we are giving it the q,k,v to attend with
-        ...
+        self.q_proj = nn.Dense(
+            self.scratch_head_dim,
+            use_bias=False,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
+        )
+        self.k_proj = nn.Dense(
+            self.scratch_head_dim,
+            use_bias=False,
+            param_dtype=self._param_dtype,
+            dtype=self._activation_dtype,
+        )
 
     def postprocess_attn(
         self,
@@ -86,7 +98,17 @@ class ScratchSparseCrossAttention(ForkingAttention):
         k = k.astype(ATTN_DTYPE)
         v = v.astype(ATTN_DTYPE)
 
-        y = jax.nn.dot_product_attention(q, k, v, mask=causal_mask)
+        # Manual attention: Q/K may have different last dim than V
+        # (Q/K are projected to scratch_head_dim, V stays at n_embd)
+        scale = jnp.sqrt(jnp.array(q.shape[-1], dtype=ATTN_DTYPE))
+        attn_weights = jnp.einsum("bqhd,bkhd->bhqk", q, k) / scale
+        attn_weights = jnp.where(
+            causal_mask.transpose(0, 1, 2, 3),  # (B, 1, Q, K)
+            attn_weights,
+            jnp.array(-1e9, dtype=ATTN_DTYPE),
+        )
+        attn_weights = jax.nn.softmax(attn_weights, axis=-1)
+        y = jnp.einsum("bhqk,bkhd->bqhd", attn_weights, v)
         return y
 
     @nn.compact
@@ -99,10 +121,24 @@ class ScratchSparseCrossAttention(ForkingAttention):
         deterministic: bool = False,
         **kwargs: Any,
     ) -> jax.Array:
-        # we then do a normal attention operation
+        cumulative_scores: jax.Array = kwargs.get("cumulative_scores")  # type: ignore
+
+        # Project Q and K to lower dimension; V stays unprojected
+        q = self.q_proj(q)  # (B, T_q, scratch_head_dim)
+        k = self.k_proj(k)  # (B, T_k, scratch_head_dim)
+
+        # Fork channel weighting (identical to ForkingAttention.preprocess_qkv)
+        if self.use_fork_channel:
+            q = q.at[:, :, -1].set(jnp.ones_like(q[:, :, -1]))
+            k = k.at[:, :, -1].set(jnp.exp(cumulative_scores))
+
         # each of these should be a single "head"
         y = self.attn(
-            q[:, :, None, :], k[:, :, None, :], v[:, :, None, :], padding_mask, **kwargs
+            q[:, :, None, :],
+            k[:, :, None, :],
+            v[:, :, None, :],
+            padding_mask,
+            **kwargs,
         )
         y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
 
