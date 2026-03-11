@@ -178,7 +178,6 @@ class GroupedSidechannelCrossAttention(Module):
             (B, T, C) gated cross-attention output (to be added to residual)
         """
         B, T, C = x.shape
-        N = channel_states.shape[1]
         K = channel_states.shape[2]
 
         # Select per-position channel state using channel_mask

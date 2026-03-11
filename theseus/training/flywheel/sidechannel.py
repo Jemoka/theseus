@@ -124,9 +124,7 @@ class SideChannelPaddedDataset(Dataset):
             )
             padding_mask = np.concatenate(
                 (
-                    np.full(
-                        (padding_mask.shape[0], pad_len), False, dtype=np.bool_
-                    ),
+                    np.full((padding_mask.shape[0], pad_len), False, dtype=np.bool_),
                     padding_mask,
                 ),
                 axis=-1,

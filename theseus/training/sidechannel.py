@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Type
 import numpy as np
 
 import jax
-import jax.numpy as jnp
 from jax import random as jax_random
 from jax.sharding import PartitionSpec as P
 
@@ -126,9 +125,7 @@ def _sidechannel_reshape_batch(
     return type_cast(PyTree[np.ndarray], jax.tree_util.tree_map(_reshape, batch))
 
 
-def _sidechannel_to_global(
-    self: Any, batch: PyTree[np.ndarray]
-) -> PyTree[jax.Array]:
+def _sidechannel_to_global(self: Any, batch: PyTree[np.ndarray]) -> PyTree[jax.Array]:
     """Move batch to global arrays, handling sidechannel's extra dimension."""
     from typing import cast as type_cast
     from jax.experimental import multihost_utils

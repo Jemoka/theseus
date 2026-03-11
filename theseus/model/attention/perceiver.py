@@ -7,7 +7,6 @@ Following Flamingo (Alayrac et al., 2022) and Perceiver (Jaegle et al., 2021):
 - Produces fixed-size (K, d) output regardless of input length
 """
 
-import math
 from typing import Optional, Tuple, Any, List, Type
 
 import jax
@@ -15,7 +14,6 @@ import jax.numpy as jnp
 import flax.linen as nn
 
 from theseus.config import field
-from theseus.model.axes import Axes
 from theseus.model.module import Module
 
 

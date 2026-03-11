@@ -5,7 +5,7 @@ SideChannelBlock: extends Block (GPT backbone) with cross-attention.
 SideChannelQwenBlock: extends QwenDecoderBlock with cross-attention.
 """
 
-from typing import Optional, List, Type, Any, Tuple, Dict
+from typing import Optional, List, Type, Any, Tuple
 
 import jax
 
@@ -62,7 +62,10 @@ class SideChannelBlock(Module):
         **kwargs: Any,
     ) -> jax.Array:
         x = x + self.attn(
-            self.ln_1(x), padding_mask=padding_mask, deterministic=deterministic, **kwargs
+            self.ln_1(x),
+            padding_mask=padding_mask,
+            deterministic=deterministic,
+            **kwargs,
         )
         if channel_states is not None:
             x = x + self.cross_attn(
@@ -83,7 +86,12 @@ class SideChannelQwenBlock(Module):
 
     @classmethod
     def components(cls) -> List[Type[Any]]:
-        return [RMSNorm, GroupedSelfAttention, GroupedSidechannelCrossAttention, QwenMLP]
+        return [
+            RMSNorm,
+            GroupedSelfAttention,
+            GroupedSidechannelCrossAttention,
+            QwenMLP,
+        ]
 
     @property
     def sharding(self) -> List[Tuple[str, Optional[Any]]]:

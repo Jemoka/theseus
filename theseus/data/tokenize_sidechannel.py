@@ -11,7 +11,7 @@ import os
 import json
 import random
 import time
-from typing import Any, Type, cast
+from typing import Any, Type
 from dataclasses import dataclass, asdict
 
 import numpy as np
@@ -82,10 +82,7 @@ def _encode_sidechannel_item(
     n_channels: int,
     pad_token: int,
     system_prompt: str,
-) -> (
-    tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool]
-    | None
-):
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, bool] | None:
     """Encode a single conversation into side-channel format.
 
     Returns:
@@ -106,7 +103,9 @@ def _encode_sidechannel_item(
     for turn in think_turns:
         think_template.append(ChatTurn(role="assistant", message=turn.message))
 
-    think_ids = encode_chat_template(think_template, tokenizer, system_prompt="", tokenize=True)
+    think_ids = encode_chat_template(
+        think_template, tokenizer, system_prompt="", tokenize=True
+    )
 
     if not think_ids:
         return None
@@ -132,13 +131,17 @@ def _encode_sidechannel_item(
         overflow = channel_turns[: len(channel_turns) - n_channels + 1]
         merged_text = " ".join(t.message for t in overflow)
         merged_turn = ChatTurn(role=overflow[0].role, message=merged_text)
-        channel_turns = [merged_turn] + channel_turns[len(channel_turns) - n_channels + 1 :]
+        channel_turns = [merged_turn] + channel_turns[
+            len(channel_turns) - n_channels + 1 :
+        ]
 
     sidechannel = np.full((n_channels, block_size), pad_token, dtype=np.uint32)
 
     for ch_idx, turn in enumerate(channel_turns):
         ch_template: ChatTemplate = [ChatTurn(role=turn.role, message=turn.message)]
-        ch_ids = encode_chat_template(ch_template, tokenizer, system_prompt="", tokenize=True)
+        ch_ids = encode_chat_template(
+            ch_template, tokenizer, system_prompt="", tokenize=True
+        )
 
         if len(ch_ids) > block_size:
             ch_ids = ch_ids[-block_size:]
@@ -242,9 +245,7 @@ class TokenizeSideChannelDatasetJob(BasicJob[TokenizeSideChannelConfig]):
             return
 
         dataset_cls: Any = DATASETS[args.name]
-        dataset: ChatTemplateDataset = dataset_cls(
-            split=args.split, config=args.config
-        )
+        dataset: ChatTemplateDataset = dataset_cls(split=args.split, config=args.config)
 
         tokenizer = get_tokenizer()
 
@@ -301,7 +302,7 @@ class TokenizeSideChannelDatasetJob(BasicJob[TokenizeSideChannelConfig]):
                 item = dataset[dataset_idx]
 
                 result = _encode_sidechannel_item(
-                    cast(ChatTemplate, item),
+                    item,
                     tokenizer,
                     args.block_size,
                     args.n_channels,

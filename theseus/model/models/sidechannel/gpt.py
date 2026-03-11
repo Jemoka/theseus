@@ -76,14 +76,6 @@ class SideChannelGPT(GPT):
         # Perceiver resampler for compressing side-channel inputs
         self.perceiver = configure(PerceiverResampler)
 
-        # Null channel state: used when no side-channel input provided
-        self.null_channel = self.param(
-            "null_channel",
-            nn.initializers.normal(stddev=0.02),
-            (self.n_channels, self.n_latents, self.n_embd),
-            self._param_dtype,
-        )
-
         # Create blocks: SideChannelBlock for cross_attn_layers, Block otherwise
         cross_set = set(self.cross_attn_layers)
         self.blocks = [
@@ -179,15 +171,10 @@ class SideChannelGPT(GPT):
         # Embed tokens
         x = self.embed(idx, deterministic, **kwargs)
 
-        # Encode side channels
-        if sidechannel is not None:
-            channel_states = self.encode_channels(sidechannel, deterministic)
-        else:
-            # Use null channel states broadcast to batch
-            channel_states = jnp.broadcast_to(
-                self.null_channel[None, :, :, :].astype(self._activation_dtype),
-                (b, self.n_channels, self.n_latents, self.n_embd),
-            )
+        # Encode side channels (always call perceiver to ensure params exist)
+        if sidechannel is None:
+            sidechannel = jnp.zeros((b, self.n_channels, 1), dtype=idx.dtype)
+        channel_states = self.encode_channels(sidechannel, deterministic)
 
         # Decode through transformer blocks
         x = self.decode(

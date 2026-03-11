@@ -134,7 +134,7 @@ def main() -> None:
             sc_params, hf.state_dict(), cfg.num_hidden_layers
         )
 
-        # Forward without sidechannel (uses null_channel, but gate=0 so no effect)
+        # Forward without sidechannel (perceiver encodes zeros, but gate=0 so no effect)
         logits_sc, _ = sc_model.apply(
             {"params": sc_params}, idx, padding_mask=attn_bool, deterministic=True
         )
@@ -173,7 +173,9 @@ def main() -> None:
 
         # With gate=0, even with sidechannel input, output should be identical
         max_diff_with_sc = np.max(np.abs(logits_qwen_last - logits_with_sc_last))
-        print(f"  SideChannelQwen (with sc input, gate=0) vs Qwen max diff: {max_diff_with_sc}")
+        print(
+            f"  SideChannelQwen (with sc input, gate=0) vs Qwen max diff: {max_diff_with_sc}"
+        )
         assert max_diff_with_sc < 1e-4, (
             f"Gate=0 with sidechannel input should produce same output: {max_diff_with_sc}"
         )
@@ -227,8 +229,129 @@ def main() -> None:
             deterministic=True,
         )
         print(f"  SideChannelGPT output shape: {logits_gpt.shape}")
-        assert logits_gpt.shape == (2, 32, 1000), f"Unexpected shape: {logits_gpt.shape}"
+        assert logits_gpt.shape == (2, 32, 1000), (
+            f"Unexpected shape: {logits_gpt.shape}"
+        )
         print("  PASS: SideChannelGPT forward works")
+
+        # --- Test 5: Forward-backward with random init, loss ~ ln(vocab_size) ---
+        print()
+        print("=" * 60)
+        print("TEST 5: Forward-backward with random init (loss sanity check)")
+        print("=" * 60)
+
+        vocab_size = 1000
+        expected_loss = float(np.log(vocab_size))
+        print(f"  Expected initial loss ~ ln({vocab_size}) = {expected_loss:.4f}")
+
+        # GPT forward-backward
+        targets_gpt = jax.random.randint(jax.random.PRNGKey(99), (2, 32), 0, vocab_size)
+        dummy_pad = jnp.ones((2, 32), dtype=bool)
+
+        def gpt_loss_fn(params: dict) -> jax.Array:
+            _, loss = gpt_model.apply(
+                params,
+                dummy_idx,
+                targets=targets_gpt,
+                padding_mask=dummy_pad,
+                sidechannel=dummy_sc,
+                sidechannel_mask=dummy_sc_mask,
+                deterministic=True,
+            )
+            return loss
+
+        gpt_loss, gpt_grads = jax.value_and_grad(gpt_loss_fn, allow_int=True)(
+            gpt_params
+        )
+        gpt_loss_val = float(gpt_loss)
+        print(f"  SideChannelGPT loss: {gpt_loss_val:.4f}")
+        assert abs(gpt_loss_val - expected_loss) < 2.0, (
+            f"GPT loss {gpt_loss_val} too far from expected {expected_loss}"
+        )
+
+        # Check gradients are non-zero (filter out float0 arrays from int params)
+        def _grad_norm(g: jax.Array) -> float:
+            if hasattr(g, "dtype") and g.dtype == jax.float0:
+                return 0.0
+            return float(jnp.linalg.norm(g))
+
+        grad_norms = jax.tree_util.tree_map(_grad_norm, gpt_grads)
+        flat_norms = jax.tree_util.tree_leaves(grad_norms)
+        num_nonzero = sum(1 for n in flat_norms if n > 0)
+        print(f"  Non-zero gradient params: {num_nonzero}/{len(flat_norms)}")
+        assert num_nonzero > 0, "All gradients are zero!"
+
+        # Check perceiver and cross-attn gate gradients specifically
+        gate_grad_norm = float(
+            jnp.linalg.norm(gpt_grads["params"]["blocks_1"]["cross_attn"]["gate"])
+        )
+        perceiver_grad_norm = float(
+            jnp.linalg.norm(gpt_grads["params"]["perceiver"]["latent_queries"])
+        )
+        print(f"  Cross-attn gate grad norm: {gate_grad_norm:.6f}")
+        print(f"  Perceiver latent_queries grad norm: {perceiver_grad_norm:.6f}")
+        assert gate_grad_norm > 0, "Gate gradient is zero — no learning signal!"
+        # Perceiver grad is expected to be 0 at init because tanh(0)=0 blocks
+        # gradient flow. Once the gate opens during training, gradients will flow.
+        print(
+            "  PASS: loss ~ ln(V), gate grad non-zero (will learn to open), "
+            "perceiver grad blocked by gate=0 (expected)"
+        )
+
+        # SideChannelQwen forward-backward (using pretrained weights)
+        print()
+        print("=" * 60)
+        print("TEST 6: SideChannelQwen forward-backward with pretrained weights")
+        print("=" * 60)
+
+        # Re-set Qwen config
+        th_cfg.architecture = OmegaConf.create(arch_cfg)
+
+        targets_qwen = jnp.roll(idx, -1, axis=1)
+
+        def qwen_loss_fn(params: dict) -> jax.Array:
+            _, loss = sc_model.apply(
+                {"params": params},
+                idx,
+                targets=targets_qwen,
+                padding_mask=attn_bool,
+                sidechannel=sidechannel,
+                sidechannel_mask=sidechannel_mask,
+                deterministic=True,
+            )
+            return loss
+
+        qwen_loss, qwen_grads = jax.value_and_grad(qwen_loss_fn, allow_int=True)(
+            sc_params
+        )
+        qwen_loss_val = float(qwen_loss)
+        print(f"  SideChannelQwen loss: {qwen_loss_val:.4f}")
+        assert qwen_loss_val > 0, "Loss is zero or negative!"
+        assert not np.isnan(qwen_loss_val), "Loss is NaN!"
+
+        # Check cross-attn gate gradients in SideChannelQwen
+        qwen_gate_grads = []
+        for layer_idx in [3, 7, 11, 15]:
+            key_name = f"blocks_{layer_idx}"
+            if key_name in qwen_grads:
+                gate_g = float(
+                    jnp.linalg.norm(qwen_grads[key_name]["cross_attn"]["gate"])
+                )
+                qwen_gate_grads.append(gate_g)
+
+        if qwen_gate_grads:
+            print(f"  Qwen cross-attn gate grad norms: {qwen_gate_grads}")
+            # Gate grads are expected to be 0 when cross-attn weights are zero-init
+            # (parity test mode). In actual training, model.init() gives random init.
+
+        # Verify base Qwen params have non-zero gradients
+        qwen_flat_grads = jax.tree_util.tree_leaves(
+            jax.tree_util.tree_map(_grad_norm, qwen_grads)
+        )
+        qwen_nonzero = sum(1 for n in qwen_flat_grads if n > 0)
+        print(f"  Non-zero gradient params: {qwen_nonzero}/{len(qwen_flat_grads)}")
+        assert qwen_nonzero > 0, "All Qwen gradients are zero!"
+        print("  PASS: SideChannelQwen backward works, gradients flow")
 
         print()
         print("=" * 60)

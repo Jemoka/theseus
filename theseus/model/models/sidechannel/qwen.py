@@ -11,11 +11,9 @@ from typing import Optional, Tuple, List, Any, Type
 import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.nn as jnn
 import flax.linen as nn
 
 from omegaconf import OmegaConf
-from loguru import logger
 
 from theseus.config import field, configure, patch
 from theseus.model.models.contrib.qwen import Qwen, _from_hf_state_dict
@@ -24,7 +22,6 @@ from theseus.model.block.sidechannel import SideChannelQwenBlock
 from theseus.model.attention.perceiver import PerceiverResampler
 from theseus.model.layers import RMSNorm
 from theseus.model.axes import Axes
-from theseus.base.axis import Axis
 
 
 class SideChannelQwen(Qwen):
@@ -81,14 +78,6 @@ class SideChannelQwen(Qwen):
 
         # Perceiver resampler
         self.perceiver = configure(PerceiverResampler)
-
-        # Null channel state
-        self.null_channel = self.param(
-            "null_channel",
-            nn.initializers.normal(stddev=0.02),
-            (self.n_channels, self.n_latents, self.n_embd),
-            self._param_dtype,
-        )
 
         # Layer types for sliding window
         self.layer_types = [
@@ -209,14 +198,10 @@ class SideChannelQwen(Qwen):
 
         x = self.embed(idx, deterministic)
 
-        # Encode side channels
-        if sidechannel is not None:
-            channel_states = self.encode_channels(sidechannel, deterministic)
-        else:
-            channel_states = jnp.broadcast_to(
-                self.null_channel[None, :, :, :].astype(self._activation_dtype),
-                (b, self.n_channels, self.n_latents, self.n_embd),
-            )
+        # Encode side channels (always call perceiver to ensure params exist)
+        if sidechannel is None:
+            sidechannel = jnp.zeros((b, self.n_channels, 1), dtype=idx.dtype)
+        channel_states = self.encode_channels(sidechannel, deterministic)
 
         x = self.decode(
             x,
@@ -300,9 +285,7 @@ class SideChannelQwen(Qwen):
             # Load base Qwen weights into the shared params
             # _from_hf_state_dict fills: wte, lm_head, blocks_*/rms_1, blocks_*/rms_2,
             # blocks_*/attn/*, blocks_*/mlp/*, ln_f
-            # It skips keys that don't exist in HF (rms_cross, cross_attn, perceiver, null_channel)
-            params = _from_hf_state_dict(
-                params, hf_model.state_dict(), model.n_layers
-            )
+            # It skips keys that don't exist in HF (rms_cross, cross_attn, perceiver)
+            params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
 
             return model, params

@@ -1,6 +1,5 @@
 import optax
 
-from theseus.training.base import BaseTrainerConfig
 from theseus.training.sidechannel import (
     SideChannelTrainer,
     SideChannelTrainerConfig,
