@@ -134,9 +134,7 @@ class ScratchingBlock(ForkingBlock):
         V = (
             x + fork_embedding_bf16
         )  # full sequence of the original, pre-fork inputs, add fork embedding since this is what we'l be avging
-        Q = (
-            x_to_consider * is_fork[:, :, None]
-        )  # the new forked tokens, in particular the non-zero entries, is what we used to gather
+        Q = x_to_consider  # the new forked tokens is what we used to gather; we don't use the additional rows
 
         # do the local mixing things to figure out the identity of the forked tokens
         query_token_index = jnp.take_along_axis(token_index, orig_indices, axis=-1)
