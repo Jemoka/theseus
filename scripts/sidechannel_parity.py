@@ -308,7 +308,13 @@ def main() -> None:
         # Re-set Qwen config
         th_cfg.architecture = OmegaConf.create(arch_cfg)
 
-        targets_qwen = jnp.roll(idx, -1, axis=1)
+        # Proper next-token targets: shift left by 1, mark padding and
+        # last-real-token positions as -1 (ignored by loss).
+        targets_qwen = jnp.concatenate(
+            [idx[:, 1:], -jnp.ones((idx.shape[0], 1), dtype=idx.dtype)], axis=1
+        )
+        # Also mask out positions beyond the real sequence
+        targets_qwen = jnp.where(attn_bool, targets_qwen, -1)
 
         # First compute base Qwen loss for reference
         def base_qwen_loss_fn(params: dict) -> jax.Array:
