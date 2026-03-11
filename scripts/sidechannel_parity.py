@@ -31,12 +31,9 @@ def main() -> None:
         args.model, torch_dtype=torch.float32, device_map=None
     )
     tok = AutoTokenizer.from_pretrained(args.model)
-    chat = [{"role": "user", "content": args.prompt}]
-    prompt_text = tok.apply_chat_template(
-        chat, tokenize=False, add_generation_prompt=False
-    )
+    # Tokenize raw text (no chat template) for realistic loss values
     inputs = tok(
-        prompt_text,
+        args.prompt,
         return_tensors="pt",
         padding="max_length",
         max_length=args.max_length,
@@ -308,13 +305,16 @@ def main() -> None:
         # Re-set Qwen config
         th_cfg.architecture = OmegaConf.create(arch_cfg)
 
-        # Proper next-token targets: shift left by 1, mark padding and
-        # last-real-token positions as -1 (ignored by loss).
-        targets_qwen = jnp.concatenate(
-            [idx[:, 1:], -jnp.ones((idx.shape[0], 1), dtype=idx.dtype)], axis=1
+        # Proper next-token targets: position i predicts token i+1.
+        # Valid only when position i+1 is a real (non-pad) token.
+        B_q, T_q = idx.shape
+        shifted_ids = jnp.concatenate(
+            [idx[:, 1:], jnp.zeros((B_q, 1), dtype=idx.dtype)], axis=1
         )
-        # Also mask out positions beyond the real sequence
-        targets_qwen = jnp.where(attn_bool, targets_qwen, -1)
+        valid_mask = jnp.concatenate(
+            [attn_bool[:, 1:], jnp.zeros((B_q, 1), dtype=bool)], axis=1
+        )
+        targets_qwen = jnp.where(valid_mask, shifted_ids, -1)
 
         # First compute base Qwen loss for reference
         def base_qwen_loss_fn(params: dict) -> jax.Array:
@@ -329,6 +329,22 @@ def main() -> None:
 
         base_loss_val = float(base_qwen_loss_fn(qwen_params))
         print(f"  Base Qwen loss: {base_loss_val:.4f}")
+
+        # Compare against HF loss
+        with torch.no_grad():
+            hf_out = hf(
+                inputs["input_ids"][:, :sum(inputs["attention_mask"][0].tolist())],
+                labels=inputs["input_ids"][:, :sum(inputs["attention_mask"][0].tolist())],
+            )
+        hf_loss_val = hf_out.loss.item()
+        print(f"  HF reference loss: {hf_loss_val:.4f}")
+        hf_diff = abs(base_loss_val - hf_loss_val)
+        print(f"  Base Qwen vs HF loss diff: {hf_diff:.4f}")
+        assert hf_diff < 0.1, (
+            f"Base Qwen loss ({base_loss_val:.4f}) too far from "
+            f"HF loss ({hf_loss_val:.4f}), diff={hf_diff:.4f}"
+        )
+        print("  PASS: loss matches HF reference")
 
         # Now compute SideChannelQwen loss (gate=0, should match base)
         def sc_qwen_loss_fn(params: dict) -> jax.Array:
