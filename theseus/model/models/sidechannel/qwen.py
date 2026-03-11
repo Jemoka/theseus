@@ -49,6 +49,8 @@ class SideChannelQwen(Qwen):
         return [QwenDecoderBlock, SideChannelQwenBlock, SideChannelEncoder, RMSNorm]
 
     def setup(self) -> None:
+        # NOTE: cannot call super().setup() because Flax forbids re-assigning
+        # named submodules (blocks_0, etc.) once registered by the parent.
         assert self.vocab_size is not None
         assert self.block_size is not None
 
@@ -61,7 +63,6 @@ class SideChannelQwen(Qwen):
             (self.vocab_size, self.n_embd),
             self._param_dtype,
         )
-
         self.lm_head: Any = self.param(
             "lm_head",
             nn.with_partitioning(
@@ -71,13 +72,9 @@ class SideChannelQwen(Qwen):
             (self.vocab_size, self.n_embd),
             self._param_dtype,
         )
-
         self.drop = nn.Dropout(rate=self.dropout)
-
-        # Side-channel encoder
         self.encoder = configure(SideChannelEncoder)
 
-        # Layer types for sliding window
         self.layer_types = [
             "sliding"
             if (
@@ -89,7 +86,6 @@ class SideChannelQwen(Qwen):
             for i in range(self.n_layers)
         ]
 
-        # Create blocks: SideChannelQwenBlock for cross_attn_layers
         cross_set = set(self.cross_attn_layers)
         self.blocks = [
             configure(SideChannelQwenBlock)
@@ -97,30 +93,18 @@ class SideChannelQwen(Qwen):
             else configure(QwenDecoderBlock)
             for i in range(self.n_layers)
         ]
-
         self.ln_f = configure(RMSNorm)
 
     def encode_channels(
         self, sidechannel: jax.Array, deterministic: bool = False
     ) -> jax.Array:
-        """Encode raw side-channel token IDs through encoder.
-
-        Args:
-            sidechannel: (B, N, L) token IDs for N channels
-            deterministic: whether to apply dropout
-
-        Returns:
-            (B, N, K, C) compressed channel states
-        """
+        """Encode raw side-channel token IDs. Returns (B, N, K, C)."""
         B, N, L = sidechannel.shape
-
         flat_tokens = sidechannel.reshape(B * N, L)
         flat_embedded = jnp.take(self.wte, flat_tokens, axis=0).astype(
             self._activation_dtype
         )
-
         flat_compressed = self.encoder(flat_embedded, deterministic=deterministic)
-
         return flat_compressed.reshape(  # type: ignore[no-any-return]
             B, N, self.n_latents, self.n_embd
         )
@@ -140,14 +124,12 @@ class SideChannelQwen(Qwen):
 
         for i, block in enumerate(self.blocks):
             sliding = self.layer_types[i] == "sliding"
-            mask = padding_mask
-
             if isinstance(block, SideChannelQwenBlock):
                 x = block(
                     x,
                     channel_states=channel_states,
                     channel_mask=channel_mask,
-                    padding_mask=mask,
+                    padding_mask=padding_mask,
                     deterministic=deterministic,
                     sliding=sliding,
                     positions=positions,
@@ -155,7 +137,7 @@ class SideChannelQwen(Qwen):
             else:
                 x = block(
                     x,
-                    padding_mask=mask,
+                    padding_mask=padding_mask,
                     deterministic=deterministic,
                     sliding=sliding,
                     positions=positions,
@@ -172,29 +154,11 @@ class SideChannelQwen(Qwen):
         sidechannel_mask: Optional[jax.Array] = None,
         **kwargs: Any,
     ) -> Tuple[Any, Optional[Any]]:
-        """Forward pass with optional side-channel inputs.
-
-        Args:
-            idx: (B, T) input token indices
-            targets: (B, T) target token indices, -1 to ignore
-            padding_mask: (B, T) bool, True=valid
-            deterministic: if False, apply dropout
-            sidechannel: (B, N, L) token IDs for N side channels
-            sidechannel_mask: (B, T) int in [0..N-1]
-
-        Returns:
-            logits: (B, T, vocab_size)
-            loss: cross-entropy loss if targets provided, else None
-        """
         b, t = idx.shape
-        assert t <= self.block_size, (
-            f"Cannot forward sequence of length {t}, "
-            f"block size is only {self.block_size}"
-        )
+        assert t <= self.block_size
 
         x = self.embed(idx, deterministic)
 
-        # Encode side channels (always call encoder to ensure params exist)
         if sidechannel is None:
             sidechannel = jnp.zeros((b, self.n_channels, 1), dtype=idx.dtype)
         channel_states = self.encode_channels(sidechannel, deterministic)
@@ -219,13 +183,7 @@ class SideChannelQwen(Qwen):
         param_dtype: str = "float32",
         activation_dtype: str = "bfloat16",
     ) -> Any:
-        """Load pretrained Qwen weights, adding fresh cross-attention + encoder params.
-
-        The base Qwen weights are loaded into the self-attention, MLP, norms, and
-        embeddings. Cross-attention layers (rms_cross, cross_attn) and the encoder
-        are initialized fresh. Since tanh gates start at 0, the model produces
-        identical outputs to vanilla Qwen at initialization.
-        """
+        """Load pretrained Qwen weights, adding fresh cross-attention + encoder params."""
         import torch
         from transformers import Qwen2ForCausalLM
 
@@ -278,10 +236,7 @@ class SideChannelQwen(Qwen):
                 lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
             )
 
-            # Load base Qwen weights into the shared params
-            # _from_hf_state_dict fills: wte, lm_head, blocks_*/rms_1, blocks_*/rms_2,
-            # blocks_*/attn/*, blocks_*/mlp/*, ln_f
-            # It skips keys that don't exist in HF (rms_cross, cross_attn, encoder)
+            # Load base Qwen weights; skips cross_attn/encoder (not in HF)
             params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers)
 
             return model, params
