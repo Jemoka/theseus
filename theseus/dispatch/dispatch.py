@@ -718,7 +718,7 @@ def _dispatch_volcano(
         return ship_result
 
     # 4. Render Volcano Job YAML
-    bootstrap_cmd = f"cd {work_dir} && bash _bootstrap.sh"
+    bootstrap_cmd = f"bash {work_dir}/_bootstrap.sh"
     rendered_yaml = volcano_mod.render_volcano_job(
         job_name=job_name,
         host_config=host_config,
