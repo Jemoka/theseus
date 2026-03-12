@@ -254,23 +254,6 @@ def dispatch(
     inventory = RemoteInventory(dispatch_config)
     cluster_config = dispatch_config.clusters[solve_result.host_config.cluster]
     cluster = inventory.get_cluster(solve_result.host_config.cluster)
-    work_dir = _get_work_dir(cluster.work, spec)
-    # Shared dir for scripts visible to all nodes (login + compute)
-    share_dir = cluster_config.share or f"{cluster.work}/.dispatch"
-    logger.debug(
-        f"DISPATCH | work_dir={work_dir}, share_dir={share_dir}, cluster={cluster.name}"
-    )
-
-    # JuiceFS mount info if configured
-    juicefs_mount: JuiceFSMount | None = None
-    if cluster_config.mount:
-        juicefs_mount = JuiceFSMount(
-            redis_url=cluster_config.mount,
-            mount_point=cluster.root,
-            cache_size=cluster_config.cache_size,
-            cache_dir=cluster_config.cache_dir,
-        )
-        logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
 
     # 4. Generate bootstrap script(s) (Python scripts that run the job stages)
     logger.debug(f"DISPATCH | generating {n_stages} bootstrap script(s)")
@@ -279,7 +262,7 @@ def dispatch(
     # 5. Submit based on host type
     uv_cache_dir = cluster_config.uv_dir
     if isinstance(solve_result.host_config, VolcanoHostConfig):
-        if juicefs_mount is not None:
+        if cluster_config.mount:
             logger.warning(
                 f"DISPATCH | cluster '{solve_result.host_config.cluster}' has a "
                 f"JuiceFS mount configured, but Volcano dispatch uses a PVC "
@@ -289,7 +272,6 @@ def dispatch(
         logger.info(f"DISPATCH | submitting via Volcano to '{solve_result.host_name}'")
         return _dispatch_volcano(
             solve_result,
-            work_dir,
             cluster,
             spec,
             bootstrap_pys,
@@ -301,7 +283,25 @@ def dispatch(
             volcano_namespace_override=volcano_namespace_override,
             uv_cache_dir=uv_cache_dir,
         )
-    elif isinstance(solve_result.host_config, TPUHostConfig):
+
+    # Non-Volcano paths need work_dir, share_dir, and juicefs_mount
+    work_dir = _get_work_dir(cluster.work, spec)
+    share_dir = cluster_config.share or f"{cluster.work}/.dispatch"
+    logger.debug(
+        f"DISPATCH | work_dir={work_dir}, share_dir={share_dir}, cluster={cluster.name}"
+    )
+
+    juicefs_mount: JuiceFSMount | None = None
+    if cluster_config.mount:
+        juicefs_mount = JuiceFSMount(
+            redis_url=cluster_config.mount,
+            mount_point=cluster.root,
+            cache_size=cluster_config.cache_size,
+            cache_dir=cluster_config.cache_dir,
+        )
+        logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
+
+    if isinstance(solve_result.host_config, TPUHostConfig):
         # AUTO_BATCH (per_device_batch_size=-1) is incompatible with multi-host
         # TPU pods: the autobatch prober spawns subprocesses independently on
         # each worker, but jax.distributed.initialize() requires all workers to
@@ -617,7 +617,6 @@ def _dispatch_plain(
 
 def _dispatch_volcano(
     solve_result: SolveResult,
-    work_dir: str,
     cluster: Cluster,
     spec: JobSpec,
     bootstrap_pys: dict[str, str],
@@ -663,8 +662,8 @@ def _dispatch_volcano(
     # Truncate to 63 chars (K8s limit)
     job_name = job_name[:63].rstrip("-")
 
-    # Remote subdir on PVC
-    remote_subdir = f"{project_name}/{group}/{spec.name}"
+    # Work dir follows the same convention as SSH/SLURM: cluster.work/project/group/name
+    work_dir = _get_work_dir(cluster.work, spec)
 
     logger.debug(
         f"DISPATCH | Volcano dispatch: job={job_name}, namespace={namespace}, "
@@ -679,7 +678,7 @@ def _dispatch_volcano(
         root_dir=cluster.root,
         is_slurm=False,
         uv_groups=host_config.uv_groups + (extra_uv_groups or []),
-        workdir=f"{host_config.pvc_mount_path}/{remote_subdir}",
+        workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
         uv_cache_dir=uv_cache_dir,
     )
@@ -705,7 +704,7 @@ def _dispatch_volcano(
         script=script,
         bootstrap_pys=bootstrap_pys,
         pvc_name=host_config.pvc_name,
-        remote_subdir=remote_subdir,
+        dest_path=work_dir,
         queue=host_config.queue,
         namespace=namespace,
         pvc_mount_path=host_config.pvc_mount_path,
@@ -719,14 +718,11 @@ def _dispatch_volcano(
         return ship_result
 
     # 4. Render Volcano Job YAML
-    bootstrap_cmd = (
-        f"cd {host_config.pvc_mount_path}/{remote_subdir} && bash _bootstrap.sh"
-    )
+    bootstrap_cmd = f"cd {work_dir} && bash _bootstrap.sh"
     rendered_yaml = volcano_mod.render_volcano_job(
         job_name=job_name,
         host_config=host_config,
         bootstrap_command=bootstrap_cmd,
-        work_dir=work_dir,
         n_chips=solve_result.result.total_chips if solve_result.result else None,
     )
 

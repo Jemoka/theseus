@@ -243,7 +243,6 @@ def render_volcano_job(
     job_name: str,
     host_config: VolcanoHostConfig,
     bootstrap_command: str,
-    work_dir: str,
     n_chips: int | None = None,
 ) -> str:
     """Render the volcano_job.yaml template with concrete values.
@@ -385,7 +384,7 @@ def ship_and_write_to_pvc(
     script: str,
     bootstrap_pys: dict[str, str],
     pvc_name: str,
-    remote_subdir: str,
+    dest_path: str,
     queue: str,
     namespace: str = "default",
     pvc_mount_path: str = "/workspace",
@@ -403,7 +402,6 @@ def ship_and_write_to_pvc(
     The helper vcjob is cleaned up on exit.
     """
     helper_name = f"theseus-pvc-loader-{int(time.time())}"
-    dest_path = f"{pvc_mount_path}/{remote_subdir}"
 
     _res = helper_resources or {
         "requests.cpu": "1",
