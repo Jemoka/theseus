@@ -38,6 +38,8 @@ from .squad import SQuAD  # noqa: F401
 from .sst2 import SST2  # noqa: F401
 from .winogrande import Winogrande  # noqa: F401
 from .redcodegen.hardening import RCGHardeningDataset  # noqa: F401
+from .wildchat import WildChat  # noqa: F401
+from .smoltalk import SmolTalk  # noqa: F401
 
 __all__ = [
     "Dataset",

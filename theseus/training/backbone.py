@@ -23,6 +23,23 @@ from theseus.training.base import BaseTrainer, BaseTrainerConfig
 from theseus.evaluation.base import EvaluatorConfig
 from theseus.data.tokenizer import TokenizerConfig
 
+
+def _get_backbones() -> dict[str, Any]:
+    """Get backbone registry, with lazy imports for sidechannel models."""
+    backbones: dict[str, Any] = {
+        "llama": Llama,
+        "qwen": Qwen,
+        "gpt_neox": GPTNeoX,
+    }
+    try:
+        from theseus.model.models.sidechannel import SideChannelQwen
+
+        backbones["sidechannel_qwen"] = SideChannelQwen
+    except ImportError:
+        pass
+    return backbones
+
+
 BACKBONES: dict[str, Any] = {
     "llama": Llama,
     "qwen": Qwen,
@@ -81,7 +98,8 @@ class BackbonedTrainer(BaseTrainer[BaseTrainerConfig, Module]):
         backbone_cfg = configure(BackboneConfig)
         dtype_cfg = configure(ModelDtypeConfig)
 
-        model_cls = BACKBONES[backbone_cfg.implementation]
+        all_backbones = _get_backbones()
+        model_cls = all_backbones[backbone_cfg.implementation]
         self.model, params = model_cls.from_pretrained(
             backbone_cfg.weights,
             param_dtype=dtype_cfg.param_dtype,

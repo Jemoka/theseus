@@ -3,6 +3,8 @@ from .rope import RopeAttention
 from .forking import ForkingAttention
 from .grouped import GroupedSelfAttention
 from .scratching import ScratchSparseCrossAttention
+from .sidechannel import GroupedSidechannelCrossAttention
+from .perceiver import SideChannelEncoder, PerceiverResampler
 
 __all__ = [
     "SelfAttention",
@@ -10,4 +12,7 @@ __all__ = [
     "ForkingAttention",
     "GroupedSelfAttention",
     "ScratchSparseCrossAttention",
+    "GroupedSidechannelCrossAttention",
+    "SideChannelEncoder",
+    "PerceiverResampler",
 ]
