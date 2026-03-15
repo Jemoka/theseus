@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies
+        run: uv sync --no-default-groups --group dev
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy theseus/
+
+  release:
+    needs: quality-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Read current version
+        id: current
+        run: |
+          version=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Compute next version
+        id: next
+        run: |
+          IFS='.' read -r major minor patch <<< "${{ steps.current.outputs.version }}"
+          bump="${{ github.event.inputs.bump || 'patch' }}"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          echo "version=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version in pyproject.toml
+        run: |
+          sed -i "s/^version = .*/version = \"${{ steps.next.outputs.version }}\"/" pyproject.toml
+
+      - name: Commit and tag
+        run: |
+          git add pyproject.toml
+          git commit -m "release: v${{ steps.next.outputs.version }}"
+          git tag "v${{ steps.next.outputs.version }}"
+
+      - name: Push commit and tag
+        run: |
+          git push origin release
+          git push origin "v${{ steps.next.outputs.version }}"
+
+      - name: Build
+        run: uv build
+
+      - name: Publish to PyPI
+        run: uv publish --token "${{ secrets.PYPI_TOKEN }}"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.next.outputs.version }}" dist/* \
+            --title "v${{ steps.next.outputs.version }}" \
+            --generate-notes

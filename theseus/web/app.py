@@ -13,6 +13,7 @@ Or via CLI:
 
 import logging
 import os
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -107,7 +108,7 @@ def create_app(
     app = FastAPI(
         title="Theseus Dashboard",
         description="Job monitoring dashboard for Theseus",
-        version="0.1.0",
+        version=pkg_version("theseus"),
         debug=debug,
         lifespan=lifespan,
     )
