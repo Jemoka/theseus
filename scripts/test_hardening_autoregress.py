@@ -24,7 +24,7 @@ from theseus.config import configuration
 from theseus.data.tokenizer import HuggingFaceTokenizer, get_tokenizer
 from theseus.inference.base import InferenceJob
 from theseus.job import CheckpointedJob, RestoreableJob
-from theseus.registry import JOBS, ensure_registered
+from theseus.registry import JOBS
 
 SYSTEM_PROMPT = (
     "You are a helpful assistant for generating code. Given the prompt, generate "
@@ -91,7 +91,6 @@ def main(suffix, root, name, project, group, num_tokens, temperature, top_p):
     spec = ExecutionSpec.local(root, name=name, project=project, group=group)
 
     # Identify the concrete job class from the checkpoint config (same as theseus_to_hf.py)
-    ensure_registered()
     ckpt_path = CheckpointedJob._get_checkpoint_path(spec, suffix)
     raw_cfg = OmegaConf.load(ckpt_path / "config.yaml")
     job_cls = JOBS.get(str(raw_cfg.job)) if "job" in raw_cfg else None

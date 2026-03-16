@@ -20,7 +20,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from theseus.base.job import ExecutionSpec
 from theseus.job import CheckpointedJob, RestoreableJob
-from theseus.registry import JOBS, ensure_registered
+from theseus.registry import JOBS
 
 # Per-implementation conversion functions.
 # All take (params, n_layers, hf_cfg) — Qwen ignores hf_cfg for now.
@@ -74,7 +74,6 @@ def main(suffix, root, name, output, project, group, export_base):
     spec = ExecutionSpec.local(root, name=name, project=project, group=group)
 
     # Pre-load config.yaml to find the concrete job class, since RestoreableJob is abstract
-    ensure_registered()
     ckpt_path = CheckpointedJob._get_checkpoint_path(spec, suffix)
     raw_cfg = OmegaConf.load(ckpt_path / "config.yaml")
     job_cls = JOBS.get(str(raw_cfg.job)) if "job" in raw_cfg else None

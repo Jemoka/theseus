@@ -30,7 +30,7 @@ from typing import Any, Generator, TYPE_CHECKING
 from omegaconf import OmegaConf
 
 from theseus.config import build, configuration, _current_config
-from theseus.registry import JOBS, ensure_registered
+from theseus.registry import JOBS
 
 
 if TYPE_CHECKING:
@@ -40,7 +40,6 @@ if TYPE_CHECKING:
 
 def _resolve_job(job: Any | str, name: str) -> tuple[Any, str]:
     """Resolve a job class or name string into (job_cls, job_name)."""
-    ensure_registered()
     if isinstance(job, str):
         job_name = job
         if job not in JOBS:
