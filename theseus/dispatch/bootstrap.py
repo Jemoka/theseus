@@ -15,7 +15,7 @@ from pathlib import Path
 from loguru import logger
 from omegaconf import OmegaConf
 from theseus.config import configuration
-from theseus.registry import JOBS, ensure_registered
+from theseus.registry import JOBS
 from theseus.job import RestoreableJob
 from theseus.base.job import ExecutionSpec
 from theseus.base.hardware import HardwareResult, Cluster, ClusterMachine, local
@@ -461,7 +461,6 @@ def main():
     # Start heartbeat updater
     heartbeat_updater.start()
 
-    ensure_registered()
     job_key = cfg.job
     if job_key not in JOBS:
         heartbeat_updater.stop()

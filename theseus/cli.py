@@ -86,9 +86,8 @@ def _resolve_request_hardware(
 
 def _jobs_registry() -> Any:
     """Lazy-load job registry to avoid heavy imports at CLI import time."""
-    from theseus.registry import JOBS, ensure_registered
+    from theseus.registry import JOBS
 
-    ensure_registered()
     return JOBS
 
 
