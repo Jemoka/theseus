@@ -1,8 +1,6 @@
 name: Release
 
 on:
-  push:
-    branches: [release]
   workflow_dispatch:
     inputs:
       bump:
@@ -20,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: master
 
       - uses: astral-sh/setup-uv@v6
 
@@ -47,6 +47,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Squash-merge master into release
+        run: |
+          git fetch origin master
+          git merge --squash --allow-unrelated-histories origin/master
+
       - name: Read current version
         id: current
         run: |
@@ -57,7 +62,7 @@ jobs:
         id: next
         run: |
           IFS='.' read -r major minor patch <<< "${{ steps.current.outputs.version }}"
-          bump="${{ github.event.inputs.bump || 'patch' }}"
+          bump="${{ github.event.inputs.bump }}"
           case "$bump" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
@@ -71,7 +76,7 @@ jobs:
 
       - name: Commit and tag
         run: |
-          git add pyproject.toml
+          git add -A
           git commit -m "release: v${{ steps.next.outputs.version }}"
           git tag "v${{ steps.next.outputs.version }}"
 
