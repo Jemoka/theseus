@@ -47,16 +47,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Sync tree from master
-        run: |
-          git fetch origin master
-          git checkout origin/master -- .
-
       - name: Read current version
         id: current
         run: |
           version=$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)"/\1/')
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Sync tree from master
+        run: |
+          git fetch origin master
+          git checkout origin/master -- .
 
       - name: Compute next version
         id: next
