@@ -1,11 +1,11 @@
 [project]
 name = "libthx"
-version = "0.1.3"
+version = "0.1.4"
 description = "Architecture experimentation and training infrastructure."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "click==8.2.1", # mkdocs breaks otherwise...
+    "click<=8.2.1", # mkdocs breaks otherwise...
     "flax>=0.12.2",
     "jsonlines>=4.0.0",
     "loguru>=0.7.3",
@@ -14,7 +14,7 @@ dependencies = [
     "orbax>=0.1.9",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
-    "rich>=14.2.0",
+    "rich>=13.5.2",
     "seaborn>=0.13.2",
     "tiktoken>=0.12.0",
     "torchax>=0.0.11",
