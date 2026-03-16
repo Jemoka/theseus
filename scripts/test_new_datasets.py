@@ -186,7 +186,9 @@ def test_mtob() -> bool:
 def test_registry() -> bool:
     """Test that all new datasets are in the registry."""
     print("\n=== Testing Registry ===")
-    from theseus.registry import DATASETS
+    from theseus.registry import DATASETS, ensure_registered
+
+    ensure_registered()
 
     expected = [
         "ccaligned",
@@ -209,7 +211,9 @@ def test_registry() -> bool:
 def test_eval_registry() -> bool:
     """Test that all new evaluations are in the registry."""
     print("\n=== Testing Eval Registry ===")
-    from theseus.registry import EVALUATIONS
+    from theseus.registry import EVALUATIONS, ensure_registered
+
+    ensure_registered()
 
     expected = [
         "ccaligned",
