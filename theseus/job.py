@@ -286,8 +286,9 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         with configuration(cfg):
             # if there is a job field, then we need to use that to instantiate
             if "job" in cfg:
-                from theseus.registry import JOBS
+                from theseus.registry import JOBS, ensure_registered
 
+                ensure_registered()
                 job_cls = JOBS.get(cfg.job)
                 if job_cls is None:
                     logger.warning(
