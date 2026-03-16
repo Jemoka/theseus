@@ -1848,7 +1848,7 @@ web = [
 requires-dist = [
     { name = "aiofiles", marker = "extra == 'web'", specifier = ">=23.0.0" },
     { name = "bcrypt", marker = "extra == 'web'", specifier = ">=5.0.0" },
-    { name = "click", specifier = "==8.2.1" },
+    { name = "click", specifier = "<=8.2.1" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.9.1" },
     { name = "coveralls", marker = "extra == 'dev'", specifier = ">=4.0.1" },
     { name = "datasets", specifier = ">=4.5.0" },
@@ -1880,7 +1880,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-multipart", marker = "extra == 'web'", specifier = ">=0.0.22" },
     { name = "pyyaml", marker = "extra == 'web'", specifier = ">=6.0.0" },
-    { name = "rich", specifier = ">=14.2.0" },
+    { name = "rich", specifier = ">=13.5.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12.1" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "sse-starlette", marker = "extra == 'web'", specifier = ">=1.6.0" },
