@@ -108,7 +108,7 @@ def create_app(
     app = FastAPI(
         title="Theseus Dashboard",
         description="Job monitoring dashboard for Theseus",
-        version=pkg_version("theseus"),
+        version=pkg_version("libthx"),
         debug=debug,
         lifespan=lifespan,
     )
