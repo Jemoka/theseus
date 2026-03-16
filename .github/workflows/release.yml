@@ -47,10 +47,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Squash-merge master into release
+      - name: Squash master onto release
         run: |
           git fetch origin master
-          git merge --squash --allow-unrelated-histories origin/master
+          git merge --squash origin/master
 
       - name: Read current version
         id: current
