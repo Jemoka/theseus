@@ -610,6 +610,8 @@ def ship_and_write_to_pvc(
         return write_result
 
     for filename, content in bootstrap_pys.items():
+        content_bytes = content.encode("utf-8")
+        expected_size = len(content_bytes)
         file_result = _run_kubectl(
             [
                 "exec",
@@ -625,14 +627,68 @@ def ship_and_write_to_pvc(
             kubeconfig=kubeconfig,
             context=context,
             timeout=timeout,
-            stdin_data=content.encode("utf-8"),
+            stdin_data=content_bytes,
         )
         if not file_result.ok:
             _cleanup()
             return file_result
+        # Verify the file was written completely
+        verify_result = _run_kubectl(
+            [
+                "exec",
+                pod_name,
+                "-n",
+                namespace,
+                "--",
+                "wc",
+                "-c",
+                f"{dest_path}/{filename}",
+            ],
+            kubeconfig=kubeconfig,
+            context=context,
+            timeout=30.0,
+        )
+        if verify_result.ok:
+            actual_size = int(verify_result.stdout.strip().split()[0])
+            if actual_size != expected_size:
+                logger.error(
+                    f"VOLCANO | file '{filename}' size mismatch: "
+                    f"expected {expected_size}, got {actual_size}"
+                )
+                _cleanup()
+                return RunResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=(
+                        f"bootstrap file '{filename}' was truncated on PVC: "
+                        f"expected {expected_size} bytes, got {actual_size}"
+                    ),
+                )
+        else:
+            logger.warning(
+                f"VOLCANO | could not verify file '{filename}' size: "
+                f"{verify_result.stderr}"
+            )
 
     logger.info(f"VOLCANO | bootstrap files written to PVC at {dest_path}")
 
-    # 5. Cleanup helper
+    # 5. Flush filesystem caches on the PVC before tearing down the helper.
+    # This mitigates NFS/distributed-FS cache coherency issues where worker
+    # pods on different nodes might see stale/empty files.
+    _run_kubectl(
+        [
+            "exec",
+            pod_name,
+            "-n",
+            namespace,
+            "--",
+            "sync",
+        ],
+        kubeconfig=kubeconfig,
+        context=context,
+        timeout=30.0,
+    )
+
+    # 6. Cleanup helper
     _cleanup()
     return RunResult(returncode=0, stdout="", stderr="")

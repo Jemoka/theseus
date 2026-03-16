@@ -885,12 +885,62 @@ fi
 main_exit_code=0
 for stage_file in $STAGE_FILES; do
     echo "[bootstrap] running stage: $stage_file"
+
+    # Force NFS/distributed-FS client cache invalidation by re-statting the
+    # directory and reading the file contents through the page cache.  VAST and
+    # other NFS-backed PVCs may serve stale (empty/truncated) data to worker
+    # pods on different nodes from the helper pod that wrote the files.
+    _stage_retries=0
+    while true; do
+        # ls forces an NFS GETATTR, cat forces a data read-through
+        ls -la "$(dirname "$stage_file")" > /dev/null 2>&1
+        cat "$stage_file" > /dev/null 2>&1
+
+        if [[ ! -f "$stage_file" ]]; then
+            if [[ $_stage_retries -lt 5 ]]; then
+                echo "[bootstrap] stage file not found yet, retrying in 2s... (attempt $((_stage_retries+1))/5)"
+                sleep 2
+                _stage_retries=$((_stage_retries + 1))
+                continue
+            fi
+            echo "[bootstrap] ERROR: stage file not found: $stage_file (pwd=$(pwd), ls=$(ls -1))"
+            exit 1
+        fi
+
+        stage_size=$(wc -c < "$stage_file")
+        if [[ "$stage_size" -lt 100 ]] && [[ $_stage_retries -lt 5 ]]; then
+            echo "[bootstrap] stage file only ${stage_size} bytes, retrying in 2s... (attempt $((_stage_retries+1))/5)"
+            sleep 2
+            _stage_retries=$((_stage_retries + 1))
+            continue
+        fi
+        break
+    done
+
+    echo "[bootstrap] stage file size: ${stage_size} bytes"
+    if [[ "$stage_size" -lt 100 ]]; then
+        echo "[bootstrap] ERROR: stage file suspiciously small (${stage_size} bytes), likely truncated after retries"
+        echo "[bootstrap] file contents:"
+        cat "$stage_file"
+        exit 1
+    fi
+    if ! grep -q '__main__' "$stage_file"; then
+        echo "[bootstrap] ERROR: stage file missing __main__ block, likely truncated"
+        echo "[bootstrap] last 5 lines:"
+        tail -5 "$stage_file"
+        exit 1
+    fi
+
     stage_command="uv run python $stage_file"
 
+    echo "[bootstrap] running stage command $stage_command"
+
     if should_search_batch_size "$stage_file"; then
+        echo "[bootstrap] running autobatch..."
         run_command_with_autobatch_search "$stage_command" &
     else
-        bash -lc "$stage_command" &
+        echo "[bootstrap] running directly..."
+        bash -c "$stage_command" &
     fi
 
     MAIN_CHILD_PID=$!
@@ -908,3 +958,4 @@ for stage_file in $STAGE_FILES; do
 done
 
 exit "$main_exit_code"
+
