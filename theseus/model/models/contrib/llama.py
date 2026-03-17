@@ -158,9 +158,7 @@ class Llama(Module):
         hf_model.eval()
         cfg = hf_model.config
 
-        rope_theta = 10000.0
-        if cfg.rope_parameters is not None and "rope_theta" in cfg.rope_parameters:
-            rope_theta = cfg.rope_parameters["rope_theta"]
+        rope_theta = getattr(cfg, "rope_theta", 10000.0)
 
         with patch() as th_cfg:
             new_arch = OmegaConf.create(
@@ -191,12 +189,12 @@ class Llama(Module):
             else:
                 th_cfg.architecture = new_arch
 
-        model = configure(cls)
-        dummy = jnp.zeros((1, 1), dtype=jnp.int32)
-        abstract = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
-        params = jax.tree_util.tree_map(
-            lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
-        )
+            model = configure(cls)
+            dummy = jnp.zeros((1, 1), dtype=jnp.int32)
+            abstract = jax.eval_shape(model.init, jax.random.PRNGKey(0), dummy)
+            params = jax.tree_util.tree_map(
+                lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
+            )
         params = _from_hf_state_dict(params, hf_model.state_dict(), model.n_layers, cfg)
         return model, params
 

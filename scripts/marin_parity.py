@@ -7,6 +7,7 @@ Usage: uv run python scripts/marin_parity.py --model marin-community/marin-8b-ba
 """
 
 import argparse
+import gc
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -32,8 +33,9 @@ def main() -> None:
     parser.add_argument("--max-length", type=int, default=64)
     args = parser.parse_args()
 
+    # ── Phase 1: HF forward pass ──
     hf = LlamaForCausalLM.from_pretrained(
-        args.model, torch_dtype=torch.float32, device_map=None
+        args.model, torch_dtype=torch.bfloat16, device_map=None
     )
     tok = AutoTokenizer.from_pretrained(args.model)
     if tok.pad_token_id is None:
@@ -49,18 +51,32 @@ def main() -> None:
     )
 
     with torch.no_grad():
-        outputs_hf = hf(**inputs)
-        logits_hf = outputs_hf.logits.detach().cpu().numpy()
+        logits_hf = hf(**inputs).logits.detach().float().cpu().numpy()
+
+    labels = inputs["input_ids"].clone()
+    labels[inputs["attention_mask"] == 0] = -100
+    with torch.no_grad():
+        loss_hf = (
+            hf(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                labels=labels,
+            )
+            .loss.float()
+            .item()
+        )
 
     cfg = hf.config
-    rope_theta = (
-        cfg.rope_parameters.get("rope_theta", 500000.0)
-        if cfg.rope_parameters
-        else 500000.0
-    )
+    rope_theta = getattr(cfg, "rope_theta", 500000.0)
 
-    # Keep the config context alive for all Theseus model operations
-    # (setup() calls configure() which needs an active config context)
+    # Keep state_dict as torch bf16 tensors (shares storage with model).
+    # After del hf, only sd keeps the storage alive (~16 GB for 8B).
+    sd = hf.state_dict()
+    del hf
+    gc.collect()
+    print("HF model freed, building JAX model...")
+
+    # ── Phase 2: JAX model ──
     with patch() as th_cfg:
         th_cfg.architecture = OmegaConf.create(
             {
@@ -92,9 +108,13 @@ def main() -> None:
         params = jax.tree_util.tree_map(
             lambda x: np.zeros(x.shape, x.dtype), abstract["params"]
         )
-        params = _from_hf_state_dict(
-            params, hf.state_dict(), cfg.num_hidden_layers, cfg
-        )
+
+        # Pass torch state_dict directly; _from_hf_state_dict calls
+        # .cpu().float().numpy() per-tensor, so peak overhead is one tensor.
+        params = _from_hf_state_dict(params, sd, cfg.num_hidden_layers, cfg)
+        del sd
+        gc.collect()
+        print("JAX params loaded, running forward pass...")
 
         idx = jnp.array(inputs["input_ids"].numpy())
         attn_bool = jnp.array(inputs["attention_mask"].numpy(), dtype=bool)
@@ -117,40 +137,32 @@ def main() -> None:
         print(f"mean diff: {mean_diff}")
         print(f"top5 overlap: {overlap}")
 
-        # round-trip export check
-        sd = _to_hf_state_dict(params, cfg.num_hidden_layers, cfg)
-        print("export state_dict keys:", len(sd))
+        # ── Phase 3: roundtrip export ──
+        sd_rt = _to_hf_state_dict(params, cfg.num_hidden_layers, cfg)
+        print("export state_dict keys:", len(sd_rt))
 
-        # roundtrip back into HF and compare logits again
+        del params
+        gc.collect()
+
         hf_rt = LlamaForCausalLM(cfg)
-        hf_rt.load_state_dict(sd, strict=True)
+        hf_rt.load_state_dict(sd_rt, strict=True)
         hf_rt.eval()
+        del sd_rt
+        gc.collect()
         with torch.no_grad():
-            logits_hf_rt = hf_rt(**inputs).logits.detach().cpu().numpy()
+            logits_hf_rt = hf_rt(**inputs).logits.detach().float().cpu().numpy()
+        del hf_rt
+        gc.collect()
+
         rt_max = np.max(np.abs(logits_hf - logits_hf_rt))
         rt_mean = np.mean(np.abs(logits_hf - logits_hf_rt))
         print(f"roundtrip hf->jax->hf max diff: {rt_max}")
         print(f"roundtrip hf->jax->hf mean diff: {rt_mean}")
 
-        # Cross-entropy loss comparison (causal shift, ignore padding)
-        labels = inputs["input_ids"].clone()
-        labels[inputs["attention_mask"] == 0] = -100
-        with torch.no_grad():
-            loss_hf = hf(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                labels=labels,
-            ).loss.item()
-
+        # ── Phase 4: Cross-entropy loss comparison ──
         idx_np = inputs["input_ids"].numpy()
         attn_np = inputs["attention_mask"].numpy().astype(bool)
-        logits_jax_full, _ = model.apply(
-            {"params": params},
-            jnp.array(idx_np),
-            padding_mask=jnp.array(attn_np),
-            deterministic=True,
-        )
-        logits_jax_np = np.array(logits_jax_full)
+        logits_jax_np = np.array(logits_jax)
         logits_shift = logits_jax_np[:, :-1, :]
         targets = idx_np[:, 1:]
         mask = attn_np[:, 1:]
