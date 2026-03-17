@@ -361,7 +361,7 @@ def _init_volcano_distributed():
     task_index = int(os.environ.get("VC_TASK_INDEX", "0"))
 
     hosts = [h.strip() for h in worker_hosts.split(",") if h.strip()]
-    if not hosts:
+    if len(hosts) <= 1:
         # Single-node: no distributed init needed
         return False
 
@@ -375,6 +375,9 @@ def _init_volcano_distributed():
 
 
 def main():
+    # Flush early so container log drivers capture any subsequent crash output.
+    print("[bootstrap] main() starting", flush=True)
+
     # Initialize JAX distributed runtime for multi-host dispatch.
     # The env vars are only set by the respective dispatch paths so
     # this is a no-op for plain SSH / SLURM runs.

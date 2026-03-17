@@ -24,19 +24,24 @@ class MemmapDataset(Dataset):
         self.cache_train: Optional[np.memmap] = None
         self.cache_val: Optional[np.memmap] = None
         self.block_size = block_size
+        self.process_index = jax.process_index()
+        self.process_count = max(1, jax.process_count())
 
-        data_dir: Path = spec.hardware.hosts[jax.process_index()].cluster.data_dir
+        data_dir: Path = spec.hardware.hosts[self.process_index].cluster.data_dir
         path: Path = data_dir / name if suffix == "" else data_dir / f"{name}_{suffix}"
         self.path = path
 
         self.has_val = (path / "val.bin").exists()
+        self._shuffle_rng = np.random.default_rng(self.process_index)
 
         # Buffer state for cache-optimal loading (per split)
         self._tokens_per_block = BYTES_PER_BLOCK // 4  # uint32 = 4 bytes
         self._train_buffer: Optional[np.ndarray] = None
         self._train_sample_indices: Optional[np.ndarray] = None
         self._train_sample_ptr = 0
-        self._train_next_block = 0
+        # Stagger the initial window per host so multi-host runs do not switch
+        # to the same contiguous 256MB region in lockstep.
+        self._train_next_block = self.process_index * BUFFER_BLOCKS
         self._val_buffer: Optional[np.ndarray] = None
         self._val_sample_indices: Optional[np.ndarray] = None
         self._val_sample_ptr = 0
@@ -110,7 +115,7 @@ class MemmapDataset(Dataset):
         # Generate non-overlapping positions: 0, block_size, 2*block_size, ...
         sample_indices = np.arange(0, num_samples * self.block_size, self.block_size)
         # Shuffle them to randomize order
-        np.random.shuffle(sample_indices)
+        self._shuffle_rng.shuffle(sample_indices)
 
         # Update state for this split
         if split == "train":
@@ -176,7 +181,12 @@ class MemmapDataset(Dataset):
             if valid_starts.size == 0:
                 valid_starts = np.array([0], dtype=np.int64)
 
-            start = deterministic_key * batch_size
+            # Validation batches become global arrays later, so each host must
+            # contribute a distinct local slice instead of duplicating host 0.
+            start = (
+                deterministic_key * batch_size * self.process_count
+                + self.process_index * batch_size
+            )
             take = (start + np.arange(batch_size, dtype=np.int64)) % valid_starts.size
             ix = valid_starts[take]
 

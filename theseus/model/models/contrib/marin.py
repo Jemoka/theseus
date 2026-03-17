@@ -22,16 +22,22 @@ except Exception:
 from theseus.base.axis import Axis
 
 
-class Llama(Module):
+class Marin(Module):
+    """Marin model (marin-community/marin-8b-base).
+
+    Architecturally identical to Llama 3 -- same decoder blocks, GQA, SiLU MLP,
+    RMSNorm, and RoPE.  Defaults reflect the Marin-8B configuration.
+    """
+
     n_layers: int = field("architecture/n_layers", default=32)
     n_embd: int = field("architecture/n_embd", default=4096)
     n_head: int = field("architecture/n_head", default=32)
-    n_kv_head: int = field("architecture/n_kv_head", default=-1)
-    intermediate_size: int = field("architecture/intermediate_size", default=11008)
-    rope_theta: float = field("architecture/rope_theta", default=10000.0)
-    rms_norm_eps: float = field("architecture/rms_norm_eps", default=1e-6)
-    block_size: int = field("architecture/block_size", default=2048)
-    vocab_size: int = field("architecture/vocab_size", default=32000)
+    n_kv_head: int = field("architecture/n_kv_head", default=8)
+    intermediate_size: int = field("architecture/intermediate_size", default=14336)
+    rope_theta: float = field("architecture/rope_theta", default=500000.0)
+    rms_norm_eps: float = field("architecture/rms_norm_eps", default=1e-5)
+    block_size: int = field("architecture/block_size", default=4096)
+    vocab_size: int = field("architecture/vocab_size", default=128256)
     dropout: float = field("architecture/dropout", default=0.0)
     attn_dropout: float = field("architecture/attn_dropout", default=0.0)
     bias: bool = field("architecture/bias", default=False)
@@ -158,7 +164,7 @@ class Llama(Module):
         hf_model.eval()
         cfg = hf_model.config
 
-        rope_theta = getattr(cfg, "rope_theta", 10000.0)
+        rope_theta = getattr(cfg, "rope_theta", 500000.0)
 
         with patch() as th_cfg:
             new_arch = OmegaConf.create(
@@ -232,12 +238,10 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         prefix = f"model.layers.{i}."
         block_key = f"blocks_{i}"
         # Norms
-        logger.debug(f"  loading block {i} norm weights...")
         assign(
             [block_key, "rms_1", "weight"],
             state_dict[prefix + "input_layernorm.weight"].cpu().float().numpy(),
         )
-        logger.debug(f"  loading block {i} post-attention norm weights...")
         assign(
             [block_key, "rms_2", "weight"],
             state_dict[prefix + "post_attention_layernorm.weight"]
@@ -252,7 +256,6 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         v_w = state_dict[prefix + "self_attn.v_proj.weight"].cpu().float().numpy().T
         o_w = state_dict[prefix + "self_attn.o_proj.weight"].cpu().float().numpy().T
 
-        logger.debug(f"  loading block {i} attention weights...")
         assign([block_key, "attn", "q_proj", "kernel"], q_w)
         assign([block_key, "attn", "k_proj", "kernel"], k_w)
         assign([block_key, "attn", "v_proj", "kernel"], v_w)
@@ -276,11 +279,8 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
         gate_w = state_dict[prefix + "mlp.gate_proj.weight"].cpu().float().numpy().T
         up_w = state_dict[prefix + "mlp.up_proj.weight"].cpu().float().numpy().T
         down_w = state_dict[prefix + "mlp.down_proj.weight"].cpu().float().numpy().T
-        logger.debug(f"  loading block {i} MLP gate weights...")
         assign([block_key, "mlp", "gate", "kernel"], gate_w)
-        logger.debug(f"  loading block {i} MLP up weights...")
         assign([block_key, "mlp", "up", "kernel"], up_w)
-        logger.debug(f"  loading block {i} MLP down weights...")
         assign([block_key, "mlp", "down", "kernel"], down_w)
 
         if mlp_has_bias:
@@ -298,7 +298,6 @@ def _from_hf_state_dict(params: Any, state_dict: Any, n_layers: int, cfg: Any) -
             )
 
     # Final norm
-    logger.debug("  loading final norm weights...")
     assign(["ln_f", "weight"], state_dict["model.norm.weight"].cpu().float().numpy())
 
     logger.debug("model loading complete.")
@@ -328,28 +327,22 @@ def _to_hf_state_dict(
     mlp_has_bias = getattr(cfg, "mlp_bias", False)
 
     # Embeddings
-    logger.debug("exporting embedding weights...")
-    logger.debug("  loading embedding weights...")
     embed = torch.tensor(grab(["wte"]), dtype=torch.float32)
     head = torch.tensor(grab(["lm_head"]), dtype=torch.float32)
     sd["model.embed_tokens.weight"] = embed
     sd["lm_head.weight"] = head
 
     for i in range(n_layers):
-        logger.debug(f"exporting block {i} weights...")
         prefix = f"model.layers.{i}."
         block_key = f"blocks_{i}"
 
-        logger.debug(f"  loading block {i} norm weights...")
         sd[prefix + "input_layernorm.weight"] = torch.tensor(
             grab([block_key, "rms_1", "weight"]), dtype=torch.float32
         )
-        logger.debug(f"  loading block {i} post-attention norm weights...")
         sd[prefix + "post_attention_layernorm.weight"] = torch.tensor(
             grab([block_key, "rms_2", "weight"]), dtype=torch.float32
         )
 
-        logger.debug(f"  loading block {i} attention weights...")
         q_w = grab([block_key, "attn", "q_proj", "kernel"]).T
         k_w = grab([block_key, "attn", "k_proj", "kernel"]).T
         v_w = grab([block_key, "attn", "v_proj", "kernel"]).T
@@ -359,7 +352,7 @@ def _to_hf_state_dict(
         sd[prefix + "self_attn.v_proj.weight"] = torch.tensor(v_w, dtype=torch.float32)
         sd[prefix + "self_attn.o_proj.weight"] = torch.tensor(o_w, dtype=torch.float32)
 
-        if attn_has_bias and "bias" in grab([block_key, "attn", "q_proj"]):
+        if attn_has_bias:
             sd[prefix + "self_attn.q_proj.bias"] = torch.tensor(
                 grab([block_key, "attn", "q_proj", "bias"]), dtype=torch.float32
             )
@@ -370,17 +363,14 @@ def _to_hf_state_dict(
                 grab([block_key, "attn", "v_proj", "bias"]), dtype=torch.float32
             )
 
-        logger.debug(f"  loading block {i} MLP weights...")
         gate_w = grab([block_key, "mlp", "gate", "kernel"]).T
-        logger.debug(f"  loading block {i} MLP up weights...")
         up_w = grab([block_key, "mlp", "up", "kernel"]).T
-        logger.debug(f"  loading block {i} MLP down weights...")
         down_w = grab([block_key, "mlp", "down", "kernel"]).T
         sd[prefix + "mlp.gate_proj.weight"] = torch.tensor(gate_w, dtype=torch.float32)
         sd[prefix + "mlp.up_proj.weight"] = torch.tensor(up_w, dtype=torch.float32)
         sd[prefix + "mlp.down_proj.weight"] = torch.tensor(down_w, dtype=torch.float32)
 
-        if mlp_has_bias and "bias" in grab([block_key, "mlp", "gate"]):
+        if mlp_has_bias:
             sd[prefix + "mlp.gate_proj.bias"] = torch.tensor(
                 grab([block_key, "mlp", "gate", "bias"]), dtype=torch.float32
             )
@@ -391,12 +381,10 @@ def _to_hf_state_dict(
                 grab([block_key, "mlp", "down", "bias"]), dtype=torch.float32
             )
 
-    logger.debug("  loading final norm weights...")
     sd["model.norm.weight"] = torch.tensor(
         grab(["ln_f", "weight"]), dtype=torch.float32
     )
-    logger.debug("export complete.")
     return sd
 
 
-__all__ = ["Llama", "_from_hf_state_dict", "_to_hf_state_dict"]
+__all__ = ["Marin", "_from_hf_state_dict", "_to_hf_state_dict"]
