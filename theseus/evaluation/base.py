@@ -36,6 +36,29 @@ if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
 
 
+def _pad_eval_inputs(
+    batch_unit: int, *sequences: list[Any]
+) -> tuple[int, tuple[list[Any], ...]]:
+    """Pad example lists to a multiple of the global batch size by repeating the last item."""
+    if not sequences:
+        raise ValueError("Expected at least one sequence to pad.")
+
+    original_size = len(sequences[0])
+    if original_size == 0:
+        raise ValueError("Evaluation dataset is empty.")
+
+    if any(len(seq) != original_size for seq in sequences[1:]):
+        raise ValueError("All evaluation sequences must have the same length.")
+
+    padded_size = ((original_size + batch_unit - 1) // batch_unit) * batch_unit
+    pad_count = padded_size - original_size
+    if pad_count == 0:
+        return original_size, tuple(sequences)
+
+    padded = tuple(seq + [seq[-1]] * pad_count for seq in sequences)
+    return original_size, padded
+
+
 class Evaluation(ABC):
     """Abstract base class for all evaluations."""
 
@@ -167,30 +190,26 @@ class RolloutEvaluation(Evaluation):
             Evaluation score
         """
         eval_data = self
+        batch_unit = inference.replicas * inference.per_device_batch_size
+        original_size = len(eval_data)
 
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            x, y = zip(*[eval_data.get(i) for i in range(len(eval_data))])
+            x_raw, y_raw = zip(*[eval_data.get(i) for i in range(original_size)])
+            x = list(x_raw)
+            original_y = list(y_raw)
+            _, (x, _) = _pad_eval_inputs(batch_unit, x, original_y)
             encoded = encoding.encode_batch(x, allowed_special="all")
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = inference.pad(encoded)
         else:
-            x, y = None, None
+            original_y = None
             prompt_lengths = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
-
-        # Truncate to valid batch size
-        valid_size = (
-            xs.shape[0]
-            // (inference.replicas * inference.per_device_batch_size)
-            * (inference.replicas * inference.per_device_batch_size)
-        )
-        xs = xs[:valid_size]
-        masks = masks[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -290,20 +309,20 @@ class RolloutEvaluation(Evaluation):
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
-            max_prompt_len = max(prompt_lengths[:valid_size])
+            max_prompt_len = max(prompt_lengths[:original_size])
             stripped = [
                 row[max_prompt_len - prompt_lengths[i] :]
-                for i, row in enumerate(results_list[:valid_size])
+                for i, row in enumerate(results_list[:original_size])
             ]
         else:
-            stripped = results_list[:valid_size]
+            stripped = results_list[:original_size]
         decoded_results = encoding.decode_batch(stripped)
 
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
-            assert y is not None
+            assert original_y is not None
             score = eval_data.score(
-                list(y)[:valid_size], [eval_data.clean(i) for i in decoded_results]
+                original_y, [eval_data.clean(i) for i in decoded_results]
             )
         else:
             score = None
@@ -374,27 +393,21 @@ class EncodingEvaluation(Evaluation):
             Evaluation score
         """
         eval_data = self
+        batch_unit = inference.replicas * inference.per_device_batch_size
+        original_size = len(eval_data)
 
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            x = [eval_data.get(i) for i in range(len(eval_data))]
+            original_x = [eval_data.get(i) for i in range(original_size)]
+            _, (x,) = _pad_eval_inputs(batch_unit, original_x)
             xs, masks = inference.pad(encoding.encode_batch(x, allowed_special="all"))
         else:
-            x = None
+            original_x = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
-
-        # Truncate to valid batch size
-        valid_size = (
-            xs.shape[0]
-            // (inference.replicas * inference.per_device_batch_size)
-            * (inference.replicas * inference.per_device_batch_size)
-        )
-        xs = xs[:valid_size]
-        masks = masks[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -480,12 +493,14 @@ class EncodingEvaluation(Evaluation):
 
         # Flatten and decode
         results = jnp.reshape(results, (-1, results.shape[-1]))
-        decoded_outputs = encoding.decode_batch(results.tolist())
+        decoded_outputs = encoding.decode_batch(results.tolist()[:original_size])
 
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
-            assert x is not None
-            score = eval_data.score(x, [eval_data.clean(i) for i in decoded_outputs])
+            assert original_x is not None
+            score = eval_data.score(
+                original_x, [eval_data.clean(i) for i in decoded_outputs]
+            )
         else:
             score = None
         score = multihost_utils.broadcast_one_to_all(jnp.array(score))
@@ -522,29 +537,22 @@ class PerplexityEvaluation(Evaluation):
             1/perplexity (higher is better)
         """
         eval_data = self
+        batch_unit = inference.replicas * inference.per_device_batch_size
+        original_size = len(eval_data)
 
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            x = [eval_data.get(i) for i in range(len(eval_data))]
+            x = [eval_data.get(i) for i in range(original_size)]
+            _, (x,) = _pad_eval_inputs(batch_unit, x)
             encoded = encoding.encode_batch(x, allowed_special="all")
             encoded = [seq[: inference.block_size] for seq in encoded]
             xs, masks = inference.pad(encoded)
         else:
-            x = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
-
-        # Truncate to valid batch size
-        valid_size = (
-            xs.shape[0]
-            // (inference.replicas * inference.per_device_batch_size)
-            * (inference.replicas * inference.per_device_batch_size)
-        )
-        xs = xs[:valid_size]
-        masks = masks[:valid_size]
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -599,14 +607,18 @@ class PerplexityEvaluation(Evaluation):
                 ).squeeze(-1)
                 token_nll = jnp.where(token_mask, token_nll, 0.0)
 
-                # Return (sum_nll, token_count) as a 2-element array
-                return None, jnp.array(
-                    [jnp.sum(token_nll), jnp.sum(token_mask).astype(jnp.float32)]
+                # Keep per-sample stats so padded examples can be dropped after gather.
+                return None, jnp.stack(
+                    [
+                        jnp.sum(token_nll, axis=-1),
+                        jnp.sum(token_mask, axis=-1).astype(jnp.float32),
+                    ],
+                    axis=-1,
                 )
 
             _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            # stats shape: (chunk_steps, 2)
-            return stats
+            # stats shape: (chunk_steps, batch_size, 2)
+            return jnp.reshape(stats, (-1, 2))
 
         # JIT compile chunk function once
         data_sharding = NamedSharding(inference.mesh, data_pspec)
@@ -634,7 +646,7 @@ class PerplexityEvaluation(Evaluation):
             chunk_stats = wrapped_evaluate_chunk(inference.state, xs_chunk, masks_chunk)
             all_stats.append(chunk_stats)
 
-        # Concatenate all chunk stats: shape (total_local_batches, 2)
+        # Concatenate all chunk stats: shape (total_local_examples, 2)
         stats = jnp.concatenate(all_stats, axis=0)
 
         # Gather across hosts
@@ -642,8 +654,9 @@ class PerplexityEvaluation(Evaluation):
         stats = multihost_utils.process_allgather(stats)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Flatten process dimension (process_allgather prepends a process axis)
+        # Flatten process dimension and drop repeated pad examples.
         stats = jnp.reshape(stats, (-1, 2))
+        stats = stats[:original_size]
 
         # Compute global perplexity and return 1/ppl
         total_nll = jnp.sum(stats[:, 0])
@@ -684,6 +697,7 @@ class PerplexityComparisonEvaluation(Evaluation):
             Accuracy score
         """
         eval_data = self
+        batch_unit = inference.replicas * inference.per_device_batch_size
 
         # Gather all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
@@ -705,6 +719,11 @@ class PerplexityComparisonEvaluation(Evaluation):
                     prefix_lengths.append(prefix_len)
                     metadata.append((sample_idx, cont_idx, len(continuations)))
 
+            original_flat_size = len(flattened_inputs)
+            _, (flattened_inputs, prefix_lengths, metadata) = _pad_eval_inputs(
+                batch_unit, flattened_inputs, prefix_lengths, metadata
+            )
+
             # Encode all inputs
             encoded_inputs = encoding.encode_batch(
                 flattened_inputs, allowed_special="all"
@@ -713,9 +732,16 @@ class PerplexityComparisonEvaluation(Evaluation):
             prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
             metadata_array = jnp.array(metadata, dtype=jnp.int32)
             correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
+            original_flat_size_array = jnp.array(original_flat_size, dtype=jnp.int32)
         else:
             xs, masks = None, None
-            prefix_lengths_array, metadata_array, correct_indices_array = (
+            (
+                prefix_lengths_array,
+                metadata_array,
+                correct_indices_array,
+                original_flat_size_array,
+            ) = (
+                None,
                 None,
                 None,
                 None,
@@ -731,18 +757,10 @@ class PerplexityComparisonEvaluation(Evaluation):
         correct_indices_array = multihost_utils.broadcast_one_to_all(
             correct_indices_array
         )
-        multihost_utils.sync_global_devices("eval_gather_all:post")
-
-        # Truncate to valid batch size
-        valid_size = (
-            xs.shape[0]
-            // (inference.replicas * inference.per_device_batch_size)
-            * (inference.replicas * inference.per_device_batch_size)
+        original_flat_size_array = multihost_utils.broadcast_one_to_all(
+            original_flat_size_array
         )
-        xs = xs[:valid_size]
-        masks = masks[:valid_size]
-        prefix_lengths_array = prefix_lengths_array[:valid_size]
-        metadata_array = metadata_array[:valid_size]
+        multihost_utils.sync_global_devices("eval_gather_all:post")
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -888,6 +906,9 @@ class PerplexityComparisonEvaluation(Evaluation):
         # Flatten
         losses = jnp.reshape(losses, (-1,))
         metadata_gathered = jnp.reshape(metadata_gathered, (-1, 3))
+        original_flat_size = int(jax.device_get(original_flat_size_array))
+        losses = losses[:original_flat_size]
+        metadata_gathered = metadata_gathered[:original_flat_size]
 
         # Convert to numpy
         losses = jax.device_get(losses)
