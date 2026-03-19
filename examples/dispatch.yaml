@@ -21,6 +21,7 @@ clusters:
     root: /data/theseus
     work: /tmp/theseus
     log: /var/log/theseus  # optional, defaults to {work}/logs
+    wandb: your-wandb-api-key  # optional, exported as WANDB_API_KEY on remote
 
   gcp:
     root: /home/user/theseus-data      # paths on the TPU VM filesystem

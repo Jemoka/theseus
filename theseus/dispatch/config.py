@@ -39,6 +39,7 @@ class ClusterConfig:
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
     uv_dir: str | None = None  # UV_CACHE_DIR override for uv
+    wandb: str | None = None  # W&B API key → exported as WANDB_API_KEY
 
 
 @dataclass
