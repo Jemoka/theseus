@@ -201,6 +201,7 @@ class RolloutEvaluation(Evaluation):
             original_y = list(y_raw)
             _, (x, _) = _pad_eval_inputs(batch_unit, x, original_y)
             encoded = encoding.encode_batch(x, allowed_special="all")
+            encoded = [seq[: inference.block_size] for seq in encoded]
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = inference.pad(encoded)
         else:
@@ -401,7 +402,9 @@ class EncodingEvaluation(Evaluation):
         if jax.process_index() == 0:
             original_x = [eval_data.get(i) for i in range(original_size)]
             _, (x,) = _pad_eval_inputs(batch_unit, original_x)
-            xs, masks = inference.pad(encoding.encode_batch(x, allowed_special="all"))
+            encoded = encoding.encode_batch(x, allowed_special="all")
+            encoded = [seq[: inference.block_size] for seq in encoded]
+            xs, masks = inference.pad(encoded)
         else:
             original_x = None
             xs, masks = None, None
@@ -728,6 +731,7 @@ class PerplexityComparisonEvaluation(Evaluation):
             encoded_inputs = encoding.encode_batch(
                 flattened_inputs, allowed_special="all"
             )
+            encoded_inputs = [seq[: inference.block_size] for seq in encoded_inputs]
             xs, masks = inference.pad(encoded_inputs)
             prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
             metadata_array = jnp.array(metadata, dtype=jnp.int32)
