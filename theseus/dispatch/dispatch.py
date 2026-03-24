@@ -82,6 +82,12 @@ def _cluster_env(cluster_config: ClusterConfig) -> dict[str, str]:
     env: dict[str, str] = {}
     if cluster_config.wandb:
         env["WANDB_API_KEY"] = cluster_config.wandb
+    if cluster_config.wandb_entity:
+        env["WANDB_ENTITY"] = cluster_config.wandb_entity
+    if cluster_config.wandb_project:
+        env["WANDB_PROJECT"] = cluster_config.wandb_project
+    if cluster_config.hf_token:
+        env["HF_TOKEN"] = cluster_config.hf_token
     return env
 
 
@@ -738,7 +744,19 @@ def _dispatch_volcano(
         return ship_result
 
     # 4. Render Volcano Job YAML
-    bootstrap_cmd = f"bash {work_dir}/_bootstrap.sh"
+    # Wrap bootstrap in tee so stdout is persisted to a file on the PVC.
+    # kubectl destroys container logs once pods leave, so this ensures logs
+    # survive on the persistent volume.
+    log_dir = cluster.log_dir
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project_name_log = spec.project or "general"
+    group_log = spec.group or "default"
+    log_file = f"{log_dir}/{project_name_log}_{group_log}_{spec.name}_{timestamp}.log"
+    bootstrap_cmd = (
+        f"mkdir -p {log_dir} && "
+        f"bash {work_dir}/_bootstrap.sh 2>&1 | tee {log_file}; "
+        f"exit ${{PIPESTATUS[0]}}"
+    )
     rendered_yaml = volcano_mod.render_volcano_job(
         job_name=job_name,
         host_config=host_config,
@@ -817,6 +835,7 @@ def _dispatch_volcano(
                 f"Volcano Job '{job_name}' submitted to namespace '{namespace}'.\n"
                 f"Monitor with: kubectl get vcjob {job_name} -n {namespace}\n"
                 f"Logs: kubectl logs -l volcano.sh/job-name={job_name} -n {namespace} --all-containers -f\n"
+                f"Persistent log: {log_file} (on PVC)\n"
                 f"{apply_result.stdout}"
             ),
             stderr=apply_result.stderr,
