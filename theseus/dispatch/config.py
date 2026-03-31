@@ -39,6 +39,10 @@ class ClusterConfig:
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
     uv_dir: str | None = None  # UV_CACHE_DIR override for uv
+    wandb: str | None = None  # W&B API key → exported as WANDB_API_KEY
+    wandb_entity: str | None = None  # W&B entity → exported as WANDB_ENTITY
+    wandb_project: str | None = None  # W&B project → exported as WANDB_PROJECT
+    hf_token: str | None = None  # HuggingFace token → exported as HF_TOKEN
 
 
 @dataclass
@@ -200,6 +204,10 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
             uv_dir=cluster_cfg.get("uv_dir"),
+            wandb=cluster_cfg.get("wandb"),
+            wandb_entity=cluster_cfg.get("wandb_entity"),
+            wandb_project=cluster_cfg.get("wandb_project"),
+            hf_token=cluster_cfg.get("hf_token"),
         )
     logger.debug(f"CONFIG | parsed {len(clusters)} clusters")
 

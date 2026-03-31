@@ -122,7 +122,9 @@ class MemmapDataset(Dataset):
             self._train_buffer = buffer
             self._train_sample_indices = sample_indices
             self._train_sample_ptr = 0
-            self._train_next_block = (start_block + blocks_to_read) % total_blocks
+            self._train_next_block = (
+                start_block + blocks_to_read * self.process_count
+            ) % total_blocks
 
             # Log buffer refresh for debugging
             from loguru import logger
@@ -140,7 +142,9 @@ class MemmapDataset(Dataset):
             self._val_buffer = buffer
             self._val_sample_indices = sample_indices
             self._val_sample_ptr = 0
-            self._val_next_block = (start_block + blocks_to_read) % total_blocks
+            self._val_next_block = (
+                start_block + blocks_to_read * self.process_count
+            ) % total_blocks
 
             # Log buffer refresh for debugging
             from loguru import logger

@@ -18,7 +18,8 @@ class Cluster(BaseModel):
     @property
     def log_dir(self) -> str:
         """Log directory path, defaults to {work}/logs if not configured."""
-        return self.log if self.log else f"{self.work}/logs"
+        d = self.log if self.log else f"{self.work}/logs"
+        return d
 
     @property
     def root_dir(self) -> Path:

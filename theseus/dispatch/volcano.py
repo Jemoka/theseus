@@ -244,6 +244,7 @@ def render_volcano_job(
     host_config: VolcanoHostConfig,
     bootstrap_command: str,
     n_chips: int | None = None,
+    cluster_env: dict[str, str] | None = None,
 ) -> str:
     """Render the volcano_job.yaml template with concrete values.
 
@@ -353,6 +354,8 @@ def render_volcano_job(
     env_lines = []
     # Volcano mode flag for bootstrap
     all_env = {"THESEUS_VOLCANO_MODE": "1"}
+    if cluster_env:
+        all_env.update(cluster_env)
     all_env.update(host_config.env)
     for k, v in all_env.items():
         env_lines.append(f'- name: "{k}"')

@@ -57,6 +57,7 @@ from omegaconf import DictConfig, OmegaConf
 from theseus.base.hardware import Cluster, HardwareRequest, HardwareResult
 from theseus.base.job import JobSpec
 from theseus.dispatch.config import (
+    ClusterConfig,
     DispatchConfig,
     JuiceFSMount,
     PlainHostConfig,
@@ -74,6 +75,20 @@ from theseus.registry import JOBS
 
 # Path to bootstrap template
 BOOTSTRAP_TEMPLATE = Path(__file__).parent / "bootstrap.py"
+
+
+def _cluster_env(cluster_config: ClusterConfig) -> dict[str, str]:
+    """Build environment variables derived from cluster config."""
+    env: dict[str, str] = {}
+    if cluster_config.wandb:
+        env["WANDB_API_KEY"] = cluster_config.wandb
+    if cluster_config.wandb_entity:
+        env["WANDB_ENTITY"] = cluster_config.wandb_entity
+    if cluster_config.wandb_project:
+        env["WANDB_PROJECT"] = cluster_config.wandb_project
+    if cluster_config.hf_token:
+        env["HF_TOKEN"] = cluster_config.hf_token
+    return env
 
 
 def _serialize_hardware(result: HardwareResult) -> str:
@@ -261,6 +276,7 @@ def dispatch(
 
     # 5. Submit based on host type
     uv_cache_dir = cluster_config.uv_dir
+    cluster_env = _cluster_env(cluster_config)
     if isinstance(solve_result.host_config, VolcanoHostConfig):
         if cluster_config.mount:
             logger.warning(
@@ -282,6 +298,7 @@ def dispatch(
             volcano_image_override=volcano_image_override,
             volcano_namespace_override=volcano_namespace_override,
             uv_cache_dir=uv_cache_dir,
+            cluster_env=cluster_env,
         )
 
     # Non-Volcano paths need work_dir, share_dir, and juicefs_mount
@@ -338,6 +355,7 @@ def dispatch(
             tpu_spot_override=tpu_spot_override,
             tpu_preemptible_override=tpu_preemptible_override,
             uv_cache_dir=uv_cache_dir,
+            cluster_env=cluster_env,
         )
     elif solve_result.is_slurm:
         logger.info(
@@ -358,6 +376,7 @@ def dispatch(
             timeout,
             extra_uv_groups=extra_uv_groups or [],
             uv_cache_dir=uv_cache_dir,
+            cluster_env=cluster_env,
         )
     else:
         logger.info(f"DISPATCH | submitting via SSH to {solve_result.host_config.ssh}")
@@ -373,6 +392,7 @@ def dispatch(
             timeout,
             extra_uv_groups=extra_uv_groups or [],
             uv_cache_dir=uv_cache_dir,
+            cluster_env=cluster_env,
         )
 
 
@@ -391,6 +411,7 @@ def _dispatch_slurm(
     timeout: float,
     extra_uv_groups: list[str] | None = None,
     uv_cache_dir: str | None = None,
+    cluster_env: dict[str, str] | None = None,
 ) -> SlurmResult:
     """Dispatch job via SLURM."""
     assert solve_result.host_config is not None
@@ -443,6 +464,7 @@ def _dispatch_slurm(
         cpus_per_task=2,
         time="14-0",
         uv_cache_dir=uv_cache_dir,
+        env=dict(cluster_env or {}),
     )
 
     result = submit_packed(
@@ -512,6 +534,7 @@ def _dispatch_plain(
     timeout: float,
     extra_uv_groups: list[str] | None = None,
     uv_cache_dir: str | None = None,
+    cluster_env: dict[str, str] | None = None,
 ) -> RunResult:
     """Dispatch job via plain SSH using bootstrap.sh (non-blocking with nohup)."""
     assert solve_result.host_config is not None
@@ -542,6 +565,7 @@ def _dispatch_plain(
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
         uv_cache_dir=uv_cache_dir,
+        env=dict(cluster_env or {}),
     )
 
     # Generate bootstrap script (without SBATCH directives since partition=None)
@@ -627,6 +651,7 @@ def _dispatch_volcano(
     volcano_image_override: str | None = None,
     volcano_namespace_override: str | None = None,
     uv_cache_dir: str | None = None,
+    cluster_env: dict[str, str] | None = None,
 ) -> RunResult:
     """Dispatch job to a Kubernetes Volcano cluster.
 
@@ -681,6 +706,7 @@ def _dispatch_volcano(
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
         uv_cache_dir=uv_cache_dir,
+        env=dict(cluster_env or {}),
     )
     script = job.to_script()
 
@@ -718,12 +744,25 @@ def _dispatch_volcano(
         return ship_result
 
     # 4. Render Volcano Job YAML
-    bootstrap_cmd = f"bash {work_dir}/_bootstrap.sh"
+    # Wrap bootstrap in tee so stdout is persisted to a file on the PVC.
+    # kubectl destroys container logs once pods leave, so this ensures logs
+    # survive on the persistent volume.
+    log_dir = cluster.log_dir
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    project_name_log = spec.project or "general"
+    group_log = spec.group or "default"
+    log_file = f"{log_dir}/{project_name_log}_{group_log}_{spec.name}_{timestamp}.log"
+    bootstrap_cmd = (
+        f"mkdir -p {log_dir} && "
+        f"bash {work_dir}/_bootstrap.sh 2>&1 | tee {log_file}; "
+        f"exit ${{PIPESTATUS[0]}}"
+    )
     rendered_yaml = volcano_mod.render_volcano_job(
         job_name=job_name,
         host_config=host_config,
         bootstrap_command=bootstrap_cmd,
         n_chips=solve_result.result.total_chips if solve_result.result else None,
+        cluster_env=cluster_env,
     )
 
     # 5. Check for existing job and bail if one already exists
@@ -797,6 +836,7 @@ def _dispatch_volcano(
                 f"Volcano Job '{job_name}' submitted to namespace '{namespace}'.\n"
                 f"Monitor with: kubectl get vcjob {job_name} -n {namespace}\n"
                 f"Logs: kubectl logs -l volcano.sh/job-name={job_name} -n {namespace} --all-containers -f\n"
+                f"Persistent log: {log_file} (on PVC)\n"
                 f"{apply_result.stdout}"
             ),
             stderr=apply_result.stderr,
@@ -821,6 +861,7 @@ def _dispatch_tpu(
     tpu_spot_override: bool | None = None,
     tpu_preemptible_override: bool | None = None,
     uv_cache_dir: str | None = None,
+    cluster_env: dict[str, str] | None = None,
 ) -> RunResult:
     """Dispatch job to a Google Cloud TPU VM.
 
@@ -993,6 +1034,7 @@ def _dispatch_tpu(
         workdir=work_dir,
         stage_files=list(bootstrap_pys.keys()),
         env={
+            **(cluster_env or {}),
             "THESEUS_TPU_MODE": "1",
             **({"THESEUS_TPU_SELF_DELETE": "1"} if created_tpu else {}),
         },
