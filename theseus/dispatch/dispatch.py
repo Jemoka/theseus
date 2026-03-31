@@ -762,6 +762,7 @@ def _dispatch_volcano(
         host_config=host_config,
         bootstrap_command=bootstrap_cmd,
         n_chips=solve_result.result.total_chips if solve_result.result else None,
+        cluster_env=cluster_env,
     )
 
     # 5. Check for existing job and bail if one already exists
