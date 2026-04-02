@@ -18,33 +18,23 @@ from theseus.config import configure
 from typing import List, Any, Type, Dict
 
 
-def vectors_to_colors(x: jax.Array) -> jax.Array:
-    """Map vectors to RGB colors via PCA projection. (for plotting averages)
+def pca(x: jax.Array, n_components: int) -> jax.Array:
+    """x: (N, D) -> (N, n_components). Centered SVD."""
+    x = x - x.mean(axis=0)
+    U, S, Vt = jnp.linalg.svd(x, full_matrices=False)
+    return U[:, :n_components] * S[:n_components]
 
-    Args:
-        x: array of shape [..., N, H]
-    Returns:
-        array of shape [..., N, 3] with values in [0, 1]
-    """
-    H = x.shape[-1]
 
-    # flatten to [M, H] for PCA
-    flat = x.reshape(-1, H)
-    mean = flat.mean(axis=0)
-    centered = flat - mean
-
-    # top 3 right singular vectors = top 3 PCA directions
-    _, _, Vt = jnp.linalg.svd(centered, full_matrices=False)
-    basis = Vt[:3]  # [3, H]
-
-    # project all vectors (preserving batch dims)
-    projected = (x - mean) @ basis.T  # [..., N, 3]
-
-    # center at 0.5, scale so max absolute value hits 0 or 1
-    scale = jnp.max(jnp.abs(projected)) + 1e-8
-    colors = 0.5 + 0.5 * projected / scale
-
-    return colors
+def vectors_to_colors(embeddings: jax.Array) -> jax.Array:
+    """(layers, seq_len, hidden) -> (layers, seq_len, 3) RGB."""
+    flat = embeddings.reshape(-1, embeddings.shape[-1])
+    coords = pca(flat, 3)
+    for i in range(3):
+        lo, hi = jnp.percentile(coords[:, i], jnp.array([2, 98]))
+        coords = coords.at[:, i].set(
+            jnp.clip((coords[:, i] - lo) / (hi - lo + 1e-8), 0, 1)
+        )
+    return coords.reshape(*embeddings.shape[:2], 3)
 
 
 class Scratchbubbles(Thoughtbubbles):
@@ -57,12 +47,13 @@ class Scratchbubbles(Thoughtbubbles):
         """intermediates -> [figure]"""
 
         from matplotlib import pyplot as plt
+        import seaborn as sns
 
         # TODO not exactly sure why each tuple has an extra
         # dim but it seems like we take the first one; perhaps
         # from initialization/multiple calls?
 
-        # plot embeddings
+        ### plot embeddings ###
         embeddings = [intermediates["plots"]["embeddings"]] + [
             i["embeddings"]
             for i in intermediates["plots"].values()
@@ -92,9 +83,40 @@ class Scratchbubbles(Thoughtbubbles):
         ax.set_ylabel("layer")
         plt.tight_layout()
 
-        # make the rest of the plot
-        plots = Thoughtbubbles.plot(intermediates)
-        plots.update({"analysis/embeddings": fig})
+        plots = {"analysis/embeddings": fig}
+
+        ### plot "extra" attention to see where tokens are attending ###
+        weights = [
+            i["ssca"]["scratching_attn_weights"][0][0][0]
+            for i in intermediates["plots"].values()
+            if isinstance(i, dict)
+        ]
+        max_seq_len = max([i.shape[-1] for i in weights])
+
+        # pad weights to max_seq_len so we can stack them
+        padded_weights = []
+        for w in weights:
+            pad_width = max_seq_len - w.shape[-1]
+            if pad_width > 0:
+                w = jnp.pad(w, ((0, 0), (0, pad_width)), constant_values=-jnp.inf)
+            padded_weights.append(w)
+
+        # aaand softmax
+        stacked_weights = jax.nn.softmax(jnp.stack(padded_weights), axis=-1)
+
+        # plot
+        for i, w in enumerate(stacked_weights):
+            fig, ax = plt.subplots(figsize=(12, 6))
+            sns.heatmap(w.astype(jnp.float32), ax=ax, cmap="viridis")
+
+            ax.set_xlabel("token index (queries, forks)")
+            ax.set_ylabel("token index (keys, seq)")
+            ax.set_title(f"Attention Weights for Block {i}")
+            plt.tight_layout()
+            plots[f"analysis/attention_weights_block_{i}"] = fig
+
+        ### make the rest of the plot ###
+        plots.update(Thoughtbubbles.plot(intermediates))
 
         return plots
 

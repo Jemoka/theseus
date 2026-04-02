@@ -102,6 +102,7 @@ class ScratchSparseCrossAttention(ForkingAttention):
         # (Q/K are projected to scratch_head_dim, V stays at n_embd)
         scale = jnp.sqrt(jnp.array(q.shape[-1], dtype=ATTN_DTYPE))
         attn_weights = jnp.einsum("bqhd,bkhd->bhqk", q, k) / scale
+        self.sow("plots", "scratching_attn_weights", attn_weights)
         attn_weights = jnp.where(
             causal_mask.transpose(0, 1, 2, 3),  # (B, 1, Q, K)
             attn_weights,
@@ -127,10 +128,13 @@ class ScratchSparseCrossAttention(ForkingAttention):
         q = self.q_proj(q)  # (B, T_q, scratch_head_dim)
         k = self.k_proj(k)  # (B, T_k, scratch_head_dim)
 
+        sqrt_d_head = (q.shape[-1]) ** 0.5
         # Fork channel weighting (identical to ForkingAttention.preprocess_qkv)
         if self.use_fork_channel:
             q = q.at[:, :, -1].set(jnp.ones_like(q[:, :, -1]))
-            k = k.at[:, :, -1].set(jnp.exp(cumulative_scores))
+            k = k.at[:, :, -1].set(cumulative_scores * sqrt_d_head)
+            # such that we actually multiply by cumulative_scores in the attention computation
+            # and not cumulative_scores^(1/sqrt(d_head)).
 
         # each of these should be a single "head"
         y = self.attn(
