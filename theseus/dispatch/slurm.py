@@ -308,7 +308,7 @@ JUICEFS_MOUNT_POINT="$MOUNT_POINT"
         else:
             env_lines.append("export UV_CACHE_DIR=$(mktemp -d)")
         if self.env:
-            env_lines.extend(f"export {k}={v}" for k, v in self.env.items())
+            env_lines.extend(f"export {k}='{v}'" for k, v in self.env.items())
         script = script.replace("__ENV_VARS__", "\n".join(env_lines))
 
         # Payload extraction (for SLURM with embedded payload)
