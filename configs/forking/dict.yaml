@@ -1,0 +1,50 @@
+architecture:
+  rope: true
+  n_layers: 3
+  n_embd: 128
+  block_size: 512
+  dropout: 0.0
+  vocab_size: 1059
+  max_block_size: 1024
+  fork:
+  - 1
+  bias: true
+  n_head: 4
+  use_fork_channel: true
+  vram_calib_factor: 1.0
+eval:
+  evaluations:
+  - dictlearn
+tokenizer:
+  backend: trivial
+  name: trivial
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens: 40000000000
+  warmup_pct: 0.01
+  decay_pct: 0.1
+  validation: true
+  evaluate: false
+  dataset:
+  - name: dictlearn
+    rate: 1.0
+    style: PMD
+    suffix: ''
+  validation_steps: 2048
+logging:
+  report_interval: 32
+  checkpoint_interval: 16384
+  validation_interval: 2048
+  wandb: true
+request:
+  n_shards: 1
+job: thoughtbubbles/train/pretrain
