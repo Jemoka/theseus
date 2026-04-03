@@ -1,13 +1,14 @@
 architecture:
   rope: true
-  n_layers: 3
+  n_layers: 6
   n_embd: 128
   block_size: 512
   dropout: 0.0
   vocab_size: 1059
   max_block_size: 1024
   fork:
-  - 1
+  - 2
+  - 4
   bias: true
   n_head: 4
   use_fork_channel: true
@@ -33,7 +34,7 @@ training:
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true
-  evaluate: false
+  evaluate: true
   dataset:
   - name: dictlearn
     rate: 1.0

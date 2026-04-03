@@ -2,7 +2,7 @@ architecture:
   dtype:
     param: float32
     activation: bfloat16
-  n_layers: 3
+  n_layers: 6
   n_embd: 128
   rope: true
   block_size: 512
@@ -42,7 +42,7 @@ training:
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true
-  evaluate: false
+  evaluate: true
   dataset:
   - name: dictlearn
     rate: 1.0

@@ -3,7 +3,7 @@ architecture:
     param: float32
     activation: bfloat16
   n_embd: 128
-  n_layers: 3
+  n_layers: 6
   bias: true
   dropout: 0.0
   n_head: 4
@@ -13,7 +13,8 @@ architecture:
   rope: true
   vocab_size: 1059
   fork:
-  - 1
+  - 2
+  - 4
   layer_norm_eps: 1.0e-05
   intermediate_size: -1
 eval:
@@ -46,7 +47,7 @@ training:
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true
-  evaluate: false
+  evaluate: true
   dataset:
   - name: dictlearn
     rate: 1.0
