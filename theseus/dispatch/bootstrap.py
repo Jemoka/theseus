@@ -482,14 +482,11 @@ def main():
             latest = RestoreableJob.latest(spec)
             if latest:
                 logger.info(f"DISPATCH | restoring from checkpoint: {latest}")
-                job, restored_cfg = RestoreableJob.from_checkpoint(latest, spec)
-
                 # The checkpoint's config.yaml may carry stale runtime
                 # overrides (e.g. wandb=False from an autobatch probe).
-                # Patch all fields from the launch config (which already
-                # has the correct runtime overrides applied) onto the
-                # restored config so the training run uses current values.
-                cfg = OmegaConf.merge(restored_cfg, cfg)
+                # Merge the current launch config before instantiating the
+                # restored job so __init__ and restore() observe live values.
+                job, cfg = RestoreableJob.from_checkpoint(latest, spec, runtime_cfg=cfg)
 
                 with configuration(cfg):
                     job()

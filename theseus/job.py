@@ -251,13 +251,18 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
 
     @classmethod
     def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
     ) -> Tuple[Self, Any]:
         """loads and instantiates a checkpointed job from disk
 
         Args:
             suffix: checkpoint suffix to restore from
             spec: execution spec to use for locating checkpoint
+            runtime_cfg: config values from the current launch to overlay onto
+                the checkpoint config before job initialization
 
         Returns:
             Tuple[Self, Any]: restored job instance and configuration
@@ -281,6 +286,8 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
 
         # load config now from config.yaml
         cfg = OmegaConf.load(path / "config.yaml")
+        if runtime_cfg is not None:
+            cfg = OmegaConf.merge(cfg, runtime_cfg)
 
         # instantiate job within configuration context
         with configuration(cfg):
