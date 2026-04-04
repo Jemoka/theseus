@@ -63,14 +63,11 @@ class ForkingAttention(RopeAttention):
             axis=-1,
         )
         q, k = self.rope(q, k, t=partial_rotations)
-        sqrt_d_head = (q.shape[-1]) ** 0.5
         if self.use_fork_channel:
             q = q.at[:, :, :, -1].set(jnp.ones_like(q[:, :, :, -1]))
             # cumulative_scores: (B, T) → broadcast to (B, T, H)
             k = k.at[:, :, :, -1].set(
-                jnp.repeat(
-                    cumulative_scores[:, :, None] * sqrt_d_head, k.shape[2], axis=2
-                )
+                jnp.repeat(cumulative_scores[:, :, None], k.shape[2], axis=2)
                 # such that we actually multiply by cumulative_scores in the attention computation
                 # and not cumulative_scores^(1/sqrt(d_head)).
             )
