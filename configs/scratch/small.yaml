@@ -56,3 +56,5 @@ training:
     suffix: ''
   validation_steps: 2048
 job: scratchbubbles/train/pretrain
+request:
+  n_shards: 1

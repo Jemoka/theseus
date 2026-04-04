@@ -162,7 +162,7 @@ def jobs() -> None:
 @click.option(  # type: ignore[misc]
     "--n_shards",
     type=int,
-    default=None,
+    default=1,
     help="Number of tensor parallel shards for the model",
 )
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
