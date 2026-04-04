@@ -132,7 +132,8 @@ class ScratchSparseCrossAttention(ForkingAttention):
         # Fork channel weighting (identical to ForkingAttention.preprocess_qkv)
         if self.use_fork_channel:
             q = q.at[:, :, -1].set(jnp.ones_like(q[:, :, -1]))
-            k = k.at[:, :, -1].set(cumulative_scores * sqrt_d_head)
+            # k = k.at[:, :, -1].set(cumulative_scores * sqrt_d_head)
+            k = k.at[:, :, -1].set(jnp.exp(cumulative_scores) * sqrt_d_head)
             # such that we actually multiply by cumulative_scores in the attention computation
             # and not cumulative_scores^(1/sqrt(d_head)).
 
