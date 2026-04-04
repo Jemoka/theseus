@@ -22,7 +22,6 @@ Constants (hardcoded for reproducibility):
 - ``N_FUNCTIONS = 32`` — number of distinct functions.
 - ``N_VALUES = 1024`` — size of the value domain.
 - ``FIXED_SEED = 7`` — seed for deterministic generation.
-- ``MAX_SEQ_LENGTH = 512`` — total tokens per sequence.
 - ``TRAIN_SEQUENCES = 100000`` — number of training sequences.
 - ``VAL_SEQUENCES = 500`` — number of validation sequences.
 
@@ -34,6 +33,11 @@ Token layout::
     Token  1058          → SEP delimiter
     Token  0             → EOT (end-of-text)
     VOCAB_SIZE = 1059
+
+Registered variants:
+
+- ``dictlearn_16``  — sequences of length 16 (12 function tokens).
+- ``dictlearn_512`` — sequences of length 512 (508 function tokens).
 """
 
 from random import Random
@@ -48,7 +52,6 @@ from theseus.registry import dataset
 N_FUNCTIONS = 32
 N_VALUES = 1024
 FIXED_SEED = 7
-MAX_SEQ_LENGTH = 512
 TRAIN_SEQUENCES = 100_000
 VAL_SEQUENCES = 500
 
@@ -62,10 +65,6 @@ SEP_TOKEN = START_TOKEN + 1
 EOT_TOKEN = 0
 
 VOCAB_SIZE = SEP_TOKEN + 1
-
-# Number of function tokens per sequence so that total = MAX_SEQ_LENGTH
-# Layout: n_funcs + START + v1 + SEP + result = MAX_SEQ_LENGTH
-N_FUNC_TOKENS_PER_SEQ = MAX_SEQ_LENGTH - 4
 
 # ---------------------------------------------------------------------------
 # Deterministic function tables & sequences
@@ -90,14 +89,15 @@ def _build_functions(seed: int) -> list[dict[int, int]]:
 
 
 def _build_sequences(
-    seed: int, count: int, functions: list[dict[int, int]]
+    seed: int, count: int, functions: list[dict[int, int]], seq_length: int
 ) -> list[list[int]]:
-    """Generate *count* sequences from *seed* using the given function tables."""
+    """Generate *count* sequences of *seq_length* from *seed*."""
+    n_func_tokens = seq_length - 4  # START + v1 + SEP + result
     rng = Random(seed)
     sequences: list[list[int]] = []
     for _ in range(count):
         seq: list[int] = []
-        for _ in range(N_FUNC_TOKENS_PER_SEQ):
+        for _ in range(n_func_tokens):
             seq.append(rng.choice(FUNCTION_TOKENS))
 
         original_value = rng.choice(VALUE_TOKENS)
@@ -114,24 +114,45 @@ def _build_sequences(
 
 
 FUNCTIONS = _build_functions(FIXED_SEED)
-_TRAIN = _build_sequences(FIXED_SEED + 1, TRAIN_SEQUENCES, FUNCTIONS)
-_VAL = _build_sequences(FIXED_SEED + 2, VAL_SEQUENCES, FUNCTIONS)
 
-_SPLITS: dict[str, list[list[int]]] = {"train": _TRAIN, "val": _VAL}
+# --- Length-16 variant ---
+_TRAIN_16 = _build_sequences(FIXED_SEED + 1, TRAIN_SEQUENCES, FUNCTIONS, 16)
+_VAL_16 = _build_sequences(FIXED_SEED + 2, VAL_SEQUENCES, FUNCTIONS, 16)
+_SPLITS_16: dict[str, list[list[int]]] = {"train": _TRAIN_16, "val": _VAL_16}
+
+# --- Length-512 variant ---
+_TRAIN_512 = _build_sequences(FIXED_SEED + 1, TRAIN_SEQUENCES, FUNCTIONS, 512)
+_VAL_512 = _build_sequences(FIXED_SEED + 2, VAL_SEQUENCES, FUNCTIONS, 512)
+_SPLITS_512: dict[str, list[list[int]]] = {"train": _TRAIN_512, "val": _VAL_512}
 
 
-@dataset("dictlearn")
-class DictLearn(StringDataset):
-    """Dictionary-learning training dataset (see module docstring)."""
+class _DictLearnBase(StringDataset):
+    """Base class for dictlearn variants."""
+
+    _splits: dict[str, list[list[int]]]
 
     def __init__(self, split: str = "train", config: str | None = None) -> None:
         del config
-        if split not in _SPLITS:
+        if split not in self._splits:
             raise ValueError(f"Unknown split '{split}', expected 'train' or 'val'")
-        self._sequences = _SPLITS[split]
+        self._sequences = self._splits[split]
 
     def __len__(self) -> int:
         return len(self._sequences)
 
     def __getitem__(self, indx: int) -> str:
         return " ".join(str(t) for t in self._sequences[indx])
+
+
+@dataset("dictlearn_16")
+class DictLearn16(_DictLearnBase):
+    """Dictionary-learning dataset with sequence length 16."""
+
+    _splits = _SPLITS_16
+
+
+@dataset("dictlearn_512")
+class DictLearn512(_DictLearnBase):
+    """Dictionary-learning dataset with sequence length 512."""
+
+    _splits = _SPLITS_512

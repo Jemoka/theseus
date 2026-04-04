@@ -7,7 +7,7 @@ from .blimp import Blimp  # noqa: F401
 from .ccaligned import CCALIGNED_EVALS  # noqa: F401
 from .cfq import CFQEval  # noqa: F401
 from .clutrr import CLUTRREval  # noqa: F401
-from .dictlearn import DictLearnEval  # noqa: F401
+from .dictlearn import DictLearnEval16, DictLearnEval512  # noqa: F401
 from .fever import FEVEREval  # noqa: F401
 from .longbench import LongBench  # noqa: F401
 from .longhealth import LongHealthEval  # noqa: F401
