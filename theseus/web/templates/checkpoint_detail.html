@@ -31,22 +31,22 @@
     {% set rel_path = checkpoint.project ~ "/" ~ checkpoint.group ~ "/" ~ checkpoint.job_name ~ "/" ~ checkpoint.suffix %}
     <div style="display: flex; gap: var(--spacing-md); margin-bottom: var(--spacing-md);">
         <!-- Created -->
-        <div class="stat-card" style="flex-shrink: 0; padding-right: var(--spacing-lg);">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Created</div>
             </div>
             <div class="stat-card-body">
-                <div class="text-xs">{{ checkpoint.created | format_timestamp }}</div>
+                <div class="text-xs" style="padding-right: var(--spacing-lg);">{{ checkpoint.created | format_timestamp }}</div>
             </div>
         </div>
 
         <!-- Size -->
-        <div class="stat-card" style="flex-shrink: 0; padding-right: var(--spacing-lg);">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Size</div>
             </div>
             <div class="stat-card-body">
-                <div class="text-xs font-mono">{{ checkpoint.size_bytes | format_size }}</div>
+                <div class="text-xs font-mono" style="padding-right: var(--spacing-lg);">{{ checkpoint.size_bytes | format_size }}</div>
             </div>
         </div>
 
