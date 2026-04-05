@@ -3,7 +3,12 @@ Things you can train/infer/etc.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from contextlib import contextmanager
+from pathlib import Path
+from typing import IO, Iterator, Optional
+
+import jax
+from jax.experimental import multihost_utils
 from pydantic import BaseModel, Field
 
 from theseus.base.topology import Topology
@@ -33,6 +38,43 @@ class ExecutionSpec(JobSpec):
     distributed: bool = Field(
         description="whether or not the run is happening over multiple hosts"
     )
+
+    def result_path(self, name: str | Path) -> Path:
+        project = self.project or "general"
+        group = self.group or "default"
+        results_dir = self.hardware.hosts[jax.process_index()].cluster.results_dir
+        return Path(results_dir) / project / group / self.name / Path(name)
+
+    @contextmanager
+    def result(
+        self,
+        name: str | Path,
+        main_process_only: bool = False,
+        mode: str = "w",
+        encoding: str | None = "utf-8",
+    ) -> Iterator[IO[str] | None]:
+        path_name = Path(name)
+        sync_suffix = "__".join(path_name.parts) if path_name.parts else "result"
+        sync_name = f"result:{self.name}:{sync_suffix}"
+        if main_process_only:
+            multihost_utils.sync_global_devices(f"{sync_name}:pre")
+            try:
+                if jax.process_index() != 0:
+                    yield None
+                    return
+
+                path = self.result_path(path_name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, mode, encoding=encoding) as f:
+                    yield f
+            finally:
+                multihost_utils.sync_global_devices(f"{sync_name}:post")
+            return
+
+        path = self.result_path(path_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, mode, encoding=encoding) as f:
+            yield f
 
     @classmethod
     def local(

@@ -254,9 +254,13 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
 class RestoreableJob(CheckpointedJob[C], Generic[C]):
     @abstractmethod
-    def restore(self, suffix: Path) -> None:
-        """Restore job state from checkpoint with given suffix"""
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Restore job state from ``rel_path`` under checkpoints_dir."""
         raise NotImplementedError()
+
+    def restore(self, suffix: str | Path) -> None:
+        """Restore from this job's own checkpoint. Wrapper for backwards compat."""
+        self.restore_from_path(self._get_checkpoint_rel_path(self.spec, suffix))
 
     def register(self, suffix: str | Path) -> None:
         """Register this checkpoint as the latest, for idempotent restore."""

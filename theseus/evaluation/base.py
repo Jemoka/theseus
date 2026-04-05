@@ -991,10 +991,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     def _get_results_path(self) -> Path:
         """Get path for saving evaluation results."""
-        results_dir = self.spec.hardware.hosts[0].cluster.results_dir
-        project = self.spec.project or "general"
-        group = self.spec.group if self.spec.group else "default"
-        return Path(results_dir) / project / group / self.spec.name / "results.json"
+        return self.spec.result_path("results.json")
 
     @property
     def done(self) -> bool:
@@ -1086,11 +1083,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         logger.info("=" * 60)
 
         # Save results to JSON (only on main process)
-        if jax.process_index() == 0:
-            output_path = self._get_results_path()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(output_path, "w") as f:
+        with self.spec.result("results.json", main_process_only=True) as f:
+            if f is not None:
                 json.dump(
                     {
                         "job": self.spec.name,
@@ -1101,4 +1095,4 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
                     f,
                     indent=2,
                 )
-            logger.info("EVAL | Results saved to {}", output_path)
+                logger.info("EVAL | Results saved to {}", Path(f.name))

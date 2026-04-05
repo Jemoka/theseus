@@ -862,11 +862,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 self.best_val_score_,
             )
 
-    def load(self, suffix: Path) -> None:
-        """load from a checkpoint, if available"""
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Load from a checkpoint at ``rel_path`` under checkpoints_dir."""
 
         old_state = self.state
-        state, metadata = self.get_tree_and_metadata(suffix, old_state)
+        state, metadata = self.get_tree_and_metadata_from_path(rel_path, old_state)
 
         self.state = state
         self.state = self.state.replace(params=self._cast_params(self.state.params))
@@ -897,13 +897,14 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         if self.main_process():
             logger.info(
                 "CHECKPOINT | loaded checkpoint from {} at step {}, best score {}",
-                suffix,
+                rel_path,
                 self.global_step_counter_,
                 self.best_val_score_,
             )
 
-    def restore(self, suffix: Path) -> None:
-        return self.load(suffix)  # this is to satisfy the restore API
+    def load(self, suffix: Path) -> None:
+        """Load from this job's own checkpoint. Wrapper for backwards compat."""
+        self.restore(suffix)
 
     def run(self) -> None:
         """main entry point to run training, called on all nodes"""
