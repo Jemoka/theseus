@@ -28,9 +28,10 @@
     </div>
 
     <!-- Info Grid -->
-    <div class="grid grid-3 gap-3 mb-4">
+    {% set rel_path = checkpoint.project ~ "/" ~ checkpoint.group ~ "/" ~ checkpoint.job_name ~ "/" ~ checkpoint.suffix %}
+    <div style="display: flex; gap: var(--spacing-md); margin-bottom: var(--spacing-md);">
         <!-- Created -->
-        <div class="stat-card">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Created</div>
             </div>
@@ -40,7 +41,7 @@
         </div>
 
         <!-- Size -->
-        <div class="stat-card">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Size</div>
             </div>
@@ -50,14 +51,13 @@
         </div>
 
         <!-- Rel Path (click to copy) -->
-        {% set rel_path = checkpoint.project ~ "/" ~ checkpoint.group ~ "/" ~ checkpoint.job_name ~ "/" ~ checkpoint.suffix %}
-        <div class="stat-card" style="cursor: pointer;"
-             onclick="navigator.clipboard.writeText('{{ rel_path }}').then(() => { const icon = this.querySelector('.copy-icon'); icon.textContent = '✓'; setTimeout(() => icon.textContent = '⎘', 1500); })">
+        <div class="stat-card ckpt-relpath" style="flex: 1; min-width: 0; cursor: pointer; transition: background 0.15s ease;"
+             onclick="navigator.clipboard.writeText('{{ rel_path }}').then(() => { this.style.background = 'rgba(38, 166, 113, 0.15)'; setTimeout(() => this.style.background = '', 300); })">
             <div class="stat-card-header">
-                <div class="stat-label">Rel Path <span class="copy-icon" style="opacity: 0.4;">⎘</span></div>
+                <div class="stat-label">Path</div>
             </div>
             <div class="stat-card-body">
-                <code class="text-2xs font-mono" style="color: var(--blue);">{{ rel_path }}</code>
+                <code class="text-2xs font-mono" style="color: var(--blue); white-space: nowrap;">{{ rel_path }}</code>
             </div>
         </div>
     </div>
