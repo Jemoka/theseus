@@ -229,7 +229,7 @@ plugins = ['pydantic.mypy']
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-exclude = ["tests", "examples"]
+exclude = ["tests", "examples", "theseus/dispatch/bootstrap.py"]
 
 [[tool.mypy.overrides]]
 module = "huggingface_hub.*"

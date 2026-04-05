@@ -105,6 +105,72 @@ def _restoreable_job() -> Any:
     return RestoreableJob
 
 
+def _load_modules(modules: tuple[str, ...] | list[str]) -> None:
+    """Import modules by name or file path.
+
+    Resolution order for each entry:
+    1. If it's an explicit file path (contains ``/`` or ends with ``.py``),
+       load it directly as a file.
+    2. Otherwise, try ``importlib.import_module(name)``.
+    3. If that fails, look for ``name.py`` in the current directory.
+    """
+    import importlib
+    import importlib.util
+
+    for m in modules:
+        # Explicit file path — load directly
+        if "/" in m or m.endswith(".py"):
+            _load_module_from_file(m)
+            continue
+
+        # Try as a module name first
+        try:
+            importlib.import_module(m)
+            continue
+        except ModuleNotFoundError:
+            pass
+
+        # Fall back to ./name.py
+        local_path = Path(m + ".py")
+        if local_path.exists():
+            _load_module_from_file(str(local_path))
+        else:
+            raise ModuleNotFoundError(
+                f"No module named '{m}' and '{local_path}' not found"
+            )
+
+
+def _load_module_from_file(path: str) -> None:
+    """Load a single Python file as a module."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(Path(path).stem, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module from path: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+
+def _validate_remote_modules(modules: tuple[str, ...]) -> list[str]:
+    """Validate and normalize module names for remote bootstrap (submit/bootstrap).
+
+    File paths don't work remotely — the module must be importable from the
+    packed repo.  As a courtesy, ``anyways.py`` is normalized to ``anyways``.
+    """
+    result = []
+    for m in modules:
+        if m.endswith(".py"):
+            m = m[:-3]
+        if not m.replace(".", "").replace("_", "").isalnum():
+            console.print(
+                f"\n[red]Error: --load '{m}' is not a valid module name. "
+                f"For submit/bootstrap, use a dotted module name importable from the repo.[/red]\n"
+            )
+            sys.exit(1)
+        result.append(m)
+    return result
+
+
 @click.group()  # type: ignore[misc]
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")  # type: ignore[misc]
 def theseus(verbose: bool) -> None:
@@ -113,8 +179,15 @@ def theseus(verbose: bool) -> None:
 
 
 @theseus.command()  # type: ignore[misc]
-def jobs() -> None:
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before listing jobs; can repeat.",
+)  # type: ignore[misc]
+def jobs(preload_modules: tuple[str, ...]) -> None:
     """List all available jobs in the registry."""
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
     if not jobs:
         console.print("\n[yellow]No jobs registered[/yellow]\n")
@@ -165,6 +238,12 @@ def jobs() -> None:
     default=1,
     help="Number of tensor parallel shards for the model",
 )
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def configure(
     job: str,
@@ -173,6 +252,7 @@ def configure(
     chip: str | None,
     n_chips: int | None,
     n_shards: int | None,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Generate a configuration YAML for a job.
@@ -181,6 +261,8 @@ def configure(
     OUT_YAML: Output path for the generated YAML config
     OVERRIDES: Optional config overrides in key=value format
     """
+    _load_modules(preload_modules)
+
     jobs = _jobs_registry()
     build, _ = _build_and_configuration()
 
@@ -338,6 +420,12 @@ def configure(
     multiple=True,
     help="Additional YAML config(s) for sequential stages.",
 )  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
     name: str,
@@ -347,6 +435,7 @@ def run(
     project: str | None,
     group: str | None,
     extra_stages: tuple[str, ...],
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
@@ -356,6 +445,8 @@ def run(
     OUT_PATH: Output path for job results
     OVERRIDES: Optional config overrides in key=value format
     """
+    _load_modules(preload_modules)
+
     jobs = _jobs_registry()
     _, configuration = _build_and_configuration()
 
@@ -560,6 +651,12 @@ def run(
     default=None,
     help="Override Volcano job namespace",
 )  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus in the bootstrap script; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -582,6 +679,7 @@ def submit(
     tpu_preemptible: bool | None,
     volcano_image: str | None,
     volcano_namespace: str | None,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -780,6 +878,7 @@ def submit(
         tpu_preemptible_override=tpu_preemptible,
         volcano_image_override=volcano_image,
         volcano_namespace_override=volcano_namespace,
+        preload_modules=_validate_remote_modules(preload_modules) or None,
     )
 
     if not result.ok:
@@ -1292,6 +1391,12 @@ def repl(
     default=True,
     help="Include uncommitted changes (default: --dirty)",
 )  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus in the bootstrap script; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def bootstrap(
     name: str,
@@ -1310,6 +1415,7 @@ def bootstrap(
     cache_size: str | None,
     cache_dir: str | None,
     dirty: bool,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
     uv_targets: tuple[str, ...],
 ) -> None:
@@ -1470,7 +1576,12 @@ def bootstrap(
     )
 
     spec = JobSpec(name=name, project=project, group=group)
-    bootstrap_py_content = _generate_bootstrap(cfg, hardware, spec)
+    bootstrap_py_content = _generate_bootstrap(
+        cfg,
+        hardware,
+        spec,
+        preload_modules=list(preload_modules) if preload_modules else None,
+    )
 
     juicefs_mount = (
         JuiceFSMount(

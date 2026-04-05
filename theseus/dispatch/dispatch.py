@@ -117,6 +117,7 @@ def _generate_bootstrap(
     cfg: DictConfig,
     hardware: HardwareResult,
     spec: JobSpec,
+    preload_modules: list[str] | None = None,
 ) -> str:
     """Generate bootstrap.py script with embedded data."""
     template = BOOTSTRAP_TEMPLATE.read_text()
@@ -125,7 +126,9 @@ def _generate_bootstrap(
     config_yaml = OmegaConf.to_yaml(cfg)
     hardware_json = _serialize_hardware(hardware)
 
-    script = template.replace("__CONFIG_YAML__", config_yaml)
+    preload_block = "\n".join(f"import {m}" for m in (preload_modules or []))
+    script = template.replace("__PRELOAD_IMPORTS__", preload_block)
+    script = script.replace("__CONFIG_YAML__", config_yaml)
     script = script.replace("__HARDWARE_JSON__", hardware_json)
     script = script.replace("__JOB_NAME__", spec.name)
     script = script.replace("__PROJECT__", spec.project or "")
@@ -145,6 +148,7 @@ def _build_stages(
     cfgs: list[DictConfig],
     hardware: HardwareResult,
     spec: JobSpec,
+    preload_modules: list[str] | None = None,
 ) -> tuple[dict[str, str], str]:
     """Build bootstrap .py files and command string for one or more stages.
 
@@ -159,7 +163,9 @@ def _build_stages(
     """
     n = len(cfgs)
     if n == 1:
-        content = _generate_bootstrap(cfgs[0], hardware, spec)
+        content = _generate_bootstrap(
+            cfgs[0], hardware, spec, preload_modules=preload_modules
+        )
         return {"_bootstrap_dispatch.py": content}, "python _bootstrap_dispatch.py"
 
     bootstrap_pys: dict[str, str] = {}
@@ -168,7 +174,9 @@ def _build_stages(
         stage_name = f"{spec.name}_stage{i}"
         stage_spec = JobSpec(name=stage_name, project=spec.project, group=spec.group)
         filename = f"_bootstrap_dispatch_stage{i}.py"
-        content = _generate_bootstrap(cfg, hardware, stage_spec)
+        content = _generate_bootstrap(
+            cfg, hardware, stage_spec, preload_modules=preload_modules
+        )
         bootstrap_pys[filename] = content
         commands.append(f"python {filename}")
 
@@ -193,6 +201,7 @@ def dispatch(
     tpu_preemptible_override: bool | None = None,
     volcano_image_override: str | None = None,
     volcano_namespace_override: str | None = None,
+    preload_modules: list[str] | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -272,7 +281,9 @@ def dispatch(
 
     # 4. Generate bootstrap script(s) (Python scripts that run the job stages)
     logger.debug(f"DISPATCH | generating {n_stages} bootstrap script(s)")
-    bootstrap_pys, command = _build_stages(all_cfgs, solve_result.result, spec)
+    bootstrap_pys, command = _build_stages(
+        all_cfgs, solve_result.result, spec, preload_modules=preload_modules
+    )
 
     # 5. Submit based on host type
     uv_cache_dir = cluster_config.uv_dir
