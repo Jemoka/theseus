@@ -88,6 +88,7 @@ class MoE(Module):
         jax.Array,
         jax.Array,
         jax.Array,
+        jax.Array,
     ]:
         num_tokens, hidden_size = flat_x.shape
 
@@ -113,18 +114,17 @@ class MoE(Module):
             - expert_offsets[sorted_expert_idx]
         )
         keep = slot_idx < capacity
-
-        kept_expert_idx = sorted_expert_idx[keep]
-        kept_slot_idx = slot_idx[keep]
-        kept_token_idx = sorted_token_idx[keep]
-        kept_weights = sorted_weights[keep]
-        kept_x = sorted_x[keep]
+        packed_expert_idx = sorted_expert_idx
+        packed_slot_idx = jnp.minimum(slot_idx, capacity - 1)
+        packed_x = jnp.where(keep[:, None], sorted_x, 0)
 
         expert_inputs = jnp.zeros(
             (self.num_experts, capacity, hidden_size),
             dtype=flat_x.dtype,
         )
-        expert_inputs = expert_inputs.at[kept_expert_idx, kept_slot_idx].set(kept_x)
+        expert_inputs = expert_inputs.at[packed_expert_idx, packed_slot_idx].add(
+            packed_x
+        )
 
         clipped_counts = jnp.minimum(counts, capacity)
         valid_slots = (
@@ -134,30 +134,33 @@ class MoE(Module):
         return (
             expert_inputs,
             valid_slots,
-            kept_expert_idx,
-            kept_slot_idx,
-            kept_token_idx,
-            kept_weights,
+            packed_expert_idx,
+            packed_slot_idx,
+            sorted_token_idx,
+            sorted_weights,
+            keep,
         )
 
     def _combine_expert_outputs(
         self,
         expert_outputs: jax.Array,
-        kept_expert_idx: jax.Array,
-        kept_slot_idx: jax.Array,
-        kept_token_idx: jax.Array,
-        kept_weights: jax.Array,
+        packed_expert_idx: jax.Array,
+        packed_slot_idx: jax.Array,
+        sorted_token_idx: jax.Array,
+        sorted_weights: jax.Array,
+        keep: jax.Array,
         num_tokens: int,
     ) -> jax.Array:
-        kept_outputs = expert_outputs[kept_expert_idx, kept_slot_idx]
-        weighted_outputs = kept_outputs * kept_weights[:, None].astype(
-            kept_outputs.dtype
+        packed_outputs = expert_outputs[packed_expert_idx, packed_slot_idx]
+        weighted_outputs = packed_outputs * sorted_weights[:, None].astype(
+            packed_outputs.dtype
         )
+        weighted_outputs = jnp.where(keep[:, None], weighted_outputs, 0)
         combined = jnp.zeros(
             (num_tokens, expert_outputs.shape[-1]),
             dtype=weighted_outputs.dtype,
         )
-        return combined.at[kept_token_idx].add(weighted_outputs)
+        return combined.at[sorted_token_idx].add(weighted_outputs)
 
     def __call__(self, x: jax.Array, deterministic: bool = False) -> jax.Array:
         """Apply top-k expert routing to ``x`` of shape ``[B, T, H]``."""
@@ -172,10 +175,11 @@ class MoE(Module):
         (
             expert_inputs,
             valid_slots,
-            kept_expert_idx,
-            kept_slot_idx,
-            kept_token_idx,
-            kept_weights,
+            packed_expert_idx,
+            packed_slot_idx,
+            sorted_token_idx,
+            sorted_weights,
+            keep,
         ) = self._pack_assignments(
             flat_x,
             weights,
@@ -187,10 +191,11 @@ class MoE(Module):
         expert_outputs = jnp.where(valid_slots, expert_outputs, 0)
         combined = self._combine_expert_outputs(
             expert_outputs,
-            kept_expert_idx,
-            kept_slot_idx,
-            kept_token_idx,
-            kept_weights,
+            packed_expert_idx,
+            packed_slot_idx,
+            sorted_token_idx,
+            sorted_weights,
+            keep,
             num_tokens,
         )
         return combined.reshape(batch_size, seq_len, hidden_size)
