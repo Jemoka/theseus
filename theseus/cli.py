@@ -106,38 +106,23 @@ def _restoreable_job() -> Any:
 
 
 def _load_modules(modules: tuple[str, ...] | list[str]) -> None:
-    """Import modules by name or file path.
+    """Import modules for local CLI commands.
 
-    Resolution order for each entry:
-    1. If it's an explicit file path (contains ``/`` or ends with ``.py``),
-       load it directly as a file.
-    2. Otherwise, try ``importlib.import_module(name)``.
-    3. If that fails, look for ``name.py`` in the current directory.
+    Explicit file paths are loaded directly. Everything else is treated as a
+    normal Python module import and any import failure is surfaced as-is.
+    Remote bootstrap/submit paths use ``_validate_remote_modules`` separately.
     """
     import importlib
-    import importlib.util
+
+    cwd = str(Path.cwd())
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
     for m in modules:
-        # Explicit file path — load directly
         if "/" in m or m.endswith(".py"):
             _load_module_from_file(m)
             continue
-
-        # Try as a module name first
-        try:
-            importlib.import_module(m)
-            continue
-        except ModuleNotFoundError:
-            pass
-
-        # Fall back to ./name.py
-        local_path = Path(m + ".py")
-        if local_path.exists():
-            _load_module_from_file(str(local_path))
-        else:
-            raise ModuleNotFoundError(
-                f"No module named '{m}' and '{local_path}' not found"
-            )
+        importlib.import_module(m)
 
 
 def _load_module_from_file(path: str) -> None:
@@ -690,6 +675,7 @@ def submit(
     """
     from theseus.dispatch import dispatch, load_dispatch_config
 
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
 
     # Load config file
@@ -1434,6 +1420,7 @@ def bootstrap(
     from theseus.dispatch.slurm import SlurmJob
     from theseus.dispatch.sync import snapshot
 
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
 
     custom_header = """#
