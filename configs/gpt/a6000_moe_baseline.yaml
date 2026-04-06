@@ -1,0 +1,61 @@
+architecture:
+  dtype:
+    param: float32
+    activation: bfloat16
+  n_embd: 512
+  n_layers: 8
+  dropout: 0.0
+  intermediate_size: 1024
+  bias: true
+  rope: true
+  block_size: 512
+  vocab_size: 100288
+  moe:
+    implementation: base
+    experts: 8
+    experts_per_embd: 2
+    capacity_factor: 1.0
+    capacity_round_to: 128
+    bias_update_rate: 0.25
+    bias_smoothing: 1.0
+  layer_norm_eps: 1.0e-05
+  n_head: 8
+eval:
+  evaluations: []
+tokenizer:
+  backend: tiktoken
+  name: cl100k_base
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+logging:
+  plots:
+    save: false
+  report_interval: 32
+  checkpoint_interval: 16384
+  validation_interval: 2048
+  wandb: false
+optimization:
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  lr: 0.0003
+  warmup_pct: 0.005
+  decay_pct: 0.01
+training:
+  batch_size: 64
+  per_device_batch_size: 2
+  tokens: 100000000
+  warmup_pct: 0.01
+  decay_pct: 0.1
+  validation: true
+  evaluate: false
+  dataset:
+  - name: fineweb
+    rate: 1.0
+    style: PMD
+    suffix: ''
+  validation_steps: 2048
+job: moe/train/pretrain
+request:
+  n_shards: 1
