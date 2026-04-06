@@ -4,6 +4,7 @@ debugging mocking infrastructure
 """
 
 import functools
+from typing import Any
 
 import jax
 import flax
@@ -172,13 +173,24 @@ class Mocker:
     def __init__(self) -> None:
         self.key = jax.random.PRNGKey(0)
 
-    def __setattr__(self, name, value):  # type: ignore[no-untyped-def]
-        if not isinstance(value, Module):
-            super().__setattr__(name, value)
-        else:
+    def _wrap_mockable(self, name: str, value: Any) -> Any:
+        if isinstance(value, Module):
             key, self.key = jax.random.split(self.key)
-            mocked = InlineMockLinenModule(name, value, key)  # type: ignore[no-untyped-call]
-            super().__setattr__(name, mocked)
+            return InlineMockLinenModule(name, value, key)  # type: ignore[no-untyped-call]
+        if isinstance(value, list):
+            return [
+                self._wrap_mockable(f"{name}[{i}]", item)
+                for i, item in enumerate(value)
+            ]
+        if isinstance(value, dict):
+            return {
+                k: self._wrap_mockable(f"{name}[{k!r}]", item)
+                for k, item in value.items()
+            }
+        return value
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, self._wrap_mockable(name, value))
 
     def param(self, name, init_fn, *init_args, unbox=True, **init_kwargs):  # type: ignore[no-untyped-def]
         # unbox is a dead param

@@ -31,7 +31,7 @@ class MyModel(Module):
         ...
 ```
 
-`Mocker.__setattr__` intercepts assignments of `nn.Module` instances and wraps each one in a shape-inference stub. Plain Python values (strings, ints, etc.) pass through unchanged. Each wrapped module gets its own RNG key split from the Mocker's internal key so successive calls produce different values.
+`Mocker.__setattr__` intercepts assignments of `nn.Module` instances and wraps each one in a shape-inference stub. It also recursively traverses `list` and `dict` values so nested modules are mocked in place while plain Python values (strings, ints, etc.) pass through unchanged. Each wrapped module gets its own RNG key split from the Mocker's internal key so successive calls produce different values.
 
 
 ## Usage
