@@ -36,7 +36,7 @@ optimization:
   decay_pct: 0.01
 training:
   batch_size: 4
-  per_device_batch_size: -1
+  per_device_batch_size: 4
   tokens: 1024
   warmup_pct: 0.01
   decay_pct: 0.1
