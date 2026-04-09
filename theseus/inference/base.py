@@ -15,7 +15,6 @@ from typing import (
     List,
     Union,
     TYPE_CHECKING,
-    cast,
 )
 from typing_extensions import Self
 
@@ -136,18 +135,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             return logits, loss, {}
 
     @staticmethod
-    def _init_template_state(model: M, block_size: int) -> train_state.TrainState:
-        import optax
-
+    def _init_template_params(model: M, block_size: int) -> Any:
+        """Return a params pytree (with sharding) for checkpoint restoration."""
         key = jax.random.PRNGKey(0)
         dummy_input = jnp.zeros((1, block_size), dtype=jnp.int32)
-        params = model.init(key, dummy_input)["params"]
-        state = train_state.TrainState.create(  # type: ignore[no-untyped-call]
-            apply_fn=model.apply,
-            params=params,
-            tx=optax.identity(),
-        )
-        return cast(train_state.TrainState, state)
+        return model.init(key, dummy_input)["params"]
 
     @classmethod
     def from_trainer(cls, trainer: "BaseTrainer[Any, Any]") -> Self:
@@ -196,20 +188,38 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         self.replicas = self.spec.topology.replicas
         self.local_replicas = self.spec.topology.local_replicas
 
-        # Initialize template state (for checkpoint structure)
-        template_state = self._init_template_state(
+        # Build a params-only template for checkpoint restoration.
+        # We avoid building a full TrainState because the on-disk checkpoint
+        # may have a different optimizer state tree (e.g. AdamW) that doesn't
+        # match our inference-only template.  Restoring just params sidesteps
+        # the mismatch entirely.
+        template_params = self._init_template_params(
             model, int(cfg.architecture.block_size)
         )
 
-        # Compute sharding
+        # Compute sharding from the params template
+        import optax
+
+        template_state = train_state.TrainState.create(  # type: ignore[no-untyped-call]
+            apply_fn=model.apply,
+            params=template_params,
+            tx=optax.identity(),
+        )
         self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore[attr-defined]
             flax.linen.get_partition_spec(template_state),
             self.mesh,
             rules=tuple(model.sharding),
         )
 
-        # Use CheckpointedJob's restoration infrastructure
-        state, metadata = self.get_tree_and_metadata_from_path(rel_path, template_state)
+        # Restore only params from checkpoint (partial=True skips opt_state)
+        params_tree = {"params": template_params}
+        restored, metadata = self.get_tree_and_metadata_from_path(
+            rel_path, params_tree, partial=True
+        )
+
+        # Reconstruct TrainState with restored params
+        restored_dict: dict[str, Any] = restored  # type: ignore[assignment]
+        state = template_state.replace(params=restored_dict["params"])
         self.state = jax.device_put(state, self.state_sharding)
 
         self.per_device_batch_size = cfg.training.per_device_batch_size

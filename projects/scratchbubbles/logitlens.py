@@ -113,8 +113,8 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                     sample_ids, embed_source_index, mode="clip"
                 ),
                 "source_valid": jnp.take(sample_mask, embed_source_index, mode="clip"),
-                "top_ids": embed_top_ids[0],
-                "top_logits": embed_top_logits[0],
+                "top_ids": embed_top_ids,
+                "top_logits": embed_top_logits,
             }
 
             for layer_idx in range(self.model.n_layers):
@@ -140,8 +140,8 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                     "source_valid": jnp.take(
                         sample_mask, block_source_index, mode="clip"
                     ),
-                    "top_ids": block_top_ids[0],
-                    "top_logits": block_top_logits[0],
+                    "top_ids": block_top_ids,
+                    "top_logits": block_top_logits,
                 }
 
             return (

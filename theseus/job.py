@@ -147,9 +147,20 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
     # -- load ----------------------------------------------------------
 
     def get_tree_and_metadata_from_path(
-        self, rel_path: str | Path, template_tree: PyTree[Any]
+        self,
+        rel_path: str | Path,
+        template_tree: PyTree[Any],
+        partial: bool = False,
     ) -> Tuple[PyTree[Any], Dict[str, Any]]:
-        """Load tree and metadata from ``rel_path`` under checkpoints_dir."""
+        """Load tree and metadata from ``rel_path`` under checkpoints_dir.
+
+        Args:
+            rel_path: Relative path under checkpoints_dir.
+            template_tree: Template pytree for shape/sharding info.
+            partial: If True, only restore leaves present in ``template_tree``
+                and silently skip mismatched subtrees (e.g. optimizer state
+                when loading a trainer checkpoint into an inference template).
+        """
         path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
 
         try:
@@ -160,15 +171,32 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         except EOFError:
             self.key = jax.random.PRNGKey(0)
 
-        checkpointer = ocp.StandardCheckpointer()
-
         def _to_sharded_struct(x: Any) -> Any:
             if isinstance(x, jax.Array):
                 return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding)  # type: ignore
             return x
 
         sharded_target = jax.tree_util.tree_map(_to_sharded_struct, template_tree)
-        restored = checkpointer.restore(path / "checkpoint", target=sharded_target)
+
+        if partial:
+            restore_args = jax.tree_util.tree_map(
+                lambda x: ocp.ArrayRestoreArgs(sharding=x.sharding)
+                if isinstance(x, jax.ShapeDtypeStruct) and x.sharding is not None
+                else ocp.RestoreArgs(),
+                sharded_target,
+            )
+            checkpointer = ocp.Checkpointer(ocp.PyTreeCheckpointHandler())
+            restored = checkpointer.restore(
+                path / "checkpoint",
+                args=ocp.args.PyTreeRestore(
+                    item=sharded_target,
+                    restore_args=restore_args,
+                    partial_restore=True,
+                ),
+            )
+        else:
+            checkpointer = ocp.StandardCheckpointer()
+            restored = checkpointer.restore(path / "checkpoint", target=sharded_target)
 
         with open(path / "config.json", "r") as df:
             data = json.load(df)
@@ -315,17 +343,18 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
         logger.debug("CHECKPOINT | restoring checkpointed job at {}", path)
 
-        # Load job spec (only JobSpec fields, not ExecutionSpec)
-        # Uses JobSpec.model_fields to be extensible - new fields added to JobSpec
-        # will automatically be included without modifying this code
-        with open(path / "job.json", "r") as df:
-            job_spec_data = json.load(df)
-
-        # Create new ExecutionSpec with loaded JobSpec fields
-        for k, v in job_spec_data.items():
-            setattr(spec, k, v)
+        # Load job spec from checkpoint. When runtime_cfg is provided this is
+        # a new job restoring from someone else's checkpoint (--restore), so we
+        # keep the caller's spec identity (name, project, group).  Without
+        # runtime_cfg this is an idempotent resume of the *same* job, so we
+        # restore the original spec fields.
+        if runtime_cfg is None:
+            with open(path / "job.json", "r") as df:
+                job_spec_data = json.load(df)
+            for k, v in job_spec_data.items():
+                setattr(spec, k, v)
+            logger.debug("CHECKPOINT | restored job spec from checkpoint")
         new_spec_obj = spec
-        logger.debug("CHECKPOINT | restored job spec")
 
         # load config now from config.yaml
         cfg = OmegaConf.load(path / "config.yaml")
