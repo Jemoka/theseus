@@ -70,7 +70,7 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
         data_shard = NamedSharding(self.mesh, pspec)
         top_k = self.args.top_k
 
-        def analyze_one_batch(state: Any, global_batch: Any) -> tuple[Any, Any, Any]:
+        def forward_pass(state: Any, global_batch: Any) -> tuple[Any, Any, Any]:
             batch_dict = cast(Dict[str, jax.Array], global_batch)
             microbatch = {k: v[0] for k, v in batch_dict.items()}
 
@@ -93,28 +93,18 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
             )
 
             intermediates = cast(Mapping[str, Any], mutated["intermediates"])
-            layers: Dict[str, Dict[str, jax.Array]] = {}
+
+            # Extract per-layer residuals and token indices (variable seq len)
+            layer_residuals: Dict[str, Dict[str, jax.Array]] = {}
 
             embed_capture = intermediates["embed"][0]
             embed_residual, embed_token_index = self._split_capture(
                 embed_capture,
                 default_token_index,
             )
-            embed_logits = self.model.apply(
-                {"params": state.params},
-                embed_residual[:1],
-                method=self.model.unembed,
-            )[0]
-            embed_top_logits, embed_top_ids = self._top_k_logits(embed_logits, top_k)
-            embed_source_index = embed_token_index[0]
-            layers["embed"] = {
-                "source_index": embed_source_index,
-                "source_token_id": jnp.take(
-                    sample_ids, embed_source_index, mode="clip"
-                ),
-                "source_valid": jnp.take(sample_mask, embed_source_index, mode="clip"),
-                "top_ids": embed_top_ids,
-                "top_logits": embed_top_logits,
+            layer_residuals["embed"] = {
+                "residual": embed_residual[:1],
+                "token_index": embed_token_index[0],
             }
 
             for layer_idx in range(self.model.n_layers):
@@ -123,43 +113,47 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                     block_capture,
                     default_token_index,
                 )
-                block_logits = self.model.apply(
-                    {"params": state.params},
-                    block_residual[:1],
-                    method=self.model.unembed,
-                )[0]
-                block_top_logits, block_top_ids = self._top_k_logits(
-                    block_logits, top_k
-                )
-                block_source_index = block_token_index[0]
-                layers[f"block_{layer_idx:02d}"] = {
-                    "source_index": block_source_index,
-                    "source_token_id": jnp.take(
-                        sample_ids, block_source_index, mode="clip"
-                    ),
-                    "source_valid": jnp.take(
-                        sample_mask, block_source_index, mode="clip"
-                    ),
-                    "top_ids": block_top_ids,
-                    "top_logits": block_top_logits,
+                layer_residuals[f"block_{layer_idx:02d}"] = {
+                    "residual": block_residual[:1],
+                    "token_index": block_token_index[0],
                 }
 
             return (
                 {"input_ids": sample_ids, "input_valid": sample_mask},
-                layers,
+                layer_residuals,
                 {"loss": loss},
             )
 
-        analyze = jax.jit(
-            analyze_one_batch,
+        forward = jax.jit(
+            forward_pass,
             in_shardings=(self.state_sharding, data_shard),
             out_shardings=(None, None, None),
         )
 
-        sample_meta, layers, metrics = analyze(self.state, batch)
+        sample_meta, layer_residuals, metrics = forward(self.state, batch)
         sample_meta_np = jax.tree_util.tree_map(np.asarray, sample_meta)
-        layers_np = jax.tree_util.tree_map(np.asarray, layers)
         metrics_np = jax.tree_util.tree_map(np.asarray, metrics)
+
+        # Unembed each layer's residual independently (variable seq len per layer)
+        layer_names = ["embed"] + [f"block_{i:02d}" for i in range(self.model.n_layers)]
+        layers_decoded: List[Dict[str, Any]] = []
+        for layer_name in layer_names:
+            residual = layer_residuals[layer_name]["residual"]  # (1, T_layer, C)
+            logits = self.model.apply(
+                {"params": self.state.params},
+                residual,
+                method=self.model.unembed,
+            )[0]  # (T_layer, V)
+            top_logits_arr, top_ids_arr = self._top_k_logits(logits, top_k)
+            token_index = layer_residuals[layer_name]["token_index"]
+            layers_decoded.append(
+                {
+                    "name": layer_name,
+                    "top_ids": np.asarray(top_ids_arr),
+                    "top_logits": np.asarray(top_logits_arr),
+                    "token_index": np.asarray(token_index),
+                }
+            )
 
         if not self.main_process():
             return
@@ -188,7 +182,7 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                 "valid": [bool(is_valid) for is_valid in input_valid.tolist()],
                 "tokens": decoded_input_tokens,
             },
-            "layers": {},
+            "layers": [],
         }
 
         logger.info(
@@ -207,20 +201,22 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                 self._format_token(tokenizer, int(token_id)),
             )
 
-        for layer_name in [
-            "embed",
-            *[f"block_{i:02d}" for i in range(self.model.n_layers)],
-        ]:
-            layer = cast(Dict[str, np.ndarray], layers_np[layer_name])
-            logger.info("LAYER | {}", layer_name)
+        for layer in layers_decoded:
+            layer_name = layer["name"]
+            token_index = layer["token_index"]
+            top_ids_np = layer["top_ids"]
+            top_logits_np = layer["top_logits"]
+            seq_len = token_index.shape[0]
+
+            logger.info("LAYER | {} | seq_len={}", layer_name, seq_len)
             layer_rows: list[dict[str, Any]] = []
 
-            for pos in range(layer["source_index"].shape[0]):
-                source_index = int(layer["source_index"][pos])
-                source_token_id = int(layer["source_token_id"][pos])
-                source_valid = bool(layer["source_valid"][pos])
-                top_ids = cast(Sequence[int], layer["top_ids"][pos].tolist())
-                top_logits = cast(Sequence[float], layer["top_logits"][pos].tolist())
+            for pos in range(seq_len):
+                source_index = int(token_index[pos])
+                source_token_id = int(input_ids[source_index])
+                source_valid = bool(input_valid[source_index])
+                top_ids = cast(Sequence[int], top_ids_np[pos].tolist())
+                top_logits = cast(Sequence[float], top_logits_np[pos].tolist())
                 topk = [
                     {
                         "token_id": int(pred_id),
@@ -255,7 +251,13 @@ class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
                     self._format_token(tokenizer, source_token_id),
                     preds,
                 )
-            results_payload["layers"][layer_name] = layer_rows
+            results_payload["layers"].append(
+                {
+                    "name": layer_name,
+                    "seq_len": seq_len,
+                    "positions": layer_rows,
+                }
+            )
 
         with self.spec.result(self._result_name(), main_process_only=True) as f:
             if f is not None:
