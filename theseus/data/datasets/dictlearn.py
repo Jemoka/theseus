@@ -50,7 +50,7 @@ from theseus.registry import dataset
 # ---------------------------------------------------------------------------
 
 N_FUNCTIONS = 32
-N_VALUES = 1024
+N_VALUES = 64
 FIXED_SEED = 7
 TRAIN_SEQUENCES = 100_000
 VAL_SEQUENCES = 500
