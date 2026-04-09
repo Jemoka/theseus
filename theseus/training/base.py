@@ -425,7 +425,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         per = self.per_device_batch_size * self.local_replicas
 
         def _reshape(arr: np.ndarray) -> np.ndarray:
-            return arr.reshape(-1, per, arr.shape[-1])
+            usable = (arr.shape[0] // per) * per
+            return arr[:usable].reshape(-1, per, arr.shape[-1])
 
         return type_cast(PyTree[np.ndarray], jax.tree_util.tree_map(_reshape, batch))
 

@@ -91,14 +91,16 @@ class Scratchbubbles(Thoughtbubbles):
             for i in intermediates["plots"].values()
             if isinstance(i, dict)
         ]
-        max_seq_len = max([i.shape[-1] for i in weights])
+        max_queries = max([i.shape[0] for i in weights])
+        max_keys = max([i.shape[-1] for i in weights])
 
-        # pad weights to max_seq_len so we can stack them
+        # pad weights to max shape so we can stack them
         padded_weights = []
         for w in weights:
-            pad_width = max_seq_len - w.shape[-1]
-            if pad_width > 0:
-                w = jnp.pad(w, ((0, 0), (0, pad_width)), constant_values=-jnp.inf)
+            pad_q = max_queries - w.shape[0]
+            pad_k = max_keys - w.shape[-1]
+            if pad_q > 0 or pad_k > 0:
+                w = jnp.pad(w, ((0, pad_q), (0, pad_k)), constant_values=-jnp.inf)
             padded_weights.append(w)
 
         # aaand softmax

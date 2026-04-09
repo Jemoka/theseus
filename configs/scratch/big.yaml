@@ -2,27 +2,28 @@ architecture:
   dtype:
     param: float32
     activation: bfloat16
-  n_embd: 128
-  n_layers: 6
+  n_embd: 2048
+  n_layers: 32
   bias: true
   dropout: 0.0
-  n_head: 4
-  block_size: 16
+  n_head: 16
+  block_size: 512
   max_block_size: 1024
   use_fork_channel: true
   rope: true
-  vocab_size: 1059
+  vocab_size: 100288
   fork:
-  - 2
-  - 4
-  layer_norm_eps: 1.0e-05
+  - 3
+  - 6
+  - 9
   intermediate_size: -1
+  layer_norm_eps: 1.0e-05
 eval:
   evaluations:
-  - dictlearn_16
+  - blimp
 tokenizer:
-  backend: trivial
-  name: trivial
+  backend: tiktoken
+  name: cl100k_base
   huggingface:
     use_fast: true
     use_remote_code: false
@@ -41,15 +42,15 @@ optimization:
   warmup_pct: 0.005
   decay_pct: 0.01
 training:
-  batch_size: 32
+  batch_size: 512
   per_device_batch_size: -1
-  tokens: 40000000000
+  tokens: 36000000000
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true
-  evaluate: true
+  evaluate: false
   dataset:
-  - name: dictlearn_16
+  - name: fineweb
     rate: 1.0
     style: PMD
     suffix: ''
