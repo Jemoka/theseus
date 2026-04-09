@@ -689,7 +689,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         train_step = jax.jit(
             self.train_step,
             in_shardings=(self.state_sharding, data_shard, None, None),
-            out_shardings=(self.state_sharding, None, None),
+            out_shardings=(self.state_sharding, None, None, None),
             donate_argnums=(0,),
         )
         return train_step
