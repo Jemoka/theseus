@@ -505,7 +505,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: PyTree[jax.Array],  # (S, B, T) each
         key: jax.Array,
         accumulate_steps: int,
-    ) -> Tuple[train_state.TrainState, jax.Array, Any]:
+    ) -> Tuple[train_state.TrainState, jax.Array, Any, jax.Array]:
         """Compute gradients over S micro-batches and apply one optimizer step.
 
         Args:
@@ -569,9 +569,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         # take the last micro-batch's metadata
         last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
 
+        grad_norm: jax.Array = optax.global_norm(grad_sum)
+
         state: PyTree[jax.Array] = state.apply_gradients(grads=grad_sum)  # type: ignore
 
-        return state, loss_sum, last_meta
+        return state, loss_sum, last_meta, grad_norm
 
     @classmethod
     def val_step(
@@ -681,13 +683,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             jax.Array,
             int,
         ],
-        Tuple[train_state.TrainState, jax.Array, Any],
+        Tuple[train_state.TrainState, jax.Array, Any, jax.Array],
     ]:
         data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
         train_step = jax.jit(
             self.train_step,
             in_shardings=(self.state_sharding, data_shard, None, None),
-            out_shardings=(self.state_sharding, None, None),
+            out_shardings=(self.state_sharding, None, None, None),
             donate_argnums=(0,),
         )
         return train_step
@@ -709,7 +711,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             logger.debug("DATA | {} | PLACED", indx)
 
             self.dropout_key, subkey = jax_random.split(self.dropout_key)
-            self.state, loss, train_meta = train_step(
+            self.state, loss, train_meta, grad_norm = train_step(
                 self.state,
                 batch,
                 subkey,
@@ -735,6 +737,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                         * self.args.block_size
                     )
                     train_metrics["train/loss"] = loss_val
+                    train_metrics["train/grad_norm"] = float(jax.device_get(grad_norm))
                     train_metrics.update(jax.device_get(train_meta))
 
                     wandb.log(
