@@ -902,10 +902,6 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 self.best_val_score_,
             )
 
-    def load(self, suffix: Path) -> None:
-        """Load from this job's own checkpoint. Wrapper for backwards compat."""
-        self.restore(suffix)
-
     def run(self) -> None:
         """main entry point to run training, called on all nodes"""
         self.train()
