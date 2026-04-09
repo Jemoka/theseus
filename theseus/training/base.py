@@ -737,19 +737,18 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                         * self.args.block_size
                     )
                     train_metrics["train/loss"] = loss_val
-                    grad_norm_val = float(jax.device_get(grad_norm))
-                    train_metrics["train/grad_norm"] = grad_norm_val
+                    train_metrics["train/grad_norm"] = float(jax.device_get(grad_norm))
                     train_metrics.update(jax.device_get(train_meta))
+
                     wandb.log(
                         train_metrics,
                         step=indx // self.accumulate_steps,
                     )
                     logger.info(
-                        "TRAIN | {}/{} | loss {} | grad_norm {}",
+                        "TRAIN | {}/{} | loss {}",
                         indx // self.accumulate_steps,
                         self.total_batches // self.accumulate_steps,
                         loss_val,
-                        grad_norm_val,
                     )
                 multihost_utils.sync_global_devices("report:post")
 
