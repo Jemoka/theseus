@@ -188,22 +188,22 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         return job
 
     @classmethod
-    def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
+    def from_checkpoint_path(
+        cls, rel_path: str | Path, spec: ExecutionSpec
     ) -> Tuple[Self, Any]:
-        """Load InferenceJob from checkpoint using CheckpointedJob infrastructure.
+        """Load InferenceJob from ``rel_path`` under checkpoints_dir.
 
         Uses cls.MODEL for model initialization and sharding.
-        Calls get_tree_and_metadata() for checkpoint restoration.
+        Calls get_tree_and_metadata_from_path() for checkpoint restoration.
 
         Args:
-            suffix: Checkpoint suffix
+            rel_path: Relative path under checkpoints_dir
             spec: ExecutionSpec with topology
 
         Returns:
             (job, config) tuple
         """
-        path = CheckpointedJob._get_checkpoint_path(spec, suffix)
+        path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
         logger.debug("CHECKPOINT | loading {} from {}", cls.__name__, path)
 
         # Load config (we use spec's name/group/project - this is a new job, not a restoration)
@@ -236,7 +236,9 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
             )
 
             # Use CheckpointedJob's restoration infrastructure
-            state, metadata = job.get_tree_and_metadata(suffix, template_state)
+            state, metadata = job.get_tree_and_metadata_from_path(
+                rel_path, template_state
+            )
             job.state = jax.device_put(state, job.state_sharding)
 
             job.per_device_batch_size = cfg.training.per_device_batch_size
@@ -244,6 +246,15 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
 
         logger.debug("CHECKPOINT | loaded {}", spec.name)
         return job, cfg
+
+    @classmethod
+    def from_checkpoint(
+        cls, suffix: str | Path, spec: ExecutionSpec
+    ) -> Tuple[Self, Any]:
+        """Load from this job's own checkpoint. Wrapper for backwards compat."""
+        return cls.from_checkpoint_path(
+            CheckpointedJob._get_checkpoint_rel_path(spec, suffix), spec
+        )
 
     @staticmethod
     def pad(

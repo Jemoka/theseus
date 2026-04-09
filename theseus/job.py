@@ -251,6 +251,20 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
             self._get_checkpoint_rel_path(self.spec, suffix), tree, metadata
         )
 
+    # -- metadata ----------------------------------------------------------
+    def get_metadata_from_path(self, rel_path: str | Path) -> Dict[str, Any]:
+        """Load metadata only from ``rel_path`` under checkpoints_dir."""
+        path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
+        with open(path / "config.json", "r") as df:
+            data: Dict[str, Any] = json.load(df)
+        return data
+
+    def get_metadata(self, suffix: str | Path) -> Dict[str, Any]:
+        """Load metadata only from this job's own checkpoint. Wrapper for backwards compat."""
+        return self.get_metadata_from_path(
+            self._get_checkpoint_rel_path(self.spec, suffix)
+        )
+
 
 class RestoreableJob(CheckpointedJob[C], Generic[C]):
     @abstractmethod
