@@ -1,32 +1,45 @@
 architecture:
-  rope: true
-  n_layers: 6
+  dtype:
+    param: float32
+    activation: bfloat16
   n_embd: 128
+  bias: true
+  layer_norm_eps: 1.0e-05
+  n_layers: 6
+  rope: true
   block_size: 16
   dropout: 0.0
-  vocab_size: 1059
+  vocab_size: 99
   max_block_size: 1024
   fork:
   - 2
   - 4
-  bias: true
+  intermediate_size: -1
   n_head: 4
   use_fork_channel: true
-  vram_calib_factor: 1.0
 eval:
   evaluations:
-  - dictlearn_16_v1024
+  - dictlearn_16_v64
 tokenizer:
   backend: trivial
   name: trivial
   huggingface:
     use_fast: true
     use_remote_code: false
+logging:
+  plots:
+    save: false
+  report_interval: 32
+  checkpoint_interval: 16384
+  validation_interval: 2048
+  wandb: true
 optimization:
   weight_decay: 0.1
   beta1: 0.9
   beta2: 0.95
   lr: 0.0003
+  warmup_pct: 0.005
+  decay_pct: 0.01
 training:
   batch_size: 32
   per_device_batch_size: -1
@@ -36,16 +49,11 @@ training:
   validation: true
   evaluate: true
   dataset:
-  - name: dictlearn_16_v1024
+  - name: dictlearn_16_v64
     rate: 1.0
     style: PMD
     suffix: ''
   validation_steps: 2048
-logging:
-  report_interval: 32
-  checkpoint_interval: 16384
-  validation_interval: 2048
-  wandb: true
+job: scratchbubbles/train/pretrain
 request:
   n_shards: 1
-job: thoughtbubbles/train/pretrain

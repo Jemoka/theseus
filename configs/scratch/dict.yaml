@@ -19,7 +19,7 @@ architecture:
   intermediate_size: -1
 eval:
   evaluations:
-  - dictlearn_16
+  - dictlearn_16_v1024
 tokenizer:
   backend: trivial
   name: trivial
@@ -49,7 +49,7 @@ training:
   validation: true
   evaluate: true
   dataset:
-  - name: dictlearn_16
+  - name: dictlearn_16_v1024
     rate: 1.0
     style: PMD
     suffix: ''

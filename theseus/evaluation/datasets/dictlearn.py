@@ -4,9 +4,16 @@ Feeds each val sequence through the model and checks whether the argmax
 prediction at the SEP position equals the correct result token.
 
 See ``theseus.data.datasets.dictlearn`` for the full dataset description.
+
+Registered variants mirror the dataset registry:
+- ``dictlearn_16``, ``dictlearn_512`` (default, 64 values)
+- ``dictlearn_{16,512}_v{32,64,128,256,512,1024}``
 """
 
-from theseus.data.datasets.dictlearn import DictLearn16, DictLearn512
+from theseus.data.datasets.dictlearn import (
+    N_VALUES_SWEEP,
+    _registry as _ds_registry,
+)
 from theseus.evaluation import EncodingEvaluation
 from theseus.registry import evaluation
 
@@ -47,17 +54,30 @@ class _DictLearnEvalBase(EncodingEvaluation):
         return expected == y_hat
 
 
-@evaluation("dictlearn_16")
-class DictLearnEval16(_DictLearnEvalBase):
-    """Accuracy evaluation on the dictlearn_16 val split."""
+def _make_eval_cls(name: str, ds_cls: type, eval_name: str) -> type:
+    return type(
+        name,
+        (_DictLearnEvalBase,),
+        {"_ds_cls": ds_cls, "_eval_name": eval_name},
+    )
 
-    _ds_cls = DictLearn16
-    _eval_name = "dictlearn_16"
 
+_SEQ_LENGTHS = [16, 512]
 
-@evaluation("dictlearn_512")
-class DictLearnEval512(_DictLearnEvalBase):
-    """Accuracy evaluation on the dictlearn_512 val split."""
+for _sl in _SEQ_LENGTHS:
+    # Default variant
+    _default_name = f"dictlearn_{_sl}"
+    _default_cls = _make_eval_cls(
+        f"DictLearnEval{_sl}", _ds_registry[_default_name], _default_name
+    )
+    evaluation(_default_name)(_default_cls)
 
-    _ds_cls = DictLearn512
-    _eval_name = "dictlearn_512"
+    # Sweep variants
+    for _nv in N_VALUES_SWEEP:
+        _variant_name = f"dictlearn_{_sl}_v{_nv}"
+        _variant_cls = _make_eval_cls(
+            f"DictLearnEval{_sl}V{_nv}",
+            _ds_registry[_variant_name],
+            _variant_name,
+        )
+        evaluation(_variant_name)(_variant_cls)
