@@ -184,6 +184,19 @@ theseus checkpoints <NAME> <OUT_PATH> [-p PROJECT] [-g GROUP]
 theseus restore <NAME> <CHECKPOINT> <OUT_PATH> [-p PROJECT] [-g GROUP]
 ```
 
+## Output paths
+
+The output path for `theseus run` should be the **root directory** (e.g. `~/theseus`), not a nested per-job path. The job itself creates subdirectories under `<root>/data/<dataset_name>/` etc. If you point output to `~/theseus/data/mydata`, you'll get double-nesting like `~/theseus/data/mydata/data/mydata/`.
+
+For tokenization jobs: `uv run theseus run <name> <config> ~/theseus`
+The output lands at `~/theseus/data/<dataset_name>/train.bin` etc.
+
+## TPU dispatch
+
+- TPU dispatch does **not** support `per_device_batch_size=-1` (AUTO_BATCH). You must set an explicit `per_device_batch_size` via config or override.
+- TPU pods typically need `n_shards > 1` for tensor parallelism (e.g. `--n_shards 4` for v4-32).
+- Pass per_device_batch_size as a CLI override: `training.per_device_batch_size=4`
+
 ## How to help the user
 
 ### When the user wants to create or edit a config
@@ -191,12 +204,13 @@ theseus restore <NAME> <CHECKPOINT> <OUT_PATH> [-p PROJECT] [-g GROUP]
 1. **Always search first.** Before creating anything, look through `configs/` for an existing config that matches what the user needs. Use glob and grep to search by job name, dataset, chip, or keywords. There are many configs already — the right one probably exists or is close enough to adapt.
 2. If a close match exists, read it, propose edits or overrides, and use it as-is or as a `-p / --previous` base.
 3. Only create a new config if nothing suitable exists. New configs go in `configs/` under the appropriate subdirectory (e.g. `configs/gpt/`, `configs/continual/`). Use `theseus configure` to generate a skeleton from the job's schema, then edit as needed.
+4. **Always use `theseus configure`** to generate new configs rather than writing YAML by hand. Use `-p` to base on an existing config and overrides to change fields.
 
 ### When the user wants to run something locally
 
 Construct a `theseus run` command. Make sure:
 - The YAML exists and has a `job` key (or use `-j`)
-- The output path makes sense
+- The output path is the **root directory** (e.g. `~/theseus`), not a per-job subdirectory
 - Any overrides are in `key=value` dot notation
 
 ### When the user wants to dispatch to a cluster
@@ -213,3 +227,21 @@ Job names are slash-separated paths like `gpt/train/pretrain` or `continual/trai
 ### When constructing commands
 
 Always show the full command to the user before running it. These commands can launch real compute jobs that cost money — never run `theseus submit`, `theseus repl`, or `theseus bootstrap` without the user seeing and confirming the command first.
+
+### Dispatching sweeps
+
+When dispatching many related jobs (e.g. a sweep over a parameter):
+
+1. **Generate configs with `theseus configure`** in a loop, using `-p` to base on an existing config and overrides for the swept parameter. Name configs systematically (e.g. `dict_v32.yaml`, `dict_v128.yaml`).
+2. **Tokenize data first** if the sweep introduces new dataset variants. Run tokenization locally with `theseus run` pointing to the root output dir.
+3. **Dispatch in parallel** using shell backgrounding (`&` + `wait`). Group by model variant × sweep parameter.
+4. **Keep naming consistent**: job names like `{model}_dict_v{N}`, configs in the appropriate subdirectory (`configs/gpt/`, `configs/scratch/`, `configs/forking/`).
+5. When sweeping a parameter that affects vocab_size (like n_values in dictlearn), make sure `architecture.vocab_size` in the config matches the dataset's actual vocab size.
+
+### Common hardware presets
+
+| Use case | Chip | Count | Memory | Notes |
+|----------|------|-------|--------|-------|
+| Small/dict experiments | a6000 | 1 | 32G | Default for quick runs |
+| Big GPU runs | a100-sxm4-80gb | 4 | 128G | For ~1.8B models |
+| Big TPU runs | tpu-v4 | 32 | 32G | Needs explicit per_device_batch_size and n_shards=4 |

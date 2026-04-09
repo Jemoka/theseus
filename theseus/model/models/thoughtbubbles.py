@@ -44,11 +44,18 @@ class Thoughtbubbles(GPT):
 
         ### plot cumulative scores
         scores = [
-            i["new_cumulative_scores"]
+            i["new_cumulative_scores"][0][0]
             for i in intermediates["plots"].values()
             if isinstance(i, dict)
         ]
-        scores = jnp.exp(jnp.stack(jnp.array(scores))[:, 0, 0])  # type: ignore
+        max_len = max(s.shape[-1] for s in scores)
+        padded = []
+        for s in scores:
+            pad_width = max_len - s.shape[-1]
+            if pad_width > 0:
+                s = jnp.pad(s, (0, pad_width), constant_values=-jnp.inf)
+            padded.append(s)
+        scores = jnp.exp(jnp.stack(padded))  # type: ignore
         fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot(111)
         ax = sns.heatmap(np.array(scores).astype(np.float32), ax=ax)
