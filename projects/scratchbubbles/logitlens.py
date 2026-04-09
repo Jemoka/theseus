@@ -1,78 +1,74 @@
 import json
-from typing import Any, Dict, Mapping, Sequence, cast
+from dataclasses import dataclass
+from typing import Any, Dict, List, Mapping, Sequence, cast
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax.sharding import NamedSharding, PartitionSpec as P
+from jax.experimental import multihost_utils
 from loguru import logger
 
 from theseus.base import Axis
+from theseus.config import field
 from theseus.data.tokenizer import Tokenizer, get_tokenizer
-from theseus.experiments.models.forking import PretrainScratchbubbles
+from theseus.inference.base import InferenceJob
 from theseus.model.block.forking import ThoughtBlock
 from theseus.model.models.scratchbubbles import Scratchbubbles
 from theseus.registry import job
+from theseus.training.flywheel.strategy import Strategy, Sampling, DatasetStyle
+
+
+@dataclass
+class LogitLensConfig:
+    top_k: int = field("analysis/top_k", default=5)
+    block_size: int = field("architecture/block_size", default=512)
+    per_device_batch_size: int = field("training/per_device_batch_size", default=-1)
+    validation_steps: int = field("training/validation_steps", default=2048)
+    datasets: List[Sampling] = field(
+        "training/dataset",
+        default_factory=lambda: [
+            Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)
+        ],
+    )
 
 
 @job("scratchbubbles/analysis/logitlens")
-class SBLogitLens(PretrainScratchbubbles):
-    TOP_K = 5
-    CHECKPOINT = "scratchbubbles/g3-weight_update-fix1/pretrain_scratch_small/best"
-
-    @staticmethod
-    def _capture_filter(module: Any, method_name: str) -> bool:
-        if isinstance(module, Scratchbubbles):
-            return method_name == "embed"
-        return isinstance(module, ThoughtBlock) and method_name == "__call__"
-
-    @staticmethod
-    def _top_k_logits(logits: jax.Array, k: int) -> tuple[jax.Array, jax.Array]:
-        logits_f32 = logits.astype(jnp.float32)
-        return jax.lax.top_k(logits_f32, min(k, logits_f32.shape[-1]))
-
-    @staticmethod
-    def _format_token(tokenizer: Tokenizer | None, token_id: int) -> str:
-        if tokenizer is None:
-            return repr(f"<tok:{token_id}>")
-        try:
-            text = tokenizer.decode([token_id])
-        except Exception:
-            text = f"<decode_error:{token_id}>"
-
-        text = (
-            text.replace("\\", "\\\\")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        )
-        if len(text) > 40:
-            text = text[:37] + "..."
-        return repr(text)
+class SBLogitLens(InferenceJob[LogitLensConfig, Scratchbubbles]):
+    MODEL = Scratchbubbles
 
     @classmethod
-    def _split_capture(
-        cls, captured: Any, fallback_token_index: jax.Array
-    ) -> tuple[jax.Array, jax.Array]:
-        if isinstance(captured, tuple):
-            residual = cast(jax.Array, captured[0])
-            if len(captured) >= 3:
-                return residual, cast(jax.Array, captured[2])
-            return residual, fallback_token_index
-        return cast(jax.Array, captured), fallback_token_index
-
-    @classmethod
-    def _result_name(cls) -> str:
-        return f"{cls.MODEL.__name__.lower()}_logitlens.json"
+    def config(cls) -> List[Any]:
+        return [LogitLensConfig]
 
     def run(self) -> None:
-        self.restore_from_path(self.CHECKPOINT)
-
-        batch = self._to_global(self._reshape_batch(self.batch("val")))
-        data_shard = NamedSharding(
-            self.mesh,
-            P(None, Axis.BATCH, None),  # type: ignore[no-untyped-call]
+        # Load a validation batch
+        strategy = Strategy(self.spec, self.args.block_size, self.args.datasets)
+        val_batch_size = max(
+            self.per_device_batch_size * self.local_replicas,
+            (
+                self.args.validation_steps
+                // (self.per_device_batch_size * self.local_replicas)
+            )
+            * (self.per_device_batch_size * self.local_replicas),
         )
+        val_dl = strategy.get_async_batches(
+            val_batch_size, split="val", deterministic_key=32
+        )
+        raw_batch = val_dl.get_batch()
+
+        # Reshape and convert to global arrays
+        per = self.per_device_batch_size * self.local_replicas
+        pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
+        batch = jax.tree_util.tree_map(
+            lambda arr: multihost_utils.host_local_array_to_global_array(
+                arr.reshape(-1, per, arr.shape[-1]), self.mesh, pspec
+            ),
+            raw_batch,
+        )
+
+        data_shard = NamedSharding(self.mesh, pspec)
+        top_k = self.args.top_k
 
         def analyze_one_batch(state: Any, global_batch: Any) -> tuple[Any, Any, Any]:
             batch_dict = cast(Dict[str, jax.Array], global_batch)
@@ -109,9 +105,7 @@ class SBLogitLens(PretrainScratchbubbles):
                 embed_residual[:1],
                 method=self.model.unembed,
             )[0]
-            embed_top_logits, embed_top_ids = self._top_k_logits(
-                embed_logits, self.TOP_K
-            )
+            embed_top_logits, embed_top_ids = self._top_k_logits(embed_logits, top_k)
             embed_source_index = embed_token_index[0]
             layers["embed"] = {
                 "source_index": embed_source_index,
@@ -135,7 +129,7 @@ class SBLogitLens(PretrainScratchbubbles):
                     method=self.model.unembed,
                 )[0]
                 block_top_logits, block_top_ids = self._top_k_logits(
-                    block_logits, self.TOP_K
+                    block_logits, top_k
                 )
                 block_source_index = block_token_index[0]
                 layers[f"block_{layer_idx:02d}"] = {
@@ -186,7 +180,6 @@ class SBLogitLens(PretrainScratchbubbles):
         results_payload: Dict[str, Any] = {
             "job": self.spec.name,
             "model": self.MODEL.__name__,
-            "checkpoint": self.CHECKPOINT,
             "project": self.spec.project,
             "group": self.spec.group,
             "val_loss": loss_value,
@@ -199,8 +192,7 @@ class SBLogitLens(PretrainScratchbubbles):
         }
 
         logger.info(
-            "SCRATCHBUBBLES LOGIT LENS | checkpoint={} | val_loss={:.6f}",
-            self.CHECKPOINT,
+            "SCRATCHBUBBLES LOGIT LENS | val_loss={:.6f}",
             loss_value,
         )
         logger.info("INPUT TOKENS | valid_tokens={}", int(input_valid.sum()))
@@ -269,3 +261,48 @@ class SBLogitLens(PretrainScratchbubbles):
             if f is not None:
                 json.dump(results_payload, f, indent=2)
                 logger.info("RESULTS | logit lens JSON saved to {}", f.name)
+
+    @staticmethod
+    def _capture_filter(module: Any, method_name: str) -> bool:
+        if isinstance(module, Scratchbubbles):
+            return method_name == "embed"
+        return isinstance(module, ThoughtBlock) and method_name == "__call__"
+
+    @staticmethod
+    def _top_k_logits(logits: jax.Array, k: int) -> tuple[jax.Array, jax.Array]:
+        logits_f32 = logits.astype(jnp.float32)
+        return jax.lax.top_k(logits_f32, min(k, logits_f32.shape[-1]))
+
+    @staticmethod
+    def _format_token(tokenizer: Tokenizer | None, token_id: int) -> str:
+        if tokenizer is None:
+            return repr(f"<tok:{token_id}>")
+        try:
+            text = tokenizer.decode([token_id])
+        except Exception:
+            text = f"<decode_error:{token_id}>"
+
+        text = (
+            text.replace("\\", "\\\\")
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+        if len(text) > 40:
+            text = text[:37] + "..."
+        return repr(text)
+
+    @classmethod
+    def _split_capture(
+        cls, captured: Any, fallback_token_index: jax.Array
+    ) -> tuple[jax.Array, jax.Array]:
+        if isinstance(captured, tuple):
+            residual = cast(jax.Array, captured[0])
+            if len(captured) >= 3:
+                return residual, cast(jax.Array, captured[2])
+            return residual, fallback_token_index
+        return cast(jax.Array, captured), fallback_token_index
+
+    @classmethod
+    def _result_name(cls) -> str:
+        return f"{cls.MODEL.__name__.lower()}_logitlens.json"

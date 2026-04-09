@@ -1,0 +1,15 @@
+analysis:
+  top_k: 5
+architecture:
+  block_size: 512
+training:
+  per_device_batch_size: -1
+  validation_steps: 2048
+  dataset:
+  - name: fineweb
+    rate: 1.0
+    style: PMD
+    suffix: ''
+job: scratchbubbles/analysis/logitlens
+request:
+  n_shards: 1

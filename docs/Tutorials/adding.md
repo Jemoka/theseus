@@ -6,5 +6,6 @@ Theseus is structured around four extension points. Each one follows the same pa
 |---|---|---|
 | [Model](adding-model.md) | `theseus/model/models/` | subclass `Module`, add to `__init__.py` |
 | [Experiment](adding-experiment.md) | `theseus/experiments/` | `@job("key")` + subclass `BaseTrainer` |
+| [Analysis / Custom Job](adding-analysis-job.md) | `theseus/experiments/` or `projects/` | `@job("key")` + subclass `InferenceJob` or `RestoreableJob` |
 | [Dataset](adding-dataset.md) | `theseus/data/datasets/` | `@dataset("key")` + subclass a dataset base |
 | [Evaluation](adding-evaluation.md) | `theseus/evaluation/datasets/` | `@evaluation("key")` + subclass `RolloutEvaluation` |

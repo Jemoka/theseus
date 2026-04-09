@@ -982,13 +982,6 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
     def config(cls) -> List[Any]:
         return [EvaluatorConfig, TokenizerConfig]
 
-    def __init__(self, spec: ExecutionSpec):
-        """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
-        raise NotImplementedError(
-            f"Cannot instantiate {self.__class__.__name__} directly. "
-            "Use from_trainer() or from_checkpoint() instead."
-        )
-
     def _get_results_path(self) -> Path:
         """Get path for saving evaluation results."""
         return self.spec.result_path("results.json")
@@ -1023,18 +1016,22 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     @classmethod
     def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
     ) -> Tuple["Evaluator[M]", Any]:
         """Create Evaluator from checkpoint.
 
         Args:
             suffix: Checkpoint suffix
             spec: ExecutionSpec with topology
+            runtime_cfg: Optional runtime config overlay
 
         Returns:
             (evaluator, config) tuple
         """
-        evaluator, cfg = super().from_checkpoint(suffix, spec)
+        evaluator, cfg = super().from_checkpoint(suffix, spec, runtime_cfg=runtime_cfg)
         with configuration(cfg):
             evaluator.encoding = get_tokenizer()
         return evaluator, cfg

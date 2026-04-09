@@ -27,13 +27,11 @@ from jax.experimental import multihost_utils
 from flax.training import train_state
 import flax
 
-from omegaconf import OmegaConf
-from loguru import logger
 
 from theseus.model.module import Module
-from theseus.job import CheckpointedJob
-from theseus.base import Axis, ExecutionSpec
-from theseus.config import configure, configuration
+from theseus.job import RestoreableJob
+from theseus.base import Axis
+from theseus.config import configure, current_config
 from theseus.data.datasets.dataset import ChatTemplate
 from theseus.data.tokenizer import Tokenizer, encode_chat_template, decode_chat_template
 
@@ -44,7 +42,7 @@ C = TypeVar("C")
 M = TypeVar("M", bound=Module)
 
 
-class InferenceJob(CheckpointedJob[C], Generic[C, M]):
+class InferenceJob(RestoreableJob[C], Generic[C, M]):
     """Abstract base for inference jobs. Must be subclassed with custom forward().
 
     Subclasses define MODEL class attribute and forward() method.
@@ -69,7 +67,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
 
     MODEL: type[M]  # Subclasses must define this
 
-    # Set by from_trainer/from_checkpoint
+    # Set by from_trainer/from_checkpoint/restore_from_path
     state: train_state.TrainState
     mesh: jax.sharding.Mesh
     state_sharding: NamedSharding
@@ -77,21 +75,7 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
     local_replicas: int
     per_device_batch_size: int
     block_size: int
-    key: jax.Array
-
-    def __init__(self, spec: ExecutionSpec):
-        """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
-        raise NotImplementedError(
-            f"Cannot instantiate {self.__class__.__name__} directly. "
-            "Use from_trainer() or from_checkpoint() instead."
-        )
-
-    def _init_from_spec(self, spec: ExecutionSpec) -> None:
-        """Internal init called by from_trainer/from_checkpoint."""
-        # Call grandparent's __init__ to set up basic attributes
-        # We skip CheckpointedJob.__init__ since we handle key ourselves
-        self.spec = spec
-        # key will be set by from_trainer or from_checkpoint
+    model: M
 
     @property
     def done(self) -> bool:
@@ -173,7 +157,8 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         to trainer.state are reflected in the InferenceJob.
         """
         job = object.__new__(cls)
-        job._init_from_spec(trainer.spec)
+        job.spec = trainer.spec
+        job.key = trainer.key
 
         # Share references to trainer's inference state
         job.state = trainer.state
@@ -183,78 +168,52 @@ class InferenceJob(CheckpointedJob[C], Generic[C, M]):
         job.local_replicas = trainer.local_replicas
         job.per_device_batch_size = trainer.per_device_batch_size
         job.block_size = trainer.args.block_size
-        job.key = trainer.key
+        job.model = trainer.model
 
         return job
 
-    @classmethod
-    def from_checkpoint_path(
-        cls, rel_path: str | Path, spec: ExecutionSpec
-    ) -> Tuple[Self, Any]:
-        """Load InferenceJob from ``rel_path`` under checkpoints_dir.
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Restore inference state from ``rel_path`` under checkpoints_dir.
 
-        Uses cls.MODEL for model initialization and sharding.
-        Calls get_tree_and_metadata_from_path() for checkpoint restoration.
-
-        Args:
-            rel_path: Relative path under checkpoints_dir
-            spec: ExecutionSpec with topology
-
-        Returns:
-            (job, config) tuple
+        Must be called within a ``configuration(cfg)`` context (as done by
+        ``RestoreableJob.from_checkpoint_path``).  Initializes model, mesh,
+        sharding, and loads checkpoint.
         """
-        path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
-        logger.debug("CHECKPOINT | loading {} from {}", cls.__name__, path)
-
-        # Load config (we use spec's name/group/project - this is a new job, not a restoration)
-        cfg = OmegaConf.load(path / "config.yaml")
-
-        job = object.__new__(cls)
-        job._init_from_spec(spec)
-        job.key = jax.random.PRNGKey(0)  # Will be overwritten by get_tree_and_metadata
-
-        with configuration(cfg):
-            # Initialize model from cls.MODEL (configure hydrates from OmegaConf)
-            model = configure(cls.MODEL)
-
-            # Get mesh from topology
-            assert spec.topology is not None, "Topology required for checkpoint loading"
-            job.mesh = spec.topology.mesh
-            job.replicas = spec.topology.replicas
-            job.local_replicas = spec.topology.local_replicas
-
-            # Initialize template state (for checkpoint structure)
-            template_state = cls._init_template_state(
-                model, int(cfg.architecture.block_size)
-            )
-
-            # Compute sharding
-            job.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore[attr-defined]
-                flax.linen.get_partition_spec(template_state),
-                job.mesh,
-                rules=tuple(model.sharding),
-            )
-
-            # Use CheckpointedJob's restoration infrastructure
-            state, metadata = job.get_tree_and_metadata_from_path(
-                rel_path, template_state
-            )
-            job.state = jax.device_put(state, job.state_sharding)
-
-            job.per_device_batch_size = cfg.training.per_device_batch_size
-            job.block_size = cfg.architecture.block_size
-
-        logger.debug("CHECKPOINT | loaded {}", spec.name)
-        return job, cfg
-
-    @classmethod
-    def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
-    ) -> Tuple[Self, Any]:
-        """Load from this job's own checkpoint. Wrapper for backwards compat."""
-        return cls.from_checkpoint_path(
-            CheckpointedJob._get_checkpoint_rel_path(spec, suffix), spec
+        cfg = current_config()
+        assert cfg is not None, (
+            "restore_from_path must be called within a configuration() context"
         )
+
+        # Initialize model from cls.MODEL (configure hydrates from OmegaConf)
+        model = configure(self.MODEL)
+        self.model = model
+
+        # Get mesh from topology
+        assert self.spec.topology is not None, (
+            "Topology required for checkpoint loading"
+        )
+        self.mesh = self.spec.topology.mesh
+        self.replicas = self.spec.topology.replicas
+        self.local_replicas = self.spec.topology.local_replicas
+
+        # Initialize template state (for checkpoint structure)
+        template_state = self._init_template_state(
+            model, int(cfg.architecture.block_size)
+        )
+
+        # Compute sharding
+        self.state_sharding = flax.linen.logical_to_mesh_sharding(  # type: ignore[attr-defined]
+            flax.linen.get_partition_spec(template_state),
+            self.mesh,
+            rules=tuple(model.sharding),
+        )
+
+        # Use CheckpointedJob's restoration infrastructure
+        state, metadata = self.get_tree_and_metadata_from_path(rel_path, template_state)
+        self.state = jax.device_put(state, self.state_sharding)
+
+        self.per_device_batch_size = cfg.training.per_device_batch_size
+        self.block_size = cfg.architecture.block_size
 
     @staticmethod
     def pad(

@@ -105,6 +105,30 @@ class QuickJob:
             )
         return self._instance
 
+    def restore(self, rel_path: str) -> Any:
+        """Restore a job from checkpoint at ``rel_path`` under checkpoints_dir.
+
+        Uses the current config as ``runtime_cfg`` overlay on the checkpoint's
+        saved config.  Returns the restored job instance.
+        """
+        from theseus.job import RestoreableJob
+        from theseus.base import ExecutionSpec
+
+        out_path = self._out_path or os.environ.get("THESEUS_ROOT") or "."
+        spec = ExecutionSpec.local(
+            out_path,
+            name=self._name,
+            project=self._project,
+            group=self._group,
+        )
+        job: Any
+        job, cfg = RestoreableJob.from_checkpoint_path(
+            rel_path, spec, runtime_cfg=self.config
+        )
+        self.config = cfg
+        self._instance = job
+        return job
+
     def __call__(self) -> Any:
         """Run the job."""
         return self.create()()

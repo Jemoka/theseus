@@ -118,6 +118,7 @@ def _generate_bootstrap(
     hardware: HardwareResult,
     spec: JobSpec,
     preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
 ) -> str:
     """Generate bootstrap.py script with embedded data."""
     template = BOOTSTRAP_TEMPLATE.read_text()
@@ -133,6 +134,7 @@ def _generate_bootstrap(
     script = script.replace("__JOB_NAME__", spec.name)
     script = script.replace("__PROJECT__", spec.project or "")
     script = script.replace("__GROUP__", spec.group or "")
+    script = script.replace("__RESTORE_PATH__", restore_path or "")
 
     return script
 
@@ -149,6 +151,7 @@ def _build_stages(
     hardware: HardwareResult,
     spec: JobSpec,
     preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
 ) -> tuple[dict[str, str], str]:
     """Build bootstrap .py files and command string for one or more stages.
 
@@ -164,7 +167,11 @@ def _build_stages(
     n = len(cfgs)
     if n == 1:
         content = _generate_bootstrap(
-            cfgs[0], hardware, spec, preload_modules=preload_modules
+            cfgs[0],
+            hardware,
+            spec,
+            preload_modules=preload_modules,
+            restore_path=restore_path,
         )
         return {"_bootstrap_dispatch.py": content}, "python _bootstrap_dispatch.py"
 
@@ -174,8 +181,14 @@ def _build_stages(
         stage_name = f"{spec.name}_stage{i}"
         stage_spec = JobSpec(name=stage_name, project=spec.project, group=spec.group)
         filename = f"_bootstrap_dispatch_stage{i}.py"
+        # Only apply restore to the first stage
+        stage_restore = restore_path if i == 1 else None
         content = _generate_bootstrap(
-            cfg, hardware, stage_spec, preload_modules=preload_modules
+            cfg,
+            hardware,
+            stage_spec,
+            preload_modules=preload_modules,
+            restore_path=stage_restore,
         )
         bootstrap_pys[filename] = content
         commands.append(f"python {filename}")
@@ -202,6 +215,7 @@ def dispatch(
     volcano_image_override: str | None = None,
     volcano_namespace_override: str | None = None,
     preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -282,7 +296,11 @@ def dispatch(
     # 4. Generate bootstrap script(s) (Python scripts that run the job stages)
     logger.debug(f"DISPATCH | generating {n_stages} bootstrap script(s)")
     bootstrap_pys, command = _build_stages(
-        all_cfgs, solve_result.result, spec, preload_modules=preload_modules
+        all_cfgs,
+        solve_result.result,
+        spec,
+        preload_modules=preload_modules,
+        restore_path=restore_path,
     )
 
     # 5. Submit based on host type

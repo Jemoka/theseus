@@ -30,6 +30,7 @@ HARDWARE_JSON = """__HARDWARE_JSON__"""
 JOB_NAME = "__JOB_NAME__"
 PROJECT = "__PROJECT__"
 GROUP = "__GROUP__"
+RESTORE_PATH = "__RESTORE_PATH__"
 
 BATCH_SIZE_OVERRIDE_ENV = "THESEUS_DISPATCH_BATCH_SIZE"
 DISABLE_WANDB_ENV = "THESEUS_DISPATCH_DISABLE_WANDB"
@@ -479,6 +480,25 @@ def main():
     job_cls = JOBS[job_key]
 
     try:
+        # Explicit restore from a specific checkpoint path (--restore flag)
+        if RESTORE_PATH:
+            logger.info(f"DISPATCH | restoring from explicit path: {RESTORE_PATH}")
+            job, cfg = RestoreableJob.from_checkpoint_path(
+                RESTORE_PATH, spec, runtime_cfg=cfg
+            )
+            with configuration(cfg):
+                job()
+            heartbeat_updater.stop()
+            _write_metadata(
+                metadata_file,
+                spec,
+                cfg,
+                run_id,
+                status="completed",
+                start_time=start_time,
+            )
+            return
+
         # Check for existing checkpoint if job is restorable (idempotent dispatch)
         if issubclass(job_cls, RestoreableJob):
             latest = RestoreableJob.latest(spec)

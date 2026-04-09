@@ -294,16 +294,16 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         return path.read_text().strip()
 
     @classmethod
-    def from_checkpoint(
+    def from_checkpoint_path(
         cls,
-        suffix: str | Path,
+        rel_path: str | Path,
         spec: ExecutionSpec,
         runtime_cfg: Any | None = None,
     ) -> Tuple[Self, Any]:
-        """loads and instantiates a checkpointed job from disk
+        """Load and instantiate a checkpointed job from ``rel_path`` under checkpoints_dir.
 
         Args:
-            suffix: checkpoint suffix to restore from
+            rel_path: Relative path under checkpoints_dir
             spec: execution spec to use for locating checkpoint
             runtime_cfg: config values from the current launch to overlay onto
                 the checkpoint config before job initialization
@@ -312,8 +312,7 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
             Tuple[Self, Any]: restored job instance and configuration
         """
 
-        # use the current spec to identify paths
-        path = CheckpointedJob._get_checkpoint_path(spec, suffix)
+        path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
         logger.debug("CHECKPOINT | restoring checkpointed job at {}", path)
 
         # Load job spec (only JobSpec fields, not ExecutionSpec)
@@ -357,11 +356,25 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
                 job_cls = cls
 
             job = job_cls(new_spec_obj)
-            job.restore(Path(suffix))
+            job.restore_from_path(rel_path)
 
         logger.debug(f"CHECKPOINT | restored checkpointed job {new_spec_obj.name}")
 
         return job, cfg
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
+    ) -> Tuple[Self, Any]:
+        """Load from this job's own checkpoint. Wrapper for backwards compat."""
+        return cls.from_checkpoint_path(
+            CheckpointedJob._get_checkpoint_rel_path(spec, suffix),
+            spec,
+            runtime_cfg=runtime_cfg,
+        )
 
     @classmethod
     def checkpoints(cls, spec: ExecutionSpec) -> List[str]:

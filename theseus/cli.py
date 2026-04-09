@@ -406,6 +406,12 @@ def configure(
     help="Additional YAML config(s) for sequential stages.",
 )  # type: ignore[misc]
 @click.option(
+    "--restore",
+    "restore_path",
+    default=None,
+    help="Restore from checkpoint at this rel_path (under checkpoints_dir) instead of starting fresh.",
+)  # type: ignore[misc]
+@click.option(
     "--load",
     "preload_modules",
     multiple=True,
@@ -420,6 +426,7 @@ def run(
     project: str | None,
     group: str | None,
     extra_stages: tuple[str, ...],
+    restore_path: str | None,
     preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
@@ -526,6 +533,8 @@ def run(
             Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default")
         )
     console.print(f"[blue]Output path:[/blue] {out_path}")
+    if restore_path:
+        console.print(f"[blue]Restoring from:[/blue] {restore_path}")
     console.print()
 
     # Run each stage sequentially within its configuration context
@@ -538,11 +547,24 @@ def run(
             random.seed(0)
             np.random.seed(0)
         stage_job_obj = jobs[stage_job]
-        with configuration(stage_cfg):
-            job_instance = stage_job_obj.local(
+        if restore_path:
+            RestoreableJob = _restoreable_job()
+            spec = ExecutionSpec.local(
                 out_path, name=stage_name, project=project, group=group
             )
-            job_instance()
+            job_instance, restored_cfg = RestoreableJob.from_checkpoint_path(
+                restore_path, spec, runtime_cfg=stage_cfg
+            )
+            with configuration(restored_cfg):
+                job_instance()
+            # Only restore on the first stage
+            restore_path = None
+        else:
+            with configuration(stage_cfg):
+                job_instance = stage_job_obj.local(
+                    out_path, name=stage_name, project=project, group=group
+                )
+                job_instance()
         # Finalize wandb run between stages (if active) so the next stage
         # gets a fresh wandb.init() rather than resuming the previous one
         if n_stages > 1:
@@ -637,6 +659,12 @@ def run(
     help="Override Volcano job namespace",
 )  # type: ignore[misc]
 @click.option(
+    "--restore",
+    "restore_path",
+    default=None,
+    help="Restore from checkpoint at this rel_path (under checkpoints_dir) instead of starting fresh.",
+)  # type: ignore[misc]
+@click.option(
     "--load",
     "preload_modules",
     multiple=True,
@@ -664,6 +692,7 @@ def submit(
     tpu_preemptible: bool | None,
     volcano_image: str | None,
     volcano_namespace: str | None,
+    restore_path: str | None,
     preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
@@ -848,6 +877,8 @@ def submit(
         console.print(f"[blue]Volcano image override:[/blue] {volcano_image}")
     if volcano_namespace:
         console.print(f"[blue]Volcano namespace override:[/blue] {volcano_namespace}")
+    if restore_path:
+        console.print(f"[blue]Restoring from:[/blue] {restore_path}")
 
     # Dispatch the job
     result = dispatch(
@@ -865,6 +896,7 @@ def submit(
         volcano_image_override=volcano_image,
         volcano_namespace_override=volcano_namespace,
         preload_modules=_validate_remote_modules(preload_modules) or None,
+        restore_path=restore_path,
     )
 
     if not result.ok:
