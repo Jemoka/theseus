@@ -13,3 +13,4 @@ class Axes(Enum):
     N_ATTN = "n_attn"
     N_FORK = "n_fork"
     BLOCK_SIZE = "block_size"
+    N_SSM = "n_ssm"

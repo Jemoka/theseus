@@ -16,7 +16,9 @@ from .mnli import MNLIEval  # noqa: F401
 from .mtob import MTOBEval  # noqa: F401
 from .pes2o import Pes2OEval  # noqa: F401
 from .pg19 import PG19Eval  # noqa: F401
+import theseus.evaluation.datasets.pg19_lengthgen  # noqa: F401
 from .pile import PileEval  # noqa: F401
+from .pile_injected import PileInjectedEval  # noqa: F401
 from .qqp import QQPEval  # noqa: F401
 from .siqa import SIQAEval  # noqa: F401
 from .squad import SQuADEval  # noqa: F401
