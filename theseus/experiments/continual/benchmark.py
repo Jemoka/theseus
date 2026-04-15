@@ -29,7 +29,6 @@ from theseus.base import PyTree, Topology, ExecutionSpec
 from theseus.registry import job
 from theseus.model.models import GPT, Mamba, Hybrid
 from theseus.training.schedules import SCHEDULES
-from theseus.training.flywheel.strategy import Sampling, DatasetStyle
 from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
@@ -37,6 +36,7 @@ from theseus.experiments.continual.abcd import (
 )
 from theseus.training.lora import (
     LoRAConfig,
+    LoRATrainerConfig,
     LoRATrainState,
     param_filter,
     inject_lora_params,
@@ -61,28 +61,22 @@ class BenchmarkConfig(ABCDConfig):
 
 
 @dataclass
-class BenchmarkLoRAConfig(BenchmarkConfig):
+class BenchmarkLoRAConfig(BenchmarkConfig, LoRATrainerConfig):
     """Config for LoRA benchmark runs.
 
-    Inherits BenchmarkConfig (ABCDConfig + schedule/reset). The pre-LoRA
-    phase uses the inherited ``total_tokens``/``datasets`` for ABCD
-    multi-stage training with full params. Post-LoRA phase uses separate
-    token budgets and datasets for adapter-only training.
+    Inherits BenchmarkConfig (ABCD multi-stage + schedule/reset) and
+    LoRATrainerConfig (pre/post LoRA token budgets + datasets).
 
-    LoRA hyperparameters live under ``optimization/lora/`` in the YAML
-    and are read via ``configure(LoRAConfig)`` at init time.
+    The pre-LoRA phase uses ABCDConfig's ``total_tokens``/``datasets``
+    for multi-stage full-param training.  The post-LoRA phase uses
+    ``post_lora_tokens``/``post_lora_datasets`` from LoRATrainerConfig
+    for adapter-only training.
+
+    LoRA hyperparameters (rank, alpha, target_modules) live under
+    ``optimization/lora/`` and are read via ``configure(LoRAConfig)``.
     """
 
-    post_lora_tokens: List[int] = field(
-        "training/post_lora_tokens",
-        default_factory=lambda: [100_000_000],
-    )
-    post_lora_datasets: List[List[Sampling]] = field(
-        "training/post_lora_dataset",
-        default_factory=lambda: [
-            [Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)],
-        ],
-    )
+    pass
 
 
 # ======================================================================
