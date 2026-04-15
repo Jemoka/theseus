@@ -156,7 +156,13 @@ def merge_lora_params(
     alpha: float,
     rank: int,
 ) -> PyTree[jax.Array]:
-    """Merge LoRA into base: W_eff = W + (alpha/rank) * A @ B."""
+    """Merge LoRA into base: W_eff = W + (alpha/rank) * A @ B.
+
+    No ``stop_gradient`` on ``base_params`` is needed: in the training
+    loop ``value_and_grad`` differentiates only w.r.t. its argument
+    (the LoRA params dict), so ``base_params`` — accessed from the
+    closed-over state — is already treated as a constant by JAX.
+    """
     scale = alpha / rank
 
     def _merge(base: jax.Array, a: Any, b: Any) -> jax.Array:
@@ -342,6 +348,43 @@ class LoRATrainer(BaseTrainer[C, M], Generic[C, M]):
 
     def _transition_to_lora(self) -> None:
         transition_to_lora(self)
+
+    # ------------------------------------------------------------------
+    # Checkpoint restore
+    # ------------------------------------------------------------------
+
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Restore from checkpoint, handling LoRA state type mismatch.
+
+        If the checkpoint was saved during the LoRA phase, the state is
+        a ``LoRATrainState`` (params = {"lora_A", "lora_B"}, plus
+        base_params).  But ``_init_state`` creates a plain ``TrainState``
+        so the template tree won't match.
+
+        We peek at the checkpoint metadata to read the step count. If
+        it's past the pre-LoRA boundary we transition first (creating
+        a ``LoRATrainState`` template), then let the parent restore
+        overwrite it with the checkpoint contents.
+        """
+        import json
+
+        path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
+        with open(path / "config.json", "r") as f:
+            meta = json.load(f)
+
+        saved_steps = meta.get("steps", 0)
+        saved_tokens = (
+            (saved_steps // self.accumulate_steps)
+            * self.args.batch_size
+            * self.args.block_size
+        )
+
+        if saved_tokens >= self._pre_lora_total and not self._in_lora_phase:
+            # Checkpoint is from LoRA phase — transition so the template
+            # tree structure matches before calling parent restore.
+            self._transition_to_lora()
+
+        super().restore_from_path(rel_path)
 
     # ------------------------------------------------------------------
     # Data
