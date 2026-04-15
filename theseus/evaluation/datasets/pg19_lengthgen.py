@@ -45,7 +45,7 @@ def _make_pg19_lengthgen_class(
     return _PG19LengthGenEval
 
 
-# Approximate chars per token ~ 4, so target token counts map to:
+# Approximate chars per token ~ 4 for cl100k_base on English prose, so target token counts map to:
 # 2k tokens -> ~8k chars, 4k -> ~16k, 8k -> ~32k, 16k -> ~64k, 32k -> ~128k
 _EVAL_SPECS = [
     ("pg19_2k", 8_000),

@@ -433,6 +433,67 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
             self._real_validation_interval = self.args.validation_interval
             self.args.validation_interval = self.total_steps + 1
 
+    def _on_dataset_boundary(
+        self, old_idx: int, new_idx: int, current_ntok: int
+    ) -> None:
+        """Called when the primary dataset changes.
+
+        Runs evaluation, saves a checkpoint, and logs metrics.
+        Subclasses can override to add schedule-specific behaviour
+        (e.g. cosine rewarm or optimizer reset) after calling super().
+        """
+        if old_idx == 0 and self.args.skip_first_dataset_validation:
+            self.args.validation_interval = self._real_validation_interval
+
+        multihost_utils.sync_global_devices("eval_barrier:start")
+        self.inference.state = self.state
+        eval_metrics = self.inference.evaluate()
+        multihost_utils.sync_global_devices("eval_barrier:end")
+
+        if self.main_process():
+            logger.info("EVAL | {}", eval_metrics)
+            step = self.global_step_counter_ // self.accumulate_steps
+            wandb.log(eval_metrics, step=step)
+            self._boundary_tokens.append(current_ntok)
+
+            if len(eval_metrics) > 0:
+                boundary_label = f"{old_idx}_to_{new_idx}"
+                metrics_snapshot = dict(eval_metrics)
+                self.plotter.plot(
+                    lambda m=metrics_snapshot,  # type: ignore[misc]
+                    label=boundary_label: _make_eval_bar_chart(m, label),
+                    step=step,
+                )
+
+                for k, v in metrics_snapshot.items():
+                    self._eval_history.setdefault(k, []).append(
+                        (current_ntok, float(v))
+                    )
+                history_snap = {k: list(v) for k, v in self._eval_history.items()}
+                boundaries_snap = list(self._boundary_tokens)
+                self.plotter.plot(
+                    lambda h=history_snap,  # type: ignore[misc]
+                    b=boundaries_snap: _make_eval_timeline_chart(h, b),
+                    step=step,
+                )
+
+        logger.info(
+            "DATASET | switching primary from {} to {} at {} tokens",
+            old_idx,
+            new_idx,
+            current_ntok,
+        )
+        self.save(Path(f"boundary_{old_idx}_{new_idx}"))
+
+        if self.main_process():
+            wandb.log(
+                {
+                    "dataset/index": new_idx,
+                    "dataset/switch_at_tokens": current_ntok,
+                },
+                step=self.global_step_counter_ // self.accumulate_steps,
+            )
+
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         """Return the next training or validation batch.
 
@@ -456,59 +517,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         # ---------- Boundary evaluation when primary dataset changes ----------
         if primary_idx != self._current_dl_idx:
-            # Restore periodic validation when leaving the first dataset
-            if self._current_dl_idx == 0 and self.args.skip_first_dataset_validation:
-                self.args.validation_interval = self._real_validation_interval
-
-            multihost_utils.sync_global_devices("eval_barrier:start")
-            self.inference.state = self.state
-            eval_metrics = self.inference.evaluate()
-            multihost_utils.sync_global_devices("eval_barrier:end")
-
-            if self.main_process():
-                logger.info("EVAL | {}", eval_metrics)
-                step = self.global_step_counter_ // self.accumulate_steps
-                wandb.log(eval_metrics, step=step)
-                self._boundary_tokens.append(current_ntok)
-
-                if len(eval_metrics) > 0:
-                    boundary_label = f"{self._current_dl_idx}_to_{primary_idx}"
-                    metrics_snapshot = dict(eval_metrics)
-                    self.plotter.plot(
-                        lambda m=metrics_snapshot,  # type: ignore[misc]
-                        label=boundary_label: _make_eval_bar_chart(m, label),
-                        step=step,
-                    )
-
-                    for k, v in metrics_snapshot.items():
-                        self._eval_history.setdefault(k, []).append(
-                            (current_ntok, float(v))
-                        )
-                    history_snap = {k: list(v) for k, v in self._eval_history.items()}
-                    boundaries_snap = list(self._boundary_tokens)
-                    self.plotter.plot(
-                        lambda h=history_snap,  # type: ignore[misc]
-                        b=boundaries_snap: _make_eval_timeline_chart(h, b),
-                        step=step,
-                    )
-
-            logger.info(
-                "DATASET | switching primary from {} to {} at {} tokens (weights: {})",
-                self._current_dl_idx,
-                primary_idx,
-                current_ntok,
-                [f"{w:.3f}" for w in weights],
-            )
-            self.save(Path(f"boundary_{self._current_dl_idx}_{primary_idx}"))
-
-            if self.main_process():
-                wandb.log(
-                    {
-                        "dataset/index": primary_idx,
-                        "dataset/switch_at_tokens": current_ntok,
-                    },
-                    step=self.global_step_counter_ // self.accumulate_steps,
-                )
+            self._on_dataset_boundary(self._current_dl_idx, primary_idx, current_ntok)
             self._current_dl_idx = primary_idx
 
         # ---------- Draw and merge batches from active dataloaders ----------

@@ -207,6 +207,70 @@ class LoRATrainState(train_state.TrainState):  # type: ignore[no-untyped-call]
 
 
 # ---------------------------------------------------------------------------
+# Shared LoRA transition logic
+# ---------------------------------------------------------------------------
+
+
+def transition_to_lora(trainer: Any) -> None:
+    """Freeze base params and inject LoRA adapters on *trainer*.
+
+    Shared by ``LoRATrainer`` and ``BenchmarkLoRABaseTrainer``.
+    Expects the trainer to have ``state``, ``lora_config``, ``model``,
+    ``scheduler``, and ``main_process()`` already set.
+
+    After this call:
+    - ``trainer.state`` is a ``LoRATrainState`` whose ``params`` field
+      holds ``{"lora_A": ..., "lora_B": ...}`` (the only thing the
+      optimizer updates).
+    - ``trainer._in_lora_phase`` is ``True``.
+    """
+    multihost_utils.sync_global_devices("lora_transition:start")
+
+    base_params = jax.tree_util.tree_map(
+        lambda x: x.astype(jnp.bfloat16), trainer.state.params
+    )
+    mask = param_filter(trainer.state.params, trainer.lora_config.target_modules)
+    lora_A, lora_B = inject_lora_params(
+        trainer.state.params, mask, trainer.lora_config.rank, jax.random.PRNGKey(0)
+    )
+
+    lora_param_count = count_lora_params(lora_A, lora_B)
+    if trainer.main_process():
+        logger.info(
+            "LORA | injected {} trainable params (rank={}, alpha={})",
+            lora_param_count,
+            trainer.lora_config.rank,
+            trainer.lora_config.alpha,
+        )
+
+    # Pack LoRA A/B into a single dict — this becomes state.params
+    # so the optimizer updates only the adapters.
+    lora_params: Dict[str, Any] = {"lora_A": lora_A, "lora_B": lora_B}
+    lora_tx = optax.adam(learning_rate=trainer.scheduler)
+
+    def make_lora_state(
+        base: PyTree[jax.Array],
+        lp: Dict[str, Any],
+    ) -> LoRATrainState:
+        return type_cast(
+            LoRATrainState,
+            LoRATrainState.create(  # type: ignore
+                apply_fn=trainer.model.apply,
+                params=lp,  # optimizer acts on this
+                base_params=base,
+                tx=lora_tx,
+                lora_alpha=trainer.lora_config.alpha,
+                lora_rank=trainer.lora_config.rank,
+            ),
+        )
+
+    trainer.state = make_lora_state(base_params, lora_params)
+    trainer._in_lora_phase = True
+
+    multihost_utils.sync_global_devices("lora_transition:end")
+
+
+# ---------------------------------------------------------------------------
 # Trainer
 # ---------------------------------------------------------------------------
 
@@ -277,55 +341,7 @@ class LoRATrainer(BaseTrainer[C, M], Generic[C, M]):
             logger.info(f"MODEL | Total Parameters: {self.total_params:.2f}m")
 
     def _transition_to_lora(self) -> None:
-        """Freeze base params and inject LoRA adapters.
-
-        Rebuilds the optimizer to only train LoRA parameters.
-        """
-        multihost_utils.sync_global_devices("lora_transition:start")
-
-        base_params = jax.tree_util.tree_map(
-            lambda x: x.astype(jnp.bfloat16), self.state.params
-        )
-        mask = param_filter(self.state.params, self.lora_config.target_modules)
-        lora_A, lora_B = inject_lora_params(
-            self.state.params, mask, self.lora_config.rank, jax.random.PRNGKey(0)
-        )
-
-        lora_param_count = count_lora_params(lora_A, lora_B)
-        if self.main_process():
-            logger.info(
-                "LORA | injected {} trainable params (rank={}, alpha={})",
-                lora_param_count,
-                self.lora_config.rank,
-                self.lora_config.alpha,
-            )
-
-        # Pack LoRA A/B into a single dict — this becomes state.params
-        # so the optimizer updates only these.
-        lora_params = {"lora_A": lora_A, "lora_B": lora_B}
-
-        lora_tx = optax.adam(learning_rate=self.scheduler)
-
-        def make_lora_state(
-            base: PyTree[jax.Array],
-            lp: Dict[str, Any],
-        ) -> LoRATrainState:
-            return type_cast(
-                LoRATrainState,
-                LoRATrainState.create(  # type: ignore
-                    apply_fn=self.model.apply,
-                    params=lp,  # optimizer acts on this
-                    base_params=base,
-                    tx=lora_tx,
-                    lora_alpha=self.lora_config.alpha,
-                    lora_rank=self.lora_config.rank,
-                ),
-            )
-
-        self.state = make_lora_state(base_params, lora_params)
-        self._in_lora_phase = True
-
-        multihost_utils.sync_global_devices("lora_transition:end")
+        transition_to_lora(self)
 
     # ------------------------------------------------------------------
     # Data
@@ -459,8 +475,10 @@ class LoRATrainer(BaseTrainer[C, M], Generic[C, M]):
             _, dropout_key = jax.random.split(key)
         rngs = {"dropout": dropout_key} if dropout_key is not None else {}
 
-        # In LoRA phase, params = {"lora_A": ..., "lora_B": ...}.
-        # Merge with frozen base_params to get effective model weights.
+        # During the pre-LoRA phase, params is a normal model param tree and
+        # we pass it through unchanged.  After _transition_to_lora, params
+        # becomes {"lora_A": ..., "lora_B": ...} and we merge with the frozen
+        # base to reconstruct full model weights for the forward pass.
         effective_params = params
         if isinstance(params, dict) and "lora_A" in params:
             lora_state = type_cast(LoRATrainState, state)

@@ -11,17 +11,13 @@ LoRA jobs: continual/train/benchmark{,_mamba,_hybrid}_lora
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Type, TypeVar
+from typing import Any, Generic, List, Type, TypeVar
 from typing import cast as type_cast
 
 import numpy as np
 
-import jax
-import jax.numpy as jnp
-from jax.experimental import multihost_utils
 
 import optax
-import wandb
 from loguru import logger
 
 from theseus.config import field, configure
@@ -36,12 +32,8 @@ from theseus.experiments.continual.abcd import (
 )
 from theseus.training.lora import (
     LoRAConfig,
+    LoRATrainer,
     LoRATrainerConfig,
-    LoRATrainState,
-    param_filter,
-    inject_lora_params,
-    merge_lora_params,
-    count_lora_params,
 )
 
 
@@ -115,7 +107,6 @@ class BenchmarkBaseTrainer(ABCDBaseTrainer[BC, M], Generic[BC, M]):
         sched_cfg = configure(sched_cfg_cls)
         self.scheduler = sched_fn(remaining_steps, sched_cfg)  # type: ignore[operator]
         self.tx = self._optimizer()
-        # Reset optimizer state for the new schedule
         new_opt_state = self.tx.init(self.state.params)
         self.state = self.state.replace(opt_state=new_opt_state)
 
@@ -124,82 +115,19 @@ class BenchmarkBaseTrainer(ABCDBaseTrainer[BC, M], Generic[BC, M]):
         new_opt_state = self.tx.init(self.state.params)
         self.state = self.state.replace(opt_state=new_opt_state)
 
-    def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
-        """Batch with schedule-variant boundary handling."""
-        from typing import cast as type_cast
+    def _on_dataset_boundary(
+        self, old_idx: int, new_idx: int, current_ntok: int
+    ) -> None:
+        """Extends parent boundary handling with schedule-variant logic."""
+        super()._on_dataset_boundary(old_idx, new_idx, current_ntok)
 
-        current_ntok = (
-            (self.global_step_counter_ // self.accumulate_steps)
-            * self.args.batch_size
-            * self.args.block_size
-        )
+        if self.args.schedule_type == "cosine_rewarm":
+            self._rebuild_schedule_for_stage(new_idx)
+        elif self.args.reset_optimizer_at_boundaries:
+            self._reset_optimizer_state()
 
-        weights = self._compute_fade_weights(current_ntok)
-        primary_idx = max(range(len(weights)), key=lambda i: weights[i])
-
-        # Boundary detection
-        if primary_idx != self._current_dl_idx:
-            # Run parent boundary logic (eval, save, log)
-            if self._current_dl_idx == 0 and self.args.skip_first_dataset_validation:
-                self.args.validation_interval = self._real_validation_interval
-
-            multihost_utils.sync_global_devices("eval_barrier:start")
-            self.inference.state = self.state
-            eval_metrics = self.inference.evaluate()
-            multihost_utils.sync_global_devices("eval_barrier:end")
-
-            if self.main_process():
-                logger.info("EVAL | {}", eval_metrics)
-                step = self.global_step_counter_ // self.accumulate_steps
-                wandb.log(eval_metrics, step=step)
-
-            logger.info(
-                "DATASET | switching primary from {} to {} at {} tokens",
-                self._current_dl_idx,
-                primary_idx,
-                current_ntok,
-            )
-            self.save(Path(f"boundary_{self._current_dl_idx}_{primary_idx}"))
-
-            if self.main_process():
-                wandb.log(
-                    {
-                        "dataset/index": primary_idx,
-                        "dataset/switch_at_tokens": current_ntok,
-                    },
-                    step=self.global_step_counter_ // self.accumulate_steps,
-                )
-
-            # Schedule-variant handling
-            if self.args.schedule_type == "cosine_rewarm":
-                self._rebuild_schedule_for_stage(primary_idx)
-            elif self.args.reset_optimizer_at_boundaries:
-                self._reset_optimizer_state()
-
-            self._current_dl_idx = primary_idx
-
-        # Draw batches from active dataloaders (same as parent)
-        dls = self.train_dls if slice == "train" else self.val_dls
-        total_rows = (
-            self._train_batch_rows if slice == "train" else self._val_batch_rows
-        )
-        counts = self._distribute_batch(weights, total_rows)
-
-        batch_parts: List[dict[str, Any]] = []
-        for i, count in enumerate(counts):
-            if count > 0:
-                batch_data = dls[i].get_batch()
-                batch_parts.append({k: v[:count] for k, v in batch_data.items()})
-
-        combined: dict[str, Any] = {}
-        for key in batch_parts[0]:
-            combined[key] = np.concatenate([p[key] for p in batch_parts], axis=0)
-
-        n = combined[next(iter(combined))].shape[0]
-        perm = np.random.permutation(n)
-        combined = {k: v[perm] for k, v in combined.items()}
-
-        return type_cast(PyTree[np.ndarray], combined)
+    # batch() is inherited from ABCDBaseTrainer — no override needed.
+    # The _on_dataset_boundary hook handles schedule/reset at boundaries.
 
 
 # ======================================================================
@@ -270,42 +198,15 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
         return topology
 
     def _transition_to_lora(self) -> None:
-        """Freeze base params and inject LoRA adapters."""
-        multihost_utils.sync_global_devices("lora_transition:start")
+        """Freeze base params and inject LoRA adapters.
 
-        base_params = jax.tree_util.tree_map(
-            lambda x: x.astype(jnp.bfloat16), self.state.params
-        )
-        mask = param_filter(self.state.params, self.lora_config.target_modules)
-        lora_A, lora_B = inject_lora_params(
-            self.state.params, mask, self.lora_config.rank, jax.random.PRNGKey(0)
-        )
+        Reuses the shared transition logic from lora.py, then resets
+        the ABCD dataloader index for the post-LoRA stages.
+        """
+        from theseus.training.lora import transition_to_lora
 
-        count = count_lora_params(lora_A, lora_B)
-        if self.main_process():
-            logger.info("LORA | injected {} trainable params", count)
-
-        lora_params: Dict[str, Any] = {"lora_A": lora_A, "lora_B": lora_B}
-        lora_tx = optax.adam(learning_rate=self.scheduler)
-
-        def make_lora_state(base: Any, lp: Any) -> LoRATrainState:
-            return type_cast(
-                LoRATrainState,
-                LoRATrainState.create(  # type: ignore
-                    apply_fn=self.model.apply,
-                    params=lp,
-                    base_params=base,
-                    tx=lora_tx,
-                    lora_alpha=self.lora_config.alpha,
-                    lora_rank=self.lora_config.rank,
-                ),
-            )
-
-        self.state = make_lora_state(base_params, lora_params)
-        self._in_lora_phase = True
+        transition_to_lora(self)
         self._current_dl_idx = 0  # reset for post-LoRA stages
-
-        multihost_utils.sync_global_devices("lora_transition:end")
 
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         current_ntok = (
@@ -334,62 +235,11 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
             # Pre-LoRA: use parent ABCD batch logic
             return super().batch(slice)
 
-    @staticmethod
-    def forward(
-        state: Any,
-        params: Any,
-        batch: Any,
-        key: Any = None,
-        deterministic: bool = False,
-        intermediates: bool = False,
-    ) -> Any:
-        batch_dict = type_cast(Dict[str, jax.Array], batch)
-        x = batch_dict["x"]
-        y = batch_dict["y"]
-        padding_mask = batch_dict["padding_mask"]
-
-        dropout_key = None
-        if not deterministic and key is not None:
-            _, dropout_key = jax.random.split(key)
-        rngs = {"dropout": dropout_key} if dropout_key is not None else {}
-
-        effective_params = params
-        if isinstance(params, dict) and "lora_A" in params:
-            lora_state = type_cast(LoRATrainState, state)
-            effective_params = merge_lora_params(
-                lora_state.base_params,
-                params["lora_A"],
-                params["lora_B"],
-                lora_state.lora_alpha,
-                lora_state.lora_rank,
-            )
-
-        if intermediates:
-            (logits, loss), mutated = state.apply_fn(
-                {"params": effective_params},
-                x,
-                y,
-                padding_mask=padding_mask,
-                deterministic=deterministic,
-                rngs=rngs,
-                mutable=["intermediates", "plots"],
-            )
-            meta: Dict[str, Any] = {
-                "intermediates": mutated.get("intermediates", {}),
-                "plots": mutated.get("plots", {}),
-            }
-        else:
-            logits, loss = state.apply_fn(
-                {"params": effective_params},
-                x,
-                y,
-                padding_mask=padding_mask,
-                deterministic=deterministic,
-                rngs=rngs,
-            )
-            meta = {}
-
-        return logits, loss, meta
+    # forward() is inherited from the LoRA code path — during the pre-LoRA
+    # phase params are normal model params and merge_lora_params is skipped;
+    # during post-LoRA, params = {"lora_A": ..., "lora_B": ...} and the
+    # merge happens automatically.  See LoRATrainer.forward.
+    forward = LoRATrainer.forward
 
 
 # ======================================================================

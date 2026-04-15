@@ -29,16 +29,16 @@ def _selective_scan(
     """Parallel selective scan via associative scan.
 
     Args:
-        A: (B, T, H)         — log of diagonal state decay
-        B: (B, T, G, N)      — input-to-state projection
-        C: (B, T, G, N)      — state-to-output projection
-        dt: (B, T, H)        — input-dependent time step (after softplus)
-        x: (B, T, H)         — gated input
+        A: (b, T, H)         — log of diagonal state decay
+        B: (b, T, G, N)      — input-to-state projection (SSM B matrix)
+        C: (b, T, G, N)      — state-to-output projection (SSM C matrix)
+        dt: (b, T, H)        — input-dependent time step (after softplus)
+        x: (b, T, H)         — gated input
 
     Returns:
-        y: (B, T, H)         — scan output
+        y: (b, T, H)         — scan output
 
-    Where H = n_heads, N = d_state, G = n_groups.
+    Where b = batch, H = n_heads, N = d_state, G = n_groups.
     Each head belongs to one group: head i -> group (i * G // H).
     """
     batch, seq_len, n_heads = x.shape
@@ -273,11 +273,11 @@ class MambaBlock(Module):
         B_f32 = B.astype(jnp.float32)
         C_f32 = C.astype(jnp.float32)
 
-        # Per-head scan: run scan for each head_dim slice independently
-        # Actually, reshape so we process all head_dims together
-        # x for scan: (B, T, n_heads * head_dim) reshaped appropriately
-        # The scan operates per-head, so we do it per head_dim slice
-        # and then concat. For efficiency, reshape to (B*head_dim, T, n_heads).
+        # The selective scan operates on (batch, T, n_heads) — one scalar per
+        # head.  But our input has head_dim values per head.  We tile the batch
+        # dimension by head_dim so each head_dim slice gets its own independent
+        # scan, then reshape back.  This avoids vmap (which would prevent XLA
+        # from fusing the scans) and keeps a single associative_scan call.
         ssm_flat = ssm_in_heads.transpose(0, 3, 1, 2)  # (B, head_dim, T, n_heads)
         ssm_flat = ssm_flat.reshape(batch * head_dim, seq_len, n_heads)
 

@@ -3,6 +3,10 @@
 A pure selective state space model following the Mamba-2 architecture
 (Dao & Gu, 2024).  No positional embeddings — position information
 is implicit in the SSM recurrent state.
+
+Inherits GPT's ``loss``, ``unembed``, and ``__call__`` (the
+embed → decode → unembed → loss pipeline is identical).  Only
+``setup``, ``embed``, and ``decode`` differ.
 """
 
 import jax
@@ -14,17 +18,21 @@ from typing import Any, List, Optional, Tuple, Type
 from theseus.model.block.mamba import MambaBlock
 from theseus.model.layers.rmsnorm import RMSNorm
 from theseus.model.axes import Axes
-from theseus.model.module import Module
+from theseus.model.models.base import GPT
 from theseus.config import field, configure
 from theseus.base.axis import Axis
 
 
-class Mamba(Module):
+class Mamba(GPT):
+    """Mamba-2 language model — SSM-only, no attention.
+
+    Overrides GPT's setup/embed/decode to use MambaBlock layers
+    and skip positional embeddings.  ``loss``, ``unembed``, and
+    ``__call__`` are inherited unchanged.
+    """
+
+    # Override defaults for SSM-typical depth
     n_layers: int = field("architecture/n_layers", default=48)
-    n_embd: int = field("architecture/n_embd", default=2048)
-    block_size: int = field("architecture/block_size", default=2048)
-    dropout: float = field("architecture/dropout", default=0.0)
-    vocab_size: int = field("architecture/vocab_size", default=100288)
 
     @property
     def sharding(self) -> List[Tuple[str, Optional[Any]]]:
@@ -54,6 +62,7 @@ class Mamba(Module):
 
         self.drop = nn.Dropout(rate=self.dropout)
         self.blocks = [configure(MambaBlock) for _ in range(self.n_layers)]
+        # Use RMSNorm (not LayerNorm) — matches Mamba-2 convention
         self.ln_f = configure(RMSNorm)
 
     def embed(self, idx: jax.Array, deterministic: bool = False, **kwargs: Any) -> Any:
@@ -74,48 +83,7 @@ class Mamba(Module):
         return x
 
     def unembed(self, x: jax.Array) -> Any:
+        # Override to use RMSNorm (self.ln_f is RMSNorm, not LayerNorm)
         x = self.ln_f(x)
         logits = jnp.einsum("bth,vh->btv", x, self.wte.astype(self._activation_dtype))
         return logits
-
-    def loss(self, logits: jax.Array, targets: jax.Array) -> jax.Array:
-        logits_f32 = logits.astype(jnp.float32)
-        logits_flat = logits_f32.reshape(-1, logits_f32.shape[-1])
-        targets_flat = targets.reshape(-1)
-
-        mask = targets_flat != -1
-        targets_masked = jnp.where(mask, targets_flat, 0)
-
-        loss = -jnp.sum(
-            jax.nn.log_softmax(logits_flat, axis=-1)
-            * jax.nn.one_hot(targets_masked, self.vocab_size)
-            * mask[:, None]
-        ) / mask.sum().clip(min=1)
-
-        return loss
-
-    def __call__(
-        self,
-        idx: jax.Array,
-        targets: Optional[jax.Array] = None,
-        padding_mask: Optional[jax.Array] = None,
-        deterministic: bool = False,
-        **kwargs: Any,
-    ) -> Tuple[jax.Array, Optional[jax.Array]]:
-        b, t = idx.shape
-        assert t <= self.block_size, (
-            f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
-        )
-
-        x = self.embed(idx, deterministic, **kwargs)
-        x = self.decode(
-            x, padding_mask=padding_mask, deterministic=deterministic, **kwargs
-        )
-        logits = self.unembed(x)
-
-        if targets is not None:
-            loss = self.loss(logits, targets)
-        else:
-            loss = None
-
-        return logits, loss
