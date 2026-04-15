@@ -34,7 +34,6 @@ from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
     ABCDConfig,
-    FadeConfig,
 )
 from theseus.training.lora import (
     LoRAConfig,
@@ -88,7 +87,6 @@ class BenchmarkLoRAConfig(ABCDConfig):
             [Sampling(name="fineweb", rate=1, style=DatasetStyle.PMD)],
         ],
     )
-    post_lora_fade: FadeConfig = dataclass_field(default_factory=FadeConfig)
 
 
 # ======================================================================
