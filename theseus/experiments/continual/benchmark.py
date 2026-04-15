@@ -297,24 +297,23 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):  
         if self.main_process():
             logger.info("LORA | injected {} trainable params", count)
 
+        lora_params: Dict[str, Any] = {"lora_A": lora_A, "lora_B": lora_B}
         lora_tx = optax.adam(learning_rate=self.scheduler)
 
-        def make_lora_state(base: Any, a: Any, b: Any) -> LoRATrainState:
+        def make_lora_state(base: Any, lp: Any) -> LoRATrainState:
             return type_cast(
                 LoRATrainState,
                 LoRATrainState.create(  # type: ignore
                     apply_fn=self.model.apply,
-                    params=self.state.params,
+                    params=lp,
                     base_params=base,
-                    lora_A=a,
-                    lora_B=b,
                     tx=lora_tx,
                     lora_alpha=self.lora_config.alpha,
                     lora_rank=self.lora_config.rank,
                 ),
             )
 
-        self.state = make_lora_state(base_params, lora_A, lora_B)
+        self.state = make_lora_state(base_params, lora_params)
         self._in_lora_phase = True
         self._current_dl_idx = 0  # reset for post-LoRA stages
 
@@ -367,12 +366,12 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):  
         rngs = {"dropout": dropout_key} if dropout_key is not None else {}
 
         effective_params = params
-        if hasattr(state, "lora_A") and hasattr(state, "base_params"):
+        if isinstance(params, dict) and "lora_A" in params:
             lora_state = type_cast(LoRATrainState, state)
             effective_params = merge_lora_params(
                 lora_state.base_params,
-                lora_state.lora_A,
-                lora_state.lora_B,
+                params["lora_A"],
+                params["lora_B"],
                 lora_state.lora_alpha,
                 lora_state.lora_rank,
             )

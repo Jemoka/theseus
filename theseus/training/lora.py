@@ -190,11 +190,16 @@ def count_lora_params(lora_A: PyTree[Any], lora_B: PyTree[Any]) -> int:
 
 
 class LoRATrainState(train_state.TrainState):  # type: ignore[no-untyped-call]
-    """Train state for LoRA phase: frozen base + trainable adapters."""
+    """Train state for LoRA phase.
+
+    ``params`` holds the trainable LoRA parameters as
+    ``{"lora_A": pytree, "lora_B": pytree}``.  The optimizer in
+    ``tx`` acts on ``params``, so only the adapters are updated.
+
+    ``base_params`` holds the frozen pretrained weights (bfloat16).
+    """
 
     base_params: PyTree[Any]  # frozen base parameters
-    lora_A: PyTree[Any]  # trainable LoRA A matrices
-    lora_B: PyTree[Any]  # trainable LoRA B matrices
     lora_alpha: float
     lora_rank: int
 
@@ -293,30 +298,29 @@ class LoRATrainer(BaseTrainer[C, M], Generic[C, M]):
                 self.lora_config.alpha,
             )
 
-        # Build optimizer for LoRA params only
+        # Pack LoRA A/B into a single dict — this becomes state.params
+        # so the optimizer updates only these.
+        lora_params = {"lora_A": lora_A, "lora_B": lora_B}
+
         lora_tx = optax.adam(learning_rate=self.scheduler)
 
-        # Create LoRA train state
         def make_lora_state(
             base: PyTree[jax.Array],
-            a: PyTree[Any],
-            b: PyTree[Any],
+            lp: Dict[str, Any],
         ) -> LoRATrainState:
             return type_cast(
                 LoRATrainState,
                 LoRATrainState.create(  # type: ignore
                     apply_fn=self.model.apply,
-                    params=self.state.params,  # current full params
+                    params=lp,  # optimizer acts on this
                     base_params=base,
-                    lora_A=a,
-                    lora_B=b,
                     tx=lora_tx,
                     lora_alpha=self.lora_config.alpha,
                     lora_rank=self.lora_config.rank,
                 ),
             )
 
-        self.state = make_lora_state(base_params, lora_A, lora_B)
+        self.state = make_lora_state(base_params, lora_params)
         self._in_lora_phase = True
 
         multihost_utils.sync_global_devices("lora_transition:end")
@@ -453,14 +457,15 @@ class LoRATrainer(BaseTrainer[C, M], Generic[C, M]):
             _, dropout_key = jax.random.split(key)
         rngs = {"dropout": dropout_key} if dropout_key is not None else {}
 
-        # In LoRA phase, merge base + LoRA params for forward
+        # In LoRA phase, params = {"lora_A": ..., "lora_B": ...}.
+        # Merge with frozen base_params to get effective model weights.
         effective_params = params
-        if hasattr(state, "lora_A") and hasattr(state, "base_params"):
+        if isinstance(params, dict) and "lora_A" in params:
             lora_state = type_cast(LoRATrainState, state)
             effective_params = merge_lora_params(
                 lora_state.base_params,
-                lora_state.lora_A,
-                lora_state.lora_B,
+                params["lora_A"],
+                params["lora_B"],
                 lora_state.lora_alpha,
                 lora_state.lora_rank,
             )

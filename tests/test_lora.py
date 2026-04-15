@@ -1,16 +1,20 @@
-"""Tests for LoRA parameter utilities and model compatibility.
+"""Tests for LoRA parameter utilities, model compatibility, and train state.
 
 Inspired by scripts/llama_parity.py — tests LoRA injection, merging,
-and forward pass for all model types.
+forward pass, and critically: that the optimizer actually updates LoRA
+params (not frozen base) during a training step.
 """
 
 import pytest
 import jax
 import jax.numpy as jnp
+import optax
 from contextlib import contextmanager
+from typing import Any
 
 from theseus.config import build, configuration, configure
 from theseus.training.lora import (
+    LoRATrainState,
     param_filter,
     inject_lora_params,
     merge_lora_params,
@@ -21,6 +25,7 @@ from theseus.training.lora import (
 # ---------------------------------------------------------------------------
 # Config context helpers
 # ---------------------------------------------------------------------------
+
 
 @contextmanager
 def _gpt_config_ctx():
@@ -86,14 +91,13 @@ def _mamba_config_ctx():
 
 class TestParamFilter:
     def test_filter_kernel(self):
-        """Targeting 'kernel' should match Dense layer kernels."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
             model = configure(GPT)
-            key = jax.random.PRNGKey(0)
-            idx = jnp.zeros((1, 8), dtype=jnp.int32)
-            params = model.init(key, idx)["params"]
+            params = model.init(
+                jax.random.PRNGKey(0), jnp.zeros((1, 8), dtype=jnp.int32)
+            )["params"]
 
             mask = param_filter(params, ["kernel"])
             mask_leaves = jax.tree_util.tree_leaves(mask)
@@ -101,7 +105,6 @@ class TestParamFilter:
             assert not all(mask_leaves), "All params are kernels? Unexpected."
 
     def test_filter_empty(self):
-        """Empty target list should match nothing."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -116,7 +119,6 @@ class TestParamFilter:
 
 class TestInjectLoRA:
     def test_shapes(self):
-        """Injected A/B have correct shapes for targeted 2D params."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -127,24 +129,23 @@ class TestInjectLoRA:
 
             rank = 4
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, rank, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, rank, jax.random.PRNGKey(1)
+            )
 
-            # Use tree_map to check shapes in aligned pairs
-            def _check(p, m, a, b):
+            def _check(p: Any, m: Any, a: Any, b: Any) -> Any:
                 if m and p.ndim == 2:
-                    assert a is not None, "A should exist for targeted 2D param"
+                    assert a is not None
                     assert a.shape == (p.shape[0], rank)
-                    assert b is not None, "B should exist for targeted 2D param"
+                    assert b is not None
                     assert b.shape == (rank, p.shape[1])
-                return p  # return something to satisfy tree_map
+                return p
 
             jax.tree_util.tree_map(
-                _check, params, mask, lora_A, lora_B,
-                is_leaf=lambda x: x is None,
+                _check, params, mask, lora_A, lora_B, is_leaf=lambda x: x is None
             )
 
     def test_b_initialized_zero(self):
-        """B matrices should be zeros so initial delta is zero."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -163,7 +164,6 @@ class TestInjectLoRA:
 
 class TestMergeLoRA:
     def test_zero_b_preserves_base(self):
-        """With B=0, merged params should equal base."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -173,7 +173,9 @@ class TestMergeLoRA:
             )["params"]
 
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, 4, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, 4, jax.random.PRNGKey(1)
+            )
             merged = merge_lora_params(params, lora_A, lora_B, alpha=4.0, rank=4)
 
             for base_leaf, merged_leaf in zip(
@@ -183,7 +185,6 @@ class TestMergeLoRA:
                 assert jnp.allclose(base_leaf, merged_leaf, atol=1e-6)
 
     def test_nonzero_delta(self):
-        """With non-zero B, merged should differ from base."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -193,9 +194,10 @@ class TestMergeLoRA:
             )["params"]
 
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, 4, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, 4, jax.random.PRNGKey(1)
+            )
 
-            # Set B to non-zero
             lora_B_nz = jax.tree_util.tree_map(
                 lambda b: jnp.ones_like(b) if b is not None else None,
                 lora_B,
@@ -226,60 +228,60 @@ class TestCountLoRA:
 
             rank = 4
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, rank, jax.random.PRNGKey(1))
-
+            lora_A, lora_B = inject_lora_params(
+                params, mask, rank, jax.random.PRNGKey(1)
+            )
             count = count_lora_params(lora_A, lora_B)
             assert count > 0
 
 
 # ---------------------------------------------------------------------------
-# Model-specific forward pass tests
+# Forward pass tests
 # ---------------------------------------------------------------------------
 
 
 class TestLoRAForwardGPT:
-    """Test LoRA merge + forward for GPT."""
-
     def test_forward_matches_base_with_zero_b(self):
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
             model = configure(GPT)
-            key = jax.random.PRNGKey(0)
             idx = jnp.zeros((1, 8), dtype=jnp.int32)
-            params = model.init(key, idx)["params"]
+            params = model.init(jax.random.PRNGKey(0), idx)["params"]
 
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, 4, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, 4, jax.random.PRNGKey(1)
+            )
             merged = merge_lora_params(params, lora_A, lora_B, alpha=4.0, rank=4)
 
             logits_base, _ = model.apply({"params": params}, idx, deterministic=True)
             logits_lora, _ = model.apply({"params": merged}, idx, deterministic=True)
-
             assert jnp.allclose(logits_base, logits_lora, atol=1e-5)
 
     def test_gradients_flow_through_lora(self):
-        """Verify that gradients flow through LoRA B params."""
+        """Verify gradients w.r.t. LoRA B params are non-zero."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
             model = configure(GPT)
-            key = jax.random.PRNGKey(0)
             idx = jnp.zeros((1, 8), dtype=jnp.int32)
             targets = jnp.ones((1, 8), dtype=jnp.int32)
-            params = model.init(key, idx)["params"]
+            params = model.init(jax.random.PRNGKey(0), idx)["params"]
 
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, 4, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, 4, jax.random.PRNGKey(1)
+            )
 
-            # Set B to small non-zero
+            # Set B to small non-zero so gradients are meaningful
             lora_B_nz = jax.tree_util.tree_map(
                 lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
                 lora_B,
                 is_leaf=lambda x: x is None,
             )
 
-            def loss_fn(b):
+            def loss_fn(b: Any) -> jax.Array:
                 merged = merge_lora_params(params, lora_A, b, alpha=4.0, rank=4)
                 _, loss = model.apply(
                     {"params": merged}, idx, targets=targets, deterministic=True
@@ -288,7 +290,6 @@ class TestLoRAForwardGPT:
 
             grad = jax.grad(loss_fn, allow_int=True)(lora_B_nz)
 
-            # Check non-None leaves have gradients
             has_grad = False
             for leaf in jax.tree_util.tree_leaves(grad):
                 if leaf is not None and hasattr(leaf, "shape") and leaf.size > 0:
@@ -299,63 +300,219 @@ class TestLoRAForwardGPT:
 
 
 class TestLoRAForwardMamba:
-    """Test LoRA merge + forward for Mamba."""
-
     def test_forward_matches_base_with_zero_b(self):
         with _mamba_config_ctx():
             from theseus.model.models.mamba import Mamba
 
             model = configure(Mamba)
-            key = jax.random.PRNGKey(0)
             idx = jnp.zeros((1, 8), dtype=jnp.int32)
-            params = model.init(key, idx)["params"]
+            params = model.init(jax.random.PRNGKey(0), idx)["params"]
 
             mask = param_filter(params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(params, mask, 4, jax.random.PRNGKey(1))
+            lora_A, lora_B = inject_lora_params(
+                params, mask, 4, jax.random.PRNGKey(1)
+            )
             merged = merge_lora_params(params, lora_A, lora_B, alpha=4.0, rank=4)
 
             logits_base, _ = model.apply({"params": params}, idx, deterministic=True)
             logits_lora, _ = model.apply({"params": merged}, idx, deterministic=True)
-
             assert jnp.allclose(logits_base, logits_lora, atol=1e-5)
 
 
+# ---------------------------------------------------------------------------
+# LoRATrainState integration test — the critical test that was missing
+# ---------------------------------------------------------------------------
+
+
+class TestLoRATrainState:
+    """Test that LoRATrainState + optimizer actually updates LoRA params
+    and leaves base_params frozen."""
+
+    def test_optimizer_updates_lora_not_base(self):
+        """Simulate a training step and verify only LoRA params change."""
+        with _gpt_config_ctx():
+            from theseus.model.models.base import GPT
+
+            model = configure(GPT)
+            idx = jnp.zeros((1, 8), dtype=jnp.int32)
+            targets = jnp.ones((1, 8), dtype=jnp.int32)
+            full_params = model.init(jax.random.PRNGKey(0), idx)["params"]
+
+            # Inject LoRA
+            mask = param_filter(full_params, ["kernel"])
+            lora_A, lora_B = inject_lora_params(
+                full_params, mask, 4, jax.random.PRNGKey(1)
+            )
+
+            # Set B non-zero so gradients flow
+            lora_B = jax.tree_util.tree_map(
+                lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
+                lora_B,
+                is_leaf=lambda x: x is None,
+            )
+
+            # Create LoRATrainState — params = {"lora_A", "lora_B"}
+            base_params = jax.tree_util.tree_map(lambda x: x.copy(), full_params)
+            lora_params = {"lora_A": lora_A, "lora_B": lora_B}
+
+            tx = optax.adam(1e-3)
+            state = LoRATrainState.create(  # type: ignore[no-untyped-call]
+                apply_fn=model.apply,
+                params=lora_params,
+                base_params=base_params,
+                tx=tx,
+                lora_alpha=4.0,
+                lora_rank=4,
+            )
+
+            # Snapshot before
+            base_before = jax.tree_util.tree_map(lambda x: x.copy(), state.base_params)
+            lora_before = jax.tree_util.tree_map(
+                lambda x: x.copy() if x is not None else None,
+                state.params,
+                is_leaf=lambda x: x is None,
+            )
+
+            # Compute gradients w.r.t. state.params (the LoRA dict)
+            def loss_fn(lora_p: Any) -> jax.Array:
+                merged = merge_lora_params(
+                    state.base_params,
+                    lora_p["lora_A"],
+                    lora_p["lora_B"],
+                    state.lora_alpha,
+                    state.lora_rank,
+                )
+                _, loss = model.apply(
+                    {"params": merged}, idx, targets=targets, deterministic=True
+                )
+                return loss
+
+            grads = jax.grad(loss_fn, allow_int=True)(state.params)
+
+            # Apply gradients — this updates state.params (LoRA)
+            state = state.apply_gradients(grads=grads)  # type: ignore[no-untyped-call]
+
+            # Verify: base_params unchanged
+            for before, after in zip(
+                jax.tree_util.tree_leaves(base_before),
+                jax.tree_util.tree_leaves(state.base_params),
+            ):
+                assert jnp.array_equal(before, after), "base_params was modified!"
+
+            # Verify: LoRA params changed
+            lora_changed = False
+            for before, after in zip(
+                jax.tree_util.tree_leaves(lora_before),
+                jax.tree_util.tree_leaves(state.params),
+            ):
+                if before is not None and after is not None:
+                    if hasattr(before, "shape") and not jnp.array_equal(before, after):
+                        lora_changed = True
+                        break
+            assert lora_changed, "LoRA params were NOT updated by optimizer!"
+
+    def test_merged_output_changes_after_step(self):
+        """Verify the merged model output actually changes after an optimizer step."""
+        with _gpt_config_ctx():
+            from theseus.model.models.base import GPT
+
+            model = configure(GPT)
+            idx = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=jnp.int32)
+            targets = jnp.array([[2, 3, 4, 5, 6, 7, 8, 9]], dtype=jnp.int32)
+            full_params = model.init(jax.random.PRNGKey(0), idx)["params"]
+
+            mask = param_filter(full_params, ["kernel"])
+            lora_A, lora_B = inject_lora_params(
+                full_params, mask, 4, jax.random.PRNGKey(1)
+            )
+
+            # Non-zero B
+            lora_B = jax.tree_util.tree_map(
+                lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
+                lora_B,
+                is_leaf=lambda x: x is None,
+            )
+
+            base_params = full_params
+            lora_params = {"lora_A": lora_A, "lora_B": lora_B}
+            tx = optax.adam(1e-2)
+
+            state = LoRATrainState.create(  # type: ignore[no-untyped-call]
+                apply_fn=model.apply,
+                params=lora_params,
+                base_params=base_params,
+                tx=tx,
+                lora_alpha=4.0,
+                lora_rank=4,
+            )
+
+            # Output before
+            merged_before = merge_lora_params(
+                base_params, state.params["lora_A"], state.params["lora_B"], 4.0, 4
+            )
+            logits_before, _ = model.apply(
+                {"params": merged_before}, idx, deterministic=True
+            )
+
+            # One optimization step
+            def loss_fn(lora_p: Any) -> jax.Array:
+                merged = merge_lora_params(
+                    state.base_params,
+                    lora_p["lora_A"],
+                    lora_p["lora_B"],
+                    state.lora_alpha,
+                    state.lora_rank,
+                )
+                _, loss = model.apply(
+                    {"params": merged}, idx, targets=targets, deterministic=True
+                )
+                return loss
+
+            grads = jax.grad(loss_fn, allow_int=True)(state.params)
+            state = state.apply_gradients(grads=grads)  # type: ignore[no-untyped-call]
+
+            # Output after
+            merged_after = merge_lora_params(
+                base_params, state.params["lora_A"], state.params["lora_B"], 4.0, 4
+            )
+            logits_after, _ = model.apply(
+                {"params": merged_after}, idx, deterministic=True
+            )
+
+            assert not jnp.allclose(logits_before, logits_after, atol=1e-6), (
+                "Model output didn't change after optimizer step!"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Contrib model tests
+# ---------------------------------------------------------------------------
+
+
 class TestLoRAContribModels:
-    """Test LoRA param filter + injection for contrib models.
-
-    Contrib models use configure() internally, so they need config contexts.
-    We build minimal configs for each model family.
-    """
-
-    def _test_model_lora(self, model, idx):
-        """Generic LoRA test: filter, inject, merge, forward."""
+    def _test_model_lora(self, model: Any, idx: Any) -> None:
         params = model.init(jax.random.PRNGKey(0), idx)["params"]
 
         mask = param_filter(params, ["kernel"])
-        mask_leaves = jax.tree_util.tree_leaves(mask)
-        assert any(mask_leaves), "No kernels found"
+        assert any(jax.tree_util.tree_leaves(mask)), "No kernels found"
 
-        rank = 4
-        lora_A, lora_B = inject_lora_params(params, mask, rank, jax.random.PRNGKey(1))
+        lora_A, lora_B = inject_lora_params(
+            params, mask, 4, jax.random.PRNGKey(1)
+        )
+        assert count_lora_params(lora_A, lora_B) > 0
 
-        count = count_lora_params(lora_A, lora_B)
-        assert count > 0
-
-        # Merge with zero B should preserve output
+        # Zero B merge preserves output
         merged = merge_lora_params(params, lora_A, lora_B, alpha=4.0, rank=4)
         logits_base, _ = model.apply({"params": params}, idx, deterministic=True)
         logits_lora, _ = model.apply({"params": merged}, idx, deterministic=True)
         assert jnp.allclose(logits_base, logits_lora, atol=1e-4)
 
-    def _contrib_config_ctx(self, model_cls, **overrides):
-        """Build a config context for a contrib model with tiny dimensions."""
+    def _contrib_config_ctx(self, model_cls: Any, **overrides: Any) -> Any:
         from omegaconf import OmegaConf
 
         all_types = model_cls.gather()
         cfg = build(*all_types)
         OmegaConf.set_struct(cfg, False)
-
-        # Defaults for all contrib models
         defaults = dict(
             n_layers=2, n_embd=64, n_head=4, n_kv_head=4,
             block_size=32, vocab_size=128, dropout=0.0, attn_dropout=0.0,
@@ -369,8 +526,7 @@ class TestLoRAContribModels:
             try:
                 setattr(cfg.architecture, k, v)
             except Exception:
-                pass  # field doesn't exist on this model
-
+                pass
         cfg.architecture.dtype = OmegaConf.create(
             {"param": "float32", "activation": "float32"}
         )
