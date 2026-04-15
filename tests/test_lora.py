@@ -320,99 +320,67 @@ class TestLoRAForwardMamba:
 
 
 # ---------------------------------------------------------------------------
-# LoRATrainState integration test — the critical test that was missing
+# LoRATrainState integration — exercises the real forward/grad/apply path
 # ---------------------------------------------------------------------------
 
 
+def _make_lora_state(model, full_params, rank=4, lr=1e-3):
+    """Create a LoRATrainState the same way the trainer does."""
+    mask = param_filter(full_params, ["kernel"])
+    lora_A, lora_B = inject_lora_params(full_params, mask, rank, jax.random.PRNGKey(1))
+
+    # Non-zero B so gradients flow from step 0
+    lora_B = jax.tree_util.tree_map(
+        lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
+        lora_B,
+        is_leaf=lambda x: x is None,
+    )
+
+    base_params = jax.tree_util.tree_map(lambda x: x.copy(), full_params)
+    lora_params = {"lora_A": lora_A, "lora_B": lora_B}
+
+    return LoRATrainState.create(  # type: ignore[no-untyped-call]
+        apply_fn=model.apply,
+        params=lora_params,
+        base_params=base_params,
+        tx=optax.adam(lr),
+        lora_alpha=float(rank),
+        lora_rank=rank,
+    )
+
+
+def _make_batch(idx, targets):
+    """Build a batch dict matching what forward() expects."""
+    return {
+        "x": idx,
+        "y": targets,
+        "padding_mask": jnp.ones_like(idx, dtype=jnp.bool_),
+    }
+
+
+def _lora_train_step(forward_fn, state, batch):
+    """One train step using the trainer's static forward — same path as
+    BaseTrainer.train_step but without accumulation/scan overhead."""
+
+    def loss_fn(params):
+        _logits, loss, _meta = forward_fn(
+            state, params, batch, key=jax.random.PRNGKey(0), deterministic=True
+        )
+        return loss
+
+    loss, grads = jax.value_and_grad(loss_fn)(state.params)
+    state = state.apply_gradients(grads=grads)  # type: ignore[no-untyped-call]
+    return state, loss
+
+
 class TestLoRATrainState:
-    """Test that LoRATrainState + optimizer actually updates LoRA params
-    and leaves base_params frozen."""
+    """Full-cycle integration: create state -> forward -> grad -> apply ->
+    verify LoRA changed, base frozen, model output changed, base-only
+    forward unchanged."""
 
-    def test_optimizer_updates_lora_not_base(self):
-        """Simulate a training step and verify only LoRA params change."""
-        with _gpt_config_ctx():
-            from theseus.model.models.base import GPT
+    def test_full_cycle(self):
+        from theseus.training.lora import LoRATrainer
 
-            model = configure(GPT)
-            idx = jnp.zeros((1, 8), dtype=jnp.int32)
-            targets = jnp.ones((1, 8), dtype=jnp.int32)
-            full_params = model.init(jax.random.PRNGKey(0), idx)["params"]
-
-            # Inject LoRA
-            mask = param_filter(full_params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(
-                full_params, mask, 4, jax.random.PRNGKey(1)
-            )
-
-            # Set B non-zero so gradients flow
-            lora_B = jax.tree_util.tree_map(
-                lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
-                lora_B,
-                is_leaf=lambda x: x is None,
-            )
-
-            # Create LoRATrainState — params = {"lora_A", "lora_B"}
-            base_params = jax.tree_util.tree_map(lambda x: x.copy(), full_params)
-            lora_params = {"lora_A": lora_A, "lora_B": lora_B}
-
-            tx = optax.adam(1e-3)
-            state = LoRATrainState.create(  # type: ignore[no-untyped-call]
-                apply_fn=model.apply,
-                params=lora_params,
-                base_params=base_params,
-                tx=tx,
-                lora_alpha=4.0,
-                lora_rank=4,
-            )
-
-            # Snapshot before
-            base_before = jax.tree_util.tree_map(lambda x: x.copy(), state.base_params)
-            lora_before = jax.tree_util.tree_map(
-                lambda x: x.copy() if x is not None else None,
-                state.params,
-                is_leaf=lambda x: x is None,
-            )
-
-            # Compute gradients w.r.t. state.params (the LoRA dict)
-            def loss_fn(lora_p: Any) -> jax.Array:
-                merged = merge_lora_params(
-                    state.base_params,
-                    lora_p["lora_A"],
-                    lora_p["lora_B"],
-                    state.lora_alpha,
-                    state.lora_rank,
-                )
-                _, loss = model.apply(
-                    {"params": merged}, idx, targets=targets, deterministic=True
-                )
-                return loss
-
-            grads = jax.grad(loss_fn, allow_int=True)(state.params)
-
-            # Apply gradients — this updates state.params (LoRA)
-            state = state.apply_gradients(grads=grads)  # type: ignore[no-untyped-call]
-
-            # Verify: base_params unchanged
-            for before, after in zip(
-                jax.tree_util.tree_leaves(base_before),
-                jax.tree_util.tree_leaves(state.base_params),
-            ):
-                assert jnp.array_equal(before, after), "base_params was modified!"
-
-            # Verify: LoRA params changed
-            lora_changed = False
-            for before, after in zip(
-                jax.tree_util.tree_leaves(lora_before),
-                jax.tree_util.tree_leaves(state.params),
-            ):
-                if before is not None and after is not None:
-                    if hasattr(before, "shape") and not jnp.array_equal(before, after):
-                        lora_changed = True
-                        break
-            assert lora_changed, "LoRA params were NOT updated by optimizer!"
-
-    def test_merged_output_changes_after_step(self):
-        """Verify the merged model output actually changes after an optimizer step."""
         with _gpt_config_ctx():
             from theseus.model.models.base import GPT
 
@@ -420,67 +388,64 @@ class TestLoRATrainState:
             idx = jnp.array([[1, 2, 3, 4, 5, 6, 7, 8]], dtype=jnp.int32)
             targets = jnp.array([[2, 3, 4, 5, 6, 7, 8, 9]], dtype=jnp.int32)
             full_params = model.init(jax.random.PRNGKey(0), idx)["params"]
+            batch = _make_batch(idx, targets)
 
-            mask = param_filter(full_params, ["kernel"])
-            lora_A, lora_B = inject_lora_params(
-                full_params, mask, 4, jax.random.PRNGKey(1)
-            )
+            state = _make_lora_state(model, full_params, rank=4, lr=1e-2)
 
-            # Non-zero B
-            lora_B = jax.tree_util.tree_map(
-                lambda b: jnp.ones_like(b) * 0.01 if b is not None else None,
-                lora_B,
+            # Snapshot base and lora before training
+            base_before = jax.tree_util.tree_map(lambda x: x.copy(), state.base_params)
+            lora_before = jax.tree_util.tree_map(
+                lambda x: x.copy() if x is not None else None,
+                state.params,
                 is_leaf=lambda x: x is None,
             )
 
-            base_params = full_params
-            lora_params = {"lora_A": lora_A, "lora_B": lora_B}
-            tx = optax.adam(1e-2)
-
-            state = LoRATrainState.create(  # type: ignore[no-untyped-call]
-                apply_fn=model.apply,
-                params=lora_params,
-                base_params=base_params,
-                tx=tx,
-                lora_alpha=4.0,
-                lora_rank=4,
+            # Forward before step (through trainer's forward)
+            logits_before, loss_before, _ = LoRATrainer.forward(
+                state, state.params, batch, deterministic=True
             )
 
-            # Output before
-            merged_before = merge_lora_params(
-                base_params, state.params["lora_A"], state.params["lora_B"], 4.0, 4
-            )
-            logits_before, _ = model.apply(
-                {"params": merged_before}, idx, deterministic=True
+            # Bare model forward with base params only (no LoRA)
+            logits_base_only, _ = model.apply(
+                {"params": full_params}, idx, deterministic=True
             )
 
-            # One optimization step
-            def loss_fn(lora_p: Any) -> jax.Array:
-                merged = merge_lora_params(
-                    state.base_params,
-                    lora_p["lora_A"],
-                    lora_p["lora_B"],
-                    state.lora_alpha,
-                    state.lora_rank,
-                )
-                _, loss = model.apply(
-                    {"params": merged}, idx, targets=targets, deterministic=True
-                )
-                return loss
+            # --- Train step via trainer's forward ---
+            state, _ = _lora_train_step(LoRATrainer.forward, state, batch)
 
-            grads = jax.grad(loss_fn, allow_int=True)(state.params)
-            state = state.apply_gradients(grads=grads)  # type: ignore[no-untyped-call]
+            # 1) base_params must be unchanged
+            for b, a in zip(
+                jax.tree_util.tree_leaves(base_before),
+                jax.tree_util.tree_leaves(state.base_params),
+            ):
+                assert jnp.array_equal(b, a), "base_params was modified!"
 
-            # Output after
-            merged_after = merge_lora_params(
-                base_params, state.params["lora_A"], state.params["lora_B"], 4.0, 4
+            # 2) LoRA params must have changed
+            lora_changed = False
+            for b, a in zip(
+                jax.tree_util.tree_leaves(lora_before),
+                jax.tree_util.tree_leaves(state.params),
+            ):
+                if b is not None and a is not None and hasattr(b, "shape"):
+                    if not jnp.array_equal(b, a):
+                        lora_changed = True
+                        break
+            assert lora_changed, "LoRA params were NOT updated!"
+
+            # 3) Merged forward output must differ after step
+            logits_after, _, _ = LoRATrainer.forward(
+                state, state.params, batch, deterministic=True
             )
-            logits_after, _ = model.apply(
-                {"params": merged_after}, idx, deterministic=True
-            )
-
             assert not jnp.allclose(logits_before, logits_after, atol=1e-6), (
-                "Model output didn't change after optimizer step!"
+                "Model output didn't change after training step!"
+            )
+
+            # 4) Base-only forward (no LoRA) must be unchanged
+            logits_base_after, _ = model.apply(
+                {"params": full_params}, idx, deterministic=True
+            )
+            assert jnp.allclose(logits_base_only, logits_base_after, atol=1e-7), (
+                "Base model output changed — LoRA leaked into base params!"
             )
 
 
