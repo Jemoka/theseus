@@ -61,11 +61,11 @@ class ScratchingBlock(ForkingBlock):
         # Copy token index twice (for original and fork)
         forked_token_index = token_index.repeat(2, axis=-1)
 
-        # Mark *leftmost* token of each original token with +inf (always keep)
-        rolled = jnp.roll(forked_token_index, 1, axis=-1)
-        is_leftmost = rolled != forked_token_index
+        # Mark *rightmost* token of each original token with +inf (always keep)
+        rolled = jnp.roll(forked_token_index, -1, axis=-1)
+        is_rightmost = rolled != forked_token_index
         forking_scores_cum_for_topk = jnp.where(
-            is_leftmost, float("+inf"), forking_scores_cum_for_topk
+            is_rightmost, float("+inf"), forking_scores_cum_for_topk
         )
 
         if padding_mask is not None:
@@ -107,7 +107,7 @@ class ScratchingBlock(ForkingBlock):
 
         # Gather based on indices that survived
         orig_indices = top_k_indices // 2
-        is_fork = (top_k_indices % 2) == 1  # we fork to the *right*
+        is_fork = (top_k_indices % 2) == 0  # we fork to the *left*
 
         # Gather x values
         batch_indices = jnp.arange(batch_size)[:, None]
