@@ -9,7 +9,7 @@ Non-LoRA jobs: continual/train/benchmark{,_mamba,_hybrid}
 LoRA jobs: continual/train/benchmark{,_mamba,_hybrid}_lora
 """
 
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generic, List, Type, TypeVar
 from typing import cast as type_cast
@@ -61,22 +61,18 @@ class BenchmarkConfig(ABCDConfig):
 
 
 @dataclass
-class BenchmarkLoRAConfig(ABCDConfig):
+class BenchmarkLoRAConfig(BenchmarkConfig):
     """Config for LoRA benchmark runs.
 
-    Two levels of ABCD stages: pre-LoRA (full params) and post-LoRA
-    (adapter-only). Each side has its own multi-stage dataset schedule.
+    Inherits BenchmarkConfig (ABCDConfig + schedule/reset). The pre-LoRA
+    phase uses the inherited ``total_tokens``/``datasets`` for ABCD
+    multi-stage training with full params. Post-LoRA phase uses separate
+    token budgets and datasets for adapter-only training.
+
+    LoRA hyperparameters live under ``optimization/lora/`` in the YAML
+    and are read via ``configure(LoRAConfig)`` at init time.
     """
 
-    schedule_type: str = field("optimization/schedule", default="wsd")
-    reset_optimizer_at_boundaries: bool = field(
-        "optimization/reset_optimizer", default=False
-    )
-
-    lora: LoRAConfig = dataclass_field(default_factory=LoRAConfig)
-
-    # Pre-LoRA datasets/tokens are the main ABCDConfig ones (total_tokens, datasets)
-    # Post-LoRA datasets/tokens
     post_lora_tokens: List[int] = field(
         "training/post_lora_tokens",
         default_factory=lambda: [100_000_000],
@@ -219,7 +215,7 @@ class BenchmarkBaseTrainer(ABCDBaseTrainer[BC, M], Generic[BC, M]):
 BLC = TypeVar("BLC", bound=BenchmarkLoRAConfig)
 
 
-class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):  # type: ignore[type-var]
+class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
     """Benchmark trainer with LoRA support.
 
     Three-level data loading:

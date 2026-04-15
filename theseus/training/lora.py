@@ -9,7 +9,7 @@ and set pre_lora_datasets/tokens to empty to skip straight to LoRA
 fine-tuning from a pretrained checkpoint.
 """
 
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast as type_cast
 from typing import Any, Dict, List, Optional, Tuple, Type, Generic, TypeVar
@@ -55,9 +55,11 @@ class LoRATrainerConfig(BaseTrainerConfig):
 
     Pre-LoRA phase trains full parameters, then LoRA adapters are injected
     and only they are trained in the post-LoRA phase.
-    """
 
-    lora: LoRAConfig = dataclass_field(default_factory=LoRAConfig)
+    LoRA hyperparameters (rank, alpha, target_modules) are read from the
+    config namespace via ``configure(LoRAConfig)`` at init time — they
+    live under ``optimization/lora/`` in the YAML.
+    """
 
     pre_lora_tokens: List[int] = field(
         "training/pre_lora_tokens",
