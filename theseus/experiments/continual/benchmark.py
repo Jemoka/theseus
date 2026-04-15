@@ -24,7 +24,6 @@ from theseus.config import field, configure
 from theseus.base import PyTree, Topology, ExecutionSpec
 from theseus.registry import job
 from theseus.model.models import GPT, Mamba, Hybrid
-from theseus.training.schedules import SCHEDULES
 from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
@@ -91,25 +90,6 @@ class BenchmarkBaseTrainer(ABCDBaseTrainer[BC, M], Generic[BC, M]):
     def schedule(cls) -> optax._src.base.Schedule:
         return "wsd"
 
-    def _rebuild_schedule_for_stage(self, stage_idx: int) -> None:
-        """Rebuild the LR schedule for the remaining tokens in this stage.
-
-        Used for cosine rewarm: each stage gets a fresh warmup + cosine decay.
-        """
-        remaining_tokens = sum(self.args.total_tokens[stage_idx:])
-        remaining_steps = int(
-            remaining_tokens / self.args.batch_size / self.args.block_size
-        )
-        if remaining_steps <= 0:
-            return
-
-        sched_fn, sched_cfg_cls = SCHEDULES["cosine_rewarm"]
-        sched_cfg = configure(sched_cfg_cls)
-        self.scheduler = sched_fn(remaining_steps, sched_cfg)  # type: ignore[operator]
-        self.tx = self._optimizer()
-        new_opt_state = self.tx.init(self.state.params)
-        self.state = self.state.replace(opt_state=new_opt_state)
-
     def _reset_optimizer_state(self) -> None:
         """Reset optimizer moment estimates to zero."""
         new_opt_state = self.tx.init(self.state.params)
@@ -118,16 +98,16 @@ class BenchmarkBaseTrainer(ABCDBaseTrainer[BC, M], Generic[BC, M]):
     def _on_dataset_boundary(
         self, old_idx: int, new_idx: int, current_ntok: int
     ) -> None:
-        """Extends parent boundary handling with schedule-variant logic."""
+        """Extends parent boundary handling with WSD+reset logic.
+
+        Cosine rewarm doesn't need special boundary handling here — the
+        schedule is built upfront with all boundary positions baked in
+        via ``CosineRewarmConfig.stage_tokens``.
+        """
         super()._on_dataset_boundary(old_idx, new_idx, current_ntok)
 
-        if self.args.schedule_type == "cosine_rewarm":
-            self._rebuild_schedule_for_stage(new_idx)
-        elif self.args.reset_optimizer_at_boundaries:
+        if self.args.reset_optimizer_at_boundaries:
             self._reset_optimizer_state()
-
-    # batch() is inherited from ABCDBaseTrainer — no override needed.
-    # The _on_dataset_boundary hook handles schedule/reset at boundaries.
 
 
 # ======================================================================
