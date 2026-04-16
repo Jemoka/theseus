@@ -1,5 +1,11 @@
 ---
 name: theseus-cli
+user_invocable: true
+invocations:
+  - dispatch
+  - submit
+  - train
+  - theseus
 description: "Manage the full lifecycle of theseus ML training jobs: configure YAML configs, run jobs locally, submit/dispatch to remote clusters (SLURM, SSH, TPU, Volcano), start remote Jupyter REPLs, generate bootstrap scripts, and manage checkpoints. Use this skill whenever the user wants to train a model, launch a job, edit a training config, dispatch to a cluster, check on checkpoints, set up a remote notebook, or do anything involving the `theseus` CLI — even if they don't say 'theseus' explicitly. Also trigger when the user references configs in configs/, mentions job names like 'gpt/train/pretrain' or 'continual/train/abcd', or talks about chips/GPUs/TPUs in the context of running experiments."
 ---
 
