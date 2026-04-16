@@ -102,12 +102,12 @@ class ScratchSparseCrossAttention(ForkingAttention):
         # (Q/K are projected to scratch_head_dim, V stays at n_embd)
         scale = jnp.sqrt(jnp.array(q.shape[-1], dtype=ATTN_DTYPE))
         attn_weights = jnp.einsum("bqhd,bkhd->bhqk", q, k) / scale
-        self.sow("plots", "scratching_attn_weights", attn_weights)
         attn_weights = jnp.where(
             causal_mask.transpose(0, 1, 2, 3),  # (B, 1, Q, K)
             attn_weights,
             jnp.array(-1e9, dtype=ATTN_DTYPE),
         )
+        self.sow("plots", "scratching_attn_weights", attn_weights)
         attn_weights = jax.nn.softmax(attn_weights, axis=-1)
         y = jnp.einsum("bhqk,bkhd->bqhd", attn_weights, v)
         return y

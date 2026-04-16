@@ -111,8 +111,8 @@ class Scratchbubbles(Thoughtbubbles):
             fig, ax = plt.subplots(figsize=(12, 6))
             sns.heatmap(w.astype(jnp.float32), ax=ax, cmap="viridis")
 
-            ax.set_xlabel("token index (queries, forks)")
-            ax.set_ylabel("token index (keys, seq)")
+            ax.set_xlabel("token index (keys, seq)")
+            ax.set_ylabel("token index (queries, forks)")
             ax.set_title(f"Attention Weights for Block {i}")
             plt.tight_layout()
             plots[f"analysis/attention_weights_block_{i}"] = fig
