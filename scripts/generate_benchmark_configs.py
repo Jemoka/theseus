@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""Generate all 351 YAML configs for the continual learning benchmark paper.
+
+9 splits × (18 DS/CG configs + 3 IC configs) × 3 scales = 351 total.
+
+Usage:
+    uv run python scripts/generate_benchmark_configs.py
+"""
+
+from pathlib import Path
+
+import yaml
+
+# ======================================================================
+# Architecture specs by scale
+# ======================================================================
+
+ARCH_SPECS = {
+    "transformer": {
+        "700m": {"n_layers": 24, "n_embd": 1024, "n_head": 16},
+        "1b": {"n_layers": 32, "n_embd": 1280, "n_head": 20},
+        "2b": {"n_layers": 36, "n_embd": 1536, "n_head": 24},
+    },
+    "mamba": {
+        "700m": {
+            "n_layers": 48,
+            "n_embd": 1024,
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+        "1b": {
+            "n_layers": 64,
+            "n_embd": 1280,
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+        "2b": {
+            "n_layers": 72,
+            "n_embd": 1536,
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+    },
+    "hybrid": {
+        "700m": {
+            "n_layers": 32,
+            "n_embd": 1024,
+            "n_head": 16,
+            "mamba_layers": "even",
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+        "1b": {
+            "n_layers": 48,
+            "n_embd": 1280,
+            "n_head": 20,
+            "mamba_layers": "even",
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+        "2b": {
+            "n_layers": 56,
+            "n_embd": 1536,
+            "n_head": 24,
+            "mamba_layers": "even",
+            "d_state": 128,
+            "d_conv": 4,
+            "expand": 2,
+            "n_groups": 1,
+            "n_heads": -1,
+        },
+    },
+}
+
+# Chinchilla-optimal token budgets
+TOKEN_BUDGETS = {
+    "700m": 14_000_000_000,
+    "1b": 20_000_000_000,
+    "2b": 40_000_000_000,
+}
+
+JOB_MAP = {
+    ("transformer", "full"): "continual/train/benchmark",
+    ("transformer", "lora"): "continual/train/benchmark_lora",
+    ("mamba", "full"): "continual/train/benchmark_mamba",
+    ("mamba", "lora"): "continual/train/benchmark_mamba_lora",
+    ("hybrid", "full"): "continual/train/benchmark_hybrid",
+    ("hybrid", "lora"): "continual/train/benchmark_hybrid_lora",
+}
+
+# ======================================================================
+# Split definitions
+# ======================================================================
+
+
+def _scale_tokens(ratios: list[float], total: int) -> list[int]:
+    """Scale ratios to token counts that sum to total."""
+    tokens = [int(r * total) for r in ratios]
+    # Fix rounding
+    tokens[-1] = total - sum(tokens[:-1])
+    return tokens
+
+
+def _split_config(split_name: str, scale: str) -> dict:
+    """Return split-specific training config (tokens, datasets, evals, fade)."""
+    total = TOKEN_BUDGETS[scale]
+
+    if split_name == "ds_nlu":
+        tokens = _scale_tokens([0.98, 0.005, 0.005, 0.005, 0.005], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "fineweb", "rate": 1.0, "style": "PMD"}],
+                [{"name": "mnli", "rate": 1.0, "style": "PADDED"}],
+                [{"name": "qqp", "rate": 1.0, "style": "PADDED"}],
+                [{"name": "sst2", "rate": 1.0, "style": "PADDED"}],
+                [{"name": "siqa", "rate": 1.0, "style": "PADDED"}],
+            ],
+            "evaluations": ["mnli", "qqp", "sst2", "siqa", "fineweb_ppl"],
+            "fade": {"overlap": 0.1, "curve": "cosine"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": True,
+        }
+
+    elif split_name == "ds_domain":
+        tokens = _scale_tokens([0.5, 0.5], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "fineweb", "rate": 1.0, "style": "PMD"}],
+                [{"name": "pes2o", "rate": 1.0, "style": "PMD"}],
+            ],
+            "evaluations": ["fineweb_ppl", "pes2o", "pile", "tinystories"],
+            "fade": {"overlap": 0.1, "curve": "cosine"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": True,
+        }
+
+    elif split_name == "ds_multilingual":
+        tokens = _scale_tokens([1 / 3, 1 / 3, 1 / 3], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "fr_xx"}],
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "de_de"}],
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "zh_cn"}],
+            ],
+            "evaluations": ["ccaligned_fr_xx", "ccaligned_de_de", "ccaligned_zh_cn"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": False,
+        }
+
+    elif split_name == "cg_grammar":
+        tokens = _scale_tokens([0.5, 0.49, 0.01], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "fineweb", "rate": 1.0, "style": "PMD"}],
+                [
+                    {
+                        "name": "mtob",
+                        "rate": 0.6,
+                        "style": "PADDED",
+                        "suffix": "grammar",
+                    },
+                    {
+                        "name": "mtob",
+                        "rate": 0.4,
+                        "style": "PADDED",
+                        "suffix": "dictionary",
+                    },
+                ],
+                [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "en-kgv"}],
+            ],
+            "evaluations": ["fineweb_ppl", "mtob"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": True,
+        }
+
+    elif split_name == "cg_cfq":
+        tokens = _scale_tokens([0.5, 0.49, 0.01], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "cfq", "rate": 1.0, "style": "PADDED", "suffix": "sparql"}],
+                [{"name": "cfq", "rate": 1.0, "style": "PADDED", "suffix": "text"}],
+                [{"name": "cfq", "rate": 1.0, "style": "PADDED"}],
+            ],
+            "evaluations": ["cfq"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": False,
+        }
+
+    elif split_name == "cg_safety":
+        tokens = _scale_tokens([0.80, 0.08, 0.02, 0.08, 0.02], total)
+        return {
+            "tokens": tokens,
+            "datasets": [
+                [{"name": "pile_detoxify", "rate": 1.0, "style": "PMD"}],
+                [
+                    {
+                        "name": "harmfulqa",
+                        "rate": 0.5,
+                        "style": "PADDED",
+                        "suffix": "red",
+                    },
+                    {"name": "mmlu", "rate": 0.5, "style": "PADDED"},
+                ],
+                [
+                    {
+                        "name": "harmfulqa",
+                        "rate": 1.0,
+                        "style": "PADDED",
+                        "suffix": "blue",
+                    }
+                ],
+                [
+                    {
+                        "name": "harmfulqa",
+                        "rate": 0.5,
+                        "style": "PADDED",
+                        "suffix": "red",
+                    },
+                    {"name": "squad", "rate": 0.5, "style": "PADDED"},
+                ],
+                [
+                    {
+                        "name": "harmfulqa",
+                        "rate": 1.0,
+                        "style": "PADDED",
+                        "suffix": "blue",
+                    }
+                ],
+            ],
+            "evaluations": ["mmlu", "squad", "pile"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": True,
+        }
+
+    elif split_name == "ic_injected":
+        return {
+            "tokens": [total],
+            "datasets": [[{"name": "pile_injected", "rate": 1.0, "style": "PMD"}]],
+            "evaluations": ["pile_injected", "pile"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 32768,
+            "skip_first_dataset_validation": False,
+        }
+
+    elif split_name == "ic_longqa":
+        return {
+            "tokens": [total],
+            "datasets": [[{"name": "pile", "rate": 1.0, "style": "PMD"}]],
+            "evaluations": ["longhealth", "pile"],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 32768,
+            "skip_first_dataset_validation": False,
+        }
+
+    elif split_name == "ic_lengthgen":
+        return {
+            "tokens": [total],
+            "datasets": [[{"name": "fineweb", "rate": 1.0, "style": "PMD"}]],
+            "evaluations": [
+                "pg19_2k",
+                "pg19_4k",
+                "pg19_8k",
+                "pg19_16k",
+                "pg19_32k",
+                "fineweb_ppl",
+            ],
+            "fade": {"overlap": 0.0, "curve": "linear"},
+            "block_size": 2048,
+            "skip_first_dataset_validation": False,
+        }
+
+    raise ValueError(f"Unknown split: {split_name}")
+
+
+# ======================================================================
+# Config builder
+# ======================================================================
+
+
+def build_config(
+    split: str,
+    arch: str,
+    optim: str,
+    schedule: str,
+    scale: str,
+) -> dict:
+    """Build a single YAML config dict."""
+    split_cfg = _split_config(split, scale)
+    arch_spec = ARCH_SPECS[arch][scale]
+
+    # Architecture section
+    architecture = {
+        "dtype": {"param": "float32", "activation": "bfloat16"},
+        "rope": True,
+        "vocab_size": 100288,
+        "dropout": 0.0,
+        "bias": True,
+        "block_size": split_cfg["block_size"],
+        **arch_spec,
+    }
+    # Mamba doesn't use rope/bias/n_head
+    if arch == "mamba":
+        architecture.pop("rope", None)
+        architecture.pop("bias", None)
+    elif arch == "hybrid":
+        pass  # hybrid uses both
+
+    # Optimization section
+    optimization = {
+        "lr": 0.0003,
+        "weight_decay": 0.1,
+        "warmup_pct": 0.01,
+        "decay_pct": 0.01,
+        "constant_pct": 0.02,
+        "schedule": schedule.replace("+", "_"),
+        "reset_optimizer": schedule == "wsd_reset",
+    }
+    if optim == "lora":
+        optimization["lora"] = {
+            "rank": 16,
+            "alpha": 16.0,
+            "target_modules": ["kernel"],
+        }
+
+    # Training section
+    training = {
+        "batch_size": 512,
+        "per_device_batch_size": -1,
+        "tokens": split_cfg["tokens"],
+        "dataset": split_cfg["datasets"],
+        "validation": False,
+        "evaluate": True,
+        "validation_steps": 2048,
+        "skip_first_dataset_validation": split_cfg.get(
+            "skip_first_dataset_validation", False
+        ),
+        "fade": split_cfg["fade"],
+    }
+    # For IC splits with block_size=32768, reduce batch size
+    if split_cfg["block_size"] == 32768:
+        training["batch_size"] = 64
+
+    # Eval section
+    eval_sec = {"evaluations": split_cfg["evaluations"]}
+
+    # Logging
+    logging = {
+        "report_interval": 32,
+        "checkpoint_interval": 4096,
+        "validation_interval": 1024,
+        "wandb": True,
+    }
+
+    # Job name
+    job = JOB_MAP[(arch, optim)]
+
+    # Request
+    request = {"chip": "h200", "min_chips": 4, "n_shards": 1}
+
+    config = {
+        "architecture": architecture,
+        "optimization": optimization,
+        "training": training,
+        "eval": eval_sec,
+        "logging": logging,
+        "job": job,
+        "request": request,
+    }
+
+    return config
+
+
+# ======================================================================
+# All splits and their valid configurations
+# ======================================================================
+
+DS_CG_SPLITS = [
+    "ds_nlu",
+    "ds_domain",
+    "ds_multilingual",
+    "cg_grammar",
+    "cg_cfq",
+    "cg_safety",
+]
+IC_SPLITS = ["ic_injected", "ic_longqa", "ic_lengthgen"]
+
+ARCHITECTURES = ["transformer", "mamba", "hybrid"]
+OPTIMS = ["full", "lora"]
+SCHEDULES_LIST = ["wsd", "cosine_rewarm", "wsd_reset"]
+SCALES = ["700m", "1b", "2b"]
+
+
+def generate_all(output_dir: Path) -> int:
+    """Generate all benchmark configs. Returns count of files created."""
+    count = 0
+
+    for split in DS_CG_SPLITS:
+        for scale in SCALES:
+            for arch in ARCHITECTURES:
+                for optim in OPTIMS:
+                    for schedule in SCHEDULES_LIST:
+                        fname = f"{arch}_{optim}_{schedule}.yaml"
+                        out_path = output_dir / split / scale / fname
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        cfg = build_config(split, arch, optim, schedule, scale)
+                        with open(out_path, "w") as f:
+                            yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+                        count += 1
+
+    # IC splits: only full + wsd (no LoRA, no schedule variants)
+    for split in IC_SPLITS:
+        for scale in SCALES:
+            for arch in ARCHITECTURES:
+                fname = f"{arch}_full_wsd.yaml"
+                out_path = output_dir / split / scale / fname
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                cfg = build_config(split, arch, "full", "wsd", scale)
+                with open(out_path, "w") as f:
+                    yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+                count += 1
+
+    return count
+
+
+if __name__ == "__main__":
+    output_dir = Path(__file__).parent.parent / "configs" / "continual"
+    count = generate_all(output_dir)
+    print(f"Generated {count} config files in {output_dir}")
