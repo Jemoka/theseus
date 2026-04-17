@@ -39,6 +39,10 @@ START_TIME_OVERRIDE_ENV = "THESEUS_DISPATCH_START_TIME"
 ROOT_OVERRIDE_ENV = "THESEUS_DISPATCH_ROOT_OVERRIDE"
 WORK_OVERRIDE_ENV = "THESEUS_DISPATCH_WORK_OVERRIDE"
 LOG_OVERRIDE_ENV = "THESEUS_DISPATCH_LOG_OVERRIDE"
+DATA_OVERRIDE_ENV = "THESEUS_DISPATCH_DATA_OVERRIDE"
+CHECKPOINTS_OVERRIDE_ENV = "THESEUS_DISPATCH_CHECKPOINTS_OVERRIDE"
+RESULTS_OVERRIDE_ENV = "THESEUS_DISPATCH_RESULTS_OVERRIDE"
+STATUS_OVERRIDE_ENV = "THESEUS_DISPATCH_STATUS_OVERRIDE"
 ROOT_PLACEHOLDER = "__THESEUS_RUNTIME_ROOT__"
 
 
@@ -93,6 +97,10 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
     root_override = os.environ.get(ROOT_OVERRIDE_ENV, "").strip() or None
     work_override = os.environ.get(WORK_OVERRIDE_ENV, "").strip() or None
     log_override = os.environ.get(LOG_OVERRIDE_ENV, "").strip() or None
+    data_override = os.environ.get(DATA_OVERRIDE_ENV, "").strip() or None
+    checkpoints_override = os.environ.get(CHECKPOINTS_OVERRIDE_ENV, "").strip() or None
+    results_override = os.environ.get(RESULTS_OVERRIDE_ENV, "").strip() or None
+    status_override = os.environ.get(STATUS_OVERRIDE_ENV, "").strip() or None
     hosts = []
     for h in data["hosts"]:
         cluster_data = h["cluster"]
@@ -105,11 +113,27 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
         cluster_log = log_override or _resolve_runtime_root_placeholders(
             cluster_data.get("log"), root_override
         )
+        resolved_data = data_override or _resolve_runtime_root_placeholders(
+            cluster_data.get("data"), root_override
+        )
+        resolved_checkpoints = checkpoints_override or _resolve_runtime_root_placeholders(
+            cluster_data.get("checkpoints"), root_override
+        )
+        resolved_results = results_override or _resolve_runtime_root_placeholders(
+            cluster_data.get("results"), root_override
+        )
+        resolved_status = status_override or _resolve_runtime_root_placeholders(
+            cluster_data.get("status"), root_override
+        )
         cluster = Cluster(
             name=cluster_data["name"],
             root=cluster_root,
             work=cluster_work,
             log=cluster_log,
+            data=resolved_data,
+            checkpoints=resolved_checkpoints,
+            results=resolved_results,
+            status=resolved_status,
         )
         resources = {
             SUPPORTED_CHIPS[k]: v
@@ -134,6 +158,10 @@ def _reconstruct_hardware(data: dict) -> HardwareResult:
             root=cluster.root,
             work=cluster.work,
             log=cluster.log,
+            data=cluster.data,
+            checkpoints=cluster.checkpoints,
+            results=cluster.results,
+            status=cluster.status,
         )
         detected_hosts = [
             ClusterMachine(

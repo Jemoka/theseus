@@ -32,6 +32,12 @@ class ClusterConfig:
     root: str  # root directory for checkpoints, data, etc.
     work: str  # work/scratch directory
     log: str | None = None  # log directory (defaults to {work}/logs)
+    data: str | None = None  # data directory (defaults to {root}/data)
+    checkpoints: str | None = (
+        None  # checkpoints directory (defaults to {root}/checkpoints)
+    )
+    results: str | None = None  # results directory (defaults to {root}/results)
+    status: str | None = None  # status directory (defaults to {root}/status)
     share: str | None = (
         None  # shared temp dir visible to all nodes (defaults to {work}/.dispatch)
     )
@@ -199,6 +205,10 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             root=cluster_cfg.root,
             work=cluster_cfg.work,
             log=cluster_cfg.get("log"),
+            data=cluster_cfg.get("data"),
+            checkpoints=cluster_cfg.get("checkpoints"),
+            results=cluster_cfg.get("results"),
+            status=cluster_cfg.get("status"),
             share=cluster_cfg.get("share"),
             mount=cluster_cfg.get("mount"),
             cache_size=cluster_cfg.get("cache_size"),
@@ -375,6 +385,10 @@ class RemoteInventory:
                 root=cfg.root,
                 work=cfg.work,
                 log=cfg.log,
+                data=cfg.data,
+                checkpoints=cfg.checkpoints,
+                results=cfg.results,
+                status=cfg.status,
             )
         return self._clusters[name]
 
