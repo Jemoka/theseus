@@ -8,9 +8,9 @@ Total: 468 configs.
 
 Logging intervals are derived per config from the shortest dataset phase:
     validation_interval = min_phase_steps // 5
-    checkpoint_interval = min_phase_steps // 2
-(The trainer already checkpoints at dataset boundaries, so the in-phase
-checkpoint is a safety net rather than boundary bookkeeping.)
+The in-phase checkpoint interval is effectively disabled (10**9) because
+the trainer already checkpoints at every dataset boundary and once at the
+end of training, which is enough for these benchmark runs.
 
 Usage:
     uv run python scripts/generate_benchmark_configs.py
@@ -195,7 +195,7 @@ def _split_config(split_name: str, scale: str) -> dict:
             "evaluations": ["fineweb_ppl", "pes2o", "pile", "tinystories"],
             "fade": {"overlap": 0.1, "curve": "cosine"},
             "block_size": 2048,
-            "skip_first_dataset_validation": True,
+            "skip_first_dataset_validation": False,
         }
 
     elif split_name == "ds_multilingual":
@@ -219,20 +219,7 @@ def _split_config(split_name: str, scale: str) -> dict:
             "tokens": tokens,
             "datasets": [
                 [{"name": "fineweb", "rate": 1.0, "style": "PMD"}],
-                [
-                    {
-                        "name": "mtob",
-                        "rate": 0.6,
-                        "style": "PADDED",
-                        "suffix": "grammar",
-                    },
-                    {
-                        "name": "mtob",
-                        "rate": 0.4,
-                        "style": "PADDED",
-                        "suffix": "dictionary",
-                    },
-                ],
+                [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "grammar"}],
                 [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "en-kgv"}],
             ],
             "evaluations": ["fineweb_ppl", "mtob"],
@@ -420,9 +407,10 @@ def build_config(
     min_phase_steps = max(1, min(phase_steps))
     logging = {
         "report_interval": 32,
-        "checkpoint_interval": max(1, min_phase_steps // 2),
+        "checkpoint_interval": 10**9,
         "validation_interval": max(1, min_phase_steps // 5),
         "wandb": True,
+        "plots": {"save": True},
     }
 
     # Job name

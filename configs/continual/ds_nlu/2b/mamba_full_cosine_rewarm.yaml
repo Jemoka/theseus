@@ -61,9 +61,11 @@ eval:
   - fineweb_ppl
 logging:
   report_interval: 32
-  checkpoint_interval: 95
+  checkpoint_interval: 1000000000
   validation_interval: 38
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_mamba
 request:
   chip: h200

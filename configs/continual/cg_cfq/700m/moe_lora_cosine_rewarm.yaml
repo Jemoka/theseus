@@ -64,9 +64,11 @@ eval:
   - cfq
 logging:
   report_interval: 32
-  checkpoint_interval: 66
+  checkpoint_interval: 1000000000
   validation_interval: 26
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_moe_lora
 request:
   chip: h200

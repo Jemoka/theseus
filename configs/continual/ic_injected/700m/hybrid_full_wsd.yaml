@@ -46,9 +46,11 @@ eval:
   - pile
 logging:
   report_interval: 32
-  checkpoint_interval: 3337
+  checkpoint_interval: 1000000000
   validation_interval: 1335
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_hybrid
 request:
   chip: h200

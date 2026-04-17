@@ -55,9 +55,11 @@ eval:
   - cfq
 logging:
   report_interval: 32
-  checkpoint_interval: 190
+  checkpoint_interval: 1000000000
   validation_interval: 76
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_hybrid
 request:
   chip: h200

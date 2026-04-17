@@ -39,7 +39,7 @@ training:
   validation: false
   evaluate: true
   validation_steps: 2048
-  skip_first_dataset_validation: true
+  skip_first_dataset_validation: false
   fade:
     overlap: 0.1
     curve: cosine
@@ -51,9 +51,11 @@ eval:
   - tinystories
 logging:
   report_interval: 32
-  checkpoint_interval: 4768
+  checkpoint_interval: 1000000000
   validation_interval: 1907
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_lora
 request:
   chip: h200

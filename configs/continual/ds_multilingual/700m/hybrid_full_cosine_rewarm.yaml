@@ -58,9 +58,11 @@ eval:
   - ccaligned_zh_cn
 logging:
   report_interval: 32
-  checkpoint_interval: 2225
+  checkpoint_interval: 1000000000
   validation_interval: 890
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_hybrid
 request:
   chip: h200

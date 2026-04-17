@@ -67,9 +67,11 @@ eval:
   - ccaligned_zh_cn
 logging:
   report_interval: 32
-  checkpoint_interval: 3178
+  checkpoint_interval: 1000000000
   validation_interval: 1271
   wandb: true
+  plots:
+    save: true
 job: continual/train/benchmark_moe_lora
 request:
   chip: h200
