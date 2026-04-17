@@ -64,8 +64,8 @@ eval:
   - fineweb_ppl
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 47
+  validation_interval: 19
   wandb: true
 job: continual/train/benchmark_lora
 request:

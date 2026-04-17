@@ -46,8 +46,8 @@ eval:
   - fineweb_ppl
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 9536
+  validation_interval: 3814
   wandb: true
 job: continual/train/benchmark_mamba
 request:

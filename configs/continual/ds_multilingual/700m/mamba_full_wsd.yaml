@@ -54,8 +54,8 @@ eval:
   - ccaligned_zh_cn
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 2225
+  validation_interval: 890
   wandb: true
 job: continual/train/benchmark_mamba
 request:

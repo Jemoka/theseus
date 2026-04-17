@@ -48,9 +48,11 @@ class TestJobRegistry:
             "continual/train/benchmark",
             "continual/train/benchmark_mamba",
             "continual/train/benchmark_hybrid",
+            "continual/train/benchmark_moe",
             "continual/train/benchmark_lora",
             "continual/train/benchmark_mamba_lora",
             "continual/train/benchmark_hybrid_lora",
+            "continual/train/benchmark_moe_lora",
         ]
         for name in expected:
             assert name in JOBS, f"'{name}' not in JOBS registry"

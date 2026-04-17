@@ -1,12 +1,12 @@
 """Benchmark continual learning trainers.
 
 Provides trainers for the benchmark paper with configurable:
-- Architecture (Transformer/Mamba/Hybrid via separate job registrations)
+- Architecture (Transformer/Mamba/Hybrid/MoE via separate job registrations)
 - Schedule (WSD, cosine rewarm, WSD+reset)
 - Optimization (Full or LoRA via separate job registrations)
 
-Non-LoRA jobs: continual/train/benchmark{,_mamba,_hybrid}
-LoRA jobs: continual/train/benchmark{,_mamba,_hybrid}_lora
+Non-LoRA jobs: continual/train/benchmark{,_mamba,_hybrid,_moe}
+LoRA jobs: continual/train/benchmark{,_mamba,_hybrid,_moe}_lora
 """
 
 from dataclasses import dataclass
@@ -23,7 +23,7 @@ from loguru import logger
 from theseus.config import field, configure
 from theseus.base import PyTree, Topology, ExecutionSpec
 from theseus.registry import job
-from theseus.model.models import GPT, Mamba, Hybrid
+from theseus.model.models import GPT, Mamba, Hybrid, MoEGPT
 from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
@@ -245,6 +245,12 @@ class BenchmarkHybrid(BenchmarkBaseTrainer[BenchmarkConfig, Hybrid]):
     CONFIG = BenchmarkConfig
 
 
+@job("continual/train/benchmark_moe")
+class BenchmarkMoE(BenchmarkBaseTrainer[BenchmarkConfig, MoEGPT]):
+    MODEL = MoEGPT
+    CONFIG = BenchmarkConfig
+
+
 # ======================================================================
 # Registered Jobs: LoRA (3)
 # ======================================================================
@@ -265,4 +271,10 @@ class BenchmarkMambaLoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, Mamba]):
 @job("continual/train/benchmark_hybrid_lora")
 class BenchmarkHybridLoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, Hybrid]):
     MODEL = Hybrid
+    CONFIG = BenchmarkLoRAConfig
+
+
+@job("continual/train/benchmark_moe_lora")
+class BenchmarkMoELoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, MoEGPT]):
+    MODEL = MoEGPT
     CONFIG = BenchmarkLoRAConfig

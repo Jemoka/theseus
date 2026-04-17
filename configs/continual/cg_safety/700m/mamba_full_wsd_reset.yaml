@@ -69,8 +69,8 @@ eval:
   - pile
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 133
+  validation_interval: 53
   wandb: true
 job: continual/train/benchmark_mamba
 request:

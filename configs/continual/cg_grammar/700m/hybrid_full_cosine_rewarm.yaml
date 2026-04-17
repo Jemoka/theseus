@@ -60,8 +60,8 @@ eval:
   - mtob
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 66
+  validation_interval: 26
   wandb: true
 job: continual/train/benchmark_hybrid
 request:

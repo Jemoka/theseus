@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""Generate all 351 YAML configs for the continual learning benchmark paper.
+"""Generate all YAML configs for the continual learning benchmark paper.
 
-9 splits × (18 DS/CG configs + 3 IC configs) × 3 scales = 351 total.
+Architectures: transformer, mamba, hybrid, moe (4).
+DS/CG: 6 splits × 3 scales × 4 archs × 2 optim × 3 schedules = 432.
+IC: 3 splits × 3 scales × 4 archs (full + wsd only) = 36.
+Total: 468 configs.
+
+Logging intervals are derived per config from the shortest dataset phase:
+    validation_interval = min_phase_steps // 5
+    checkpoint_interval = min_phase_steps // 2
+(The trainer already checkpoints at dataset boundaries, so the in-phase
+checkpoint is a safety net rather than boundary bookkeeping.)
 
 Usage:
     uv run python scripts/generate_benchmark_configs.py
@@ -14,6 +23,16 @@ import yaml
 # ======================================================================
 # Architecture specs by scale
 # ======================================================================
+
+_MOE_CFG = {
+    "experts": 8,
+    "experts_per_embd": 2,
+    "capacity_factor": 1.0,
+    "capacity_round_to": 128,
+    "implementation": "base",
+    "bias_update_rate": 0.25,
+    "bias_smoothing": 1.0,
+}
 
 ARCH_SPECS = {
     "transformer": {
@@ -85,6 +104,32 @@ ARCH_SPECS = {
             "n_heads": -1,
         },
     },
+    "moe": {
+        "700m": {
+            "n_layers": 24,
+            "n_embd": 1024,
+            "n_head": 16,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "moe": dict(_MOE_CFG),
+        },
+        "1b": {
+            "n_layers": 32,
+            "n_embd": 1280,
+            "n_head": 20,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "moe": dict(_MOE_CFG),
+        },
+        "2b": {
+            "n_layers": 36,
+            "n_embd": 1536,
+            "n_head": 24,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "moe": dict(_MOE_CFG),
+        },
+    },
 }
 
 # Chinchilla-optimal token budgets
@@ -101,6 +146,8 @@ JOB_MAP = {
     ("mamba", "lora"): "continual/train/benchmark_mamba_lora",
     ("hybrid", "full"): "continual/train/benchmark_hybrid",
     ("hybrid", "lora"): "continual/train/benchmark_hybrid_lora",
+    ("moe", "full"): "continual/train/benchmark_moe",
+    ("moe", "lora"): "continual/train/benchmark_moe_lora",
 }
 
 # ======================================================================
@@ -326,8 +373,6 @@ def build_config(
     if arch == "mamba":
         architecture.pop("rope", None)
         architecture.pop("bias", None)
-    elif arch == "hybrid":
-        pass  # hybrid uses both
 
     # Optimization section
     optimization = {
@@ -346,9 +391,11 @@ def build_config(
             "target_modules": ["kernel"],
         }
 
+    batch_size = 64 if split_cfg["block_size"] == 32768 else 512
+
     # Training section
     training = {
-        "batch_size": 512,
+        "batch_size": batch_size,
         "per_device_batch_size": -1,
         "tokens": split_cfg["tokens"],
         "dataset": split_cfg["datasets"],
@@ -360,18 +407,21 @@ def build_config(
         ),
         "fade": split_cfg["fade"],
     }
-    # For IC splits with block_size=32768, reduce batch size
-    if split_cfg["block_size"] == 32768:
-        training["batch_size"] = 64
 
     # Eval section
     eval_sec = {"evaluations": split_cfg["evaluations"]}
 
-    # Logging
+    # Logging intervals derived from the shortest dataset phase so that
+    # even sub-1%-token phases (e.g. cg_grammar's kgv tail) get multiple
+    # validations and at least one in-phase checkpoint.  The trainer
+    # already checkpoints at dataset boundaries.
+    tokens_per_step = batch_size * split_cfg["block_size"]
+    phase_steps = [t // tokens_per_step for t in split_cfg["tokens"]]
+    min_phase_steps = max(1, min(phase_steps))
     logging = {
         "report_interval": 32,
-        "checkpoint_interval": 4096,
-        "validation_interval": 1024,
+        "checkpoint_interval": max(1, min_phase_steps // 2),
+        "validation_interval": max(1, min_phase_steps // 5),
         "wandb": True,
     }
 
@@ -408,7 +458,7 @@ DS_CG_SPLITS = [
 ]
 IC_SPLITS = ["ic_injected", "ic_longqa", "ic_lengthgen"]
 
-ARCHITECTURES = ["transformer", "mamba", "hybrid"]
+ARCHITECTURES = ["transformer", "mamba", "hybrid", "moe"]
 OPTIMS = ["full", "lora"]
 SCHEDULES_LIST = ["wsd", "cosine_rewarm", "wsd_reset"]
 SCALES = ["700m", "1b", "2b"]

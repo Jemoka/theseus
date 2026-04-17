@@ -46,8 +46,8 @@ eval:
   - tinystories
 logging:
   report_interval: 32
-  checkpoint_interval: 4096
-  validation_interval: 1024
+  checkpoint_interval: 3337
+  validation_interval: 1335
   wandb: true
 job: continual/train/benchmark
 request:
