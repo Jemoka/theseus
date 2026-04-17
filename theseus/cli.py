@@ -670,6 +670,13 @@ def run(
     multiple=True,
     help="Module(s) to import before theseus in the bootstrap script; can repeat.",
 )  # type: ignore[misc]
+@click.option(
+    "--env",
+    "env_overrides",
+    multiple=True,
+    help="Override/inject env vars on the remote (KEY=VALUE). Highest precedence: "
+    "wins over cluster-level and host-level env. Can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -694,6 +701,7 @@ def submit(
     volcano_namespace: str | None,
     restore_path: str | None,
     preload_modules: tuple[str, ...],
+    env_overrides: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -880,6 +888,25 @@ def submit(
     if restore_path:
         console.print(f"[blue]Restoring from:[/blue] {restore_path}")
 
+    # Parse --env KEY=VALUE overrides
+    env_dict: dict[str, str] = {}
+    for item in env_overrides:
+        if "=" not in item:
+            console.print(
+                f"\n[red]Error: --env '{item}' must be in KEY=VALUE form[/red]\n"
+            )
+            sys.exit(1)
+        k, v = item.split("=", 1)
+        k = k.strip()
+        if not k:
+            console.print(f"\n[red]Error: --env '{item}' has empty key[/red]\n")
+            sys.exit(1)
+        env_dict[k] = v
+    if env_dict:
+        console.print("[blue]Env overrides:[/blue]")
+        for k, v in env_dict.items():
+            console.print(f"  [blue]•[/blue] {k}={v}")
+
     # Dispatch the job
     result = dispatch(
         cfg=cfg,
@@ -897,6 +924,7 @@ def submit(
         volcano_namespace_override=volcano_namespace,
         preload_modules=_validate_remote_modules(preload_modules) or None,
         restore_path=restore_path,
+        env_overrides=env_dict or None,
     )
 
     if not result.ok:

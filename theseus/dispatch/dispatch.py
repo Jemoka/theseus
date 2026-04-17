@@ -220,6 +220,7 @@ def dispatch(
     volcano_namespace_override: str | None = None,
     preload_modules: list[str] | None = None,
     restore_path: str | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -310,6 +311,13 @@ def dispatch(
     # 5. Submit based on host type
     uv_cache_dir = cluster_config.uv_dir
     cluster_env = _cluster_env(cluster_config)
+    # Merge host-level env (overrides cluster-level keys on collision),
+    # then CLI-supplied overrides on top (highest precedence).
+    host_env = getattr(solve_result.host_config, "env", None) or {}
+    if host_env:
+        cluster_env = {**cluster_env, **host_env}
+    if env_overrides:
+        cluster_env = {**cluster_env, **env_overrides}
     if isinstance(solve_result.host_config, VolcanoHostConfig):
         if cluster_config.mount:
             logger.warning(

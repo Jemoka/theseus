@@ -69,6 +69,7 @@ class PlainHostConfig:
     type: Literal["plain"] = "plain"
     chips: dict[str, int] = field(default_factory=dict)  # chip_name -> count
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -91,6 +92,7 @@ class SlurmHostConfig:
         default_factory=list
     )  # optional CPU-only partition preference order
     annotations: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -115,6 +117,7 @@ class TPUHostConfig:
     internal_ip: bool = False  # use internal IP for SSH/SCP
     metadata: dict[str, str] = field(default_factory=dict)  # instance metadata
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -237,6 +240,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 type="plain",
                 chips=chips,
                 uv_groups=uv_groups,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "slurm":
             partitions = []
@@ -270,6 +274,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 chips=chips,
                 cpu_partitions=cpu_partitions,
                 annotations=annotations,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "tpu":
             metadata = dict(host_cfg.get("metadata", {}))
@@ -288,6 +293,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 internal_ip=host_cfg.get("internal_ip", False),
                 metadata=metadata,
                 uv_groups=uv_groups,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "volcano":
             chips = dict(host_cfg.get("chips", {}))

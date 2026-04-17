@@ -591,73 +591,106 @@ def _check_plain_host_availability(
     configured_chips: int,
     timeout: float,
 ) -> int:
-    """Check if GPUs on a plain SSH host are available (no running processes).
+    """Check how many GPUs on a plain SSH host are available.
 
-    Runs nvidia-smi to check if any GPU has processes. If processes are running,
-    returns 0 (host is busy). Otherwise returns the configured chip count.
+    A GPU is counted as "unused" if the sum of all compute-app memory usage on
+    it is below ``_BUSY_FRAC_THRESHOLD`` of its total memory.  This tolerates
+    display servers (Xorg, ~4 MiB) and small idle allocations without counting
+    a GPU as busy, while still excluding any GPU that has a real training
+    process on it.
 
     Args:
         ssh_alias: SSH config alias
-        configured_chips: Number of chips configured for this host
+        configured_chips: Number of chips configured for this host (upper cap)
         timeout: SSH timeout
 
     Returns:
-        Available chip count (0 if busy, configured_chips if free)
+        Number of available GPUs, capped at ``configured_chips``.
     """
     from theseus.dispatch.ssh import run
 
-    # Processes below this threshold are considered noise (e.g., Xorg display server
-    # at ~4 MiB) and do not count as the GPU being occupied.
-    _NOISE_THRESHOLD_MIB = 100
+    # A GPU is "busy" if at least this fraction of its total memory is in use.
+    _BUSY_FRAC_THRESHOLD = 0.10
 
     try:
-        # Query nvidia-smi for processes on each GPU, including memory usage
-        result = run(
-            "nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader,nounits",
+        # Per-GPU capacity.
+        total_result = run(
+            "nvidia-smi --query-gpu=uuid,memory.total --format=csv,noheader,nounits",
             ssh_alias,
             timeout=timeout,
         )
-
-        if not result.ok:
-            # nvidia-smi failed - maybe no CUDA, treat as unavailable
-            logger.warning(f"SOLVE | nvidia-smi failed on {ssh_alias}: {result.stderr}")
-            return 0
-
-        # If output is empty, no processes running - GPUs are free
-        if not result.stdout.strip():
-            logger.debug(f"SOLVE | {ssh_alias}: no GPU processes running, host is free")
-            return configured_chips
-
-        # Filter out low-memory processes (display servers, etc.)
-        significant = []
-        for line in result.stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            parts = line.split(",")
-            try:
-                raw = parts[3].strip() if len(parts) >= 4 else ""
-                mem_mib = int(raw) if raw else None
-            except ValueError:
-                mem_mib = None  # "N/A" or unparseable
-            # Only significant if we got a real value at or above the threshold.
-            # Zero, unparseable, or "N/A" (e.g. fused arch like GB10) → noise.
-            if mem_mib is not None and mem_mib >= _NOISE_THRESHOLD_MIB:
-                significant.append(line.strip())
-            else:
-                logger.debug(
-                    f"SOLVE | {ssh_alias}: ignoring low-memory process ({mem_mib} MiB): {line.strip()}"
-                )
-
-        if significant:
-            logger.debug(
-                f"SOLVE | {ssh_alias}: {len(significant)} significant GPU processes, host is busy"
+        if not total_result.ok:
+            logger.warning(
+                f"SOLVE | nvidia-smi --query-gpu failed on {ssh_alias}: {total_result.stderr}"
             )
             return 0
 
-        logger.debug(
-            f"SOLVE | {ssh_alias}: only noise-level GPU processes, host is free"
+        totals_mib: dict[str, int] = {}
+        for line in total_result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                continue
+            uuid = parts[0]
+            try:
+                totals_mib[uuid] = int(parts[1])
+            except ValueError:
+                # "N/A" (e.g. fused arch like GB10) — no denominator available.
+                totals_mib[uuid] = 0
+
+        if not totals_mib:
+            logger.warning(f"SOLVE | {ssh_alias}: no GPUs visible to nvidia-smi")
+            return 0
+
+        # Per-process usage, summed per GPU uuid.
+        proc_result = run(
+            "nvidia-smi --query-compute-apps=gpu_uuid,used_memory --format=csv,noheader,nounits",
+            ssh_alias,
+            timeout=timeout,
         )
-        return configured_chips
+        if not proc_result.ok:
+            logger.warning(
+                f"SOLVE | nvidia-smi --query-compute-apps failed on {ssh_alias}: {proc_result.stderr}"
+            )
+            return 0
+
+        used_mib: dict[str, int] = {uuid: 0 for uuid in totals_mib}
+        for line in proc_result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                continue
+            uuid = parts[0]
+            try:
+                used_mib[uuid] = used_mib.get(uuid, 0) + int(parts[1])
+            except ValueError:
+                continue  # "N/A" — skip
+
+        free = 0
+        for uuid, total in totals_mib.items():
+            used = used_mib.get(uuid, 0)
+            if total <= 0:
+                # Unknown capacity: fall back to a generous absolute floor so a
+                # fused/integrated arch without reported total isn't flagged
+                # busy by a tiny display process.
+                is_busy = used >= 1024  # 1 GiB
+            else:
+                is_busy = used >= total * _BUSY_FRAC_THRESHOLD
+            if is_busy:
+                logger.debug(
+                    f"SOLVE | {ssh_alias}: GPU {uuid} busy ({used}/{total or '?'} MiB)"
+                )
+            else:
+                free += 1
+
+        available = min(free, configured_chips)
+        logger.debug(
+            f"SOLVE | {ssh_alias}: {available}/{configured_chips} GPUs free "
+            f"(threshold {_BUSY_FRAC_THRESHOLD:.0%} of per-GPU memory)"
+        )
+        return available
 
     except Exception as e:
         logger.warning(f"SOLVE | failed to check GPU availability on {ssh_alias}: {e}")
