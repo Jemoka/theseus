@@ -4,7 +4,7 @@ Evaluation framework for theseus trainers.
 Provides abstract base classes for different evaluation types:
 - RolloutEvaluation: Autoregressive generation tasks
 - EncodingEvaluation: Next-token prediction accuracy
-- PerplexityEvaluation: Dataset perplexity (returns 1/ppl, higher is better)
+- PerplexityEvaluation: Dataset perplexity (returns ppl, lower is better)
 - PerplexityComparisonEvaluation: Multiple-choice via perplexity comparison
 
 Also provides:
@@ -511,10 +511,10 @@ class EncodingEvaluation(Evaluation):
 
 
 class PerplexityEvaluation(Evaluation):
-    """Evaluation that computes dataset perplexity and returns 1/ppl (higher is better).
+    """Evaluation that computes dataset perplexity and returns ppl (lower is better).
 
     Runs a blockwise forward pass like EncodingEvaluation, computes the mean
-    negative log-likelihood over all non-padding tokens, and returns 1/perplexity.
+    negative log-likelihood over all non-padding tokens, and returns perplexity.
     """
 
     @abstractmethod
@@ -537,7 +537,7 @@ class PerplexityEvaluation(Evaluation):
             chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
-            1/perplexity (higher is better)
+            perplexity (lower is better)
         """
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
@@ -661,12 +661,12 @@ class PerplexityEvaluation(Evaluation):
         stats = jnp.reshape(stats, (-1, 2))
         stats = stats[:original_size]
 
-        # Compute global perplexity and return 1/ppl
+        # Compute global perplexity (lower is better)
         total_nll = jnp.sum(stats[:, 0])
         total_count = jnp.sum(stats[:, 1])
         mean_nll = total_nll / jnp.maximum(total_count, 1.0)
         ppl = jnp.exp(mean_nll)
-        score = multihost_utils.broadcast_one_to_all(1.0 / ppl)
+        score = multihost_utils.broadcast_one_to_all(ppl)
         return float(score)
 
 

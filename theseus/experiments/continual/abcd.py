@@ -161,11 +161,14 @@ def _make_eval_bar_chart(
 def _make_eval_timeline_chart(
     eval_history: Dict[str, List[Tuple[int, float]]],
     boundary_tokens: List[int],
+    timeline_key: str = "eval/timeline",
 ) -> Dict[str, Any]:
     """Create a line chart tracking evaluation metrics across boundaries.
 
     Each metric is plotted as a separate line; vertical dash-dot lines
-    mark dataset/stage boundaries.
+    mark dataset/stage boundaries.  ``timeline_key`` selects the wandb
+    path the figure is logged under (callers such as the LoRA benchmark
+    trainer use a distinct key to keep their timeline separate).
     """
     import seaborn as sns
     from matplotlib import pyplot as plt
@@ -194,7 +197,7 @@ def _make_eval_timeline_chart(
     ax.set_title("Evaluation over training")
     ax.legend()
     fig.tight_layout()
-    return {"eval/timeline": fig}
+    return {timeline_key: fig}
 
 
 class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):

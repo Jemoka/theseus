@@ -788,26 +788,23 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 )  # so we don't ovelap with checkpoint
             ):
                 val_metrics = {}
-                score = None
 
                 if self.args.validate:
-                    val_score, metrics = valid_step(
+                    score, metrics = valid_step(
                         self.state, step=indx // self.accumulate_steps
                     )
-                    score = val_score
                     val_metrics.update(metrics)
+                else:
+                    # Keep eval scores out of checkpoint selection so evals whose
+                    # natural direction is lower-is-better (e.g. raw perplexity)
+                    # don't corrupt the "best" comparison.
+                    train_loss = float(loss)
+                    score = 1.0 / train_loss if train_loss > 0 else float("-inf")
+
                 if self.args.evaluate and self.inference is not None:
                     self.inference.state = self.state
                     eval_metrics = self.inference.evaluate()
-                    if len(eval_metrics) > 0:
-                        eval_score = sum(eval_metrics.values()) / len(eval_metrics)
-                        if score is None:
-                            score = eval_score
-                        else:
-                            score = (score + eval_score) / 2
-                        val_metrics.update(eval_metrics)
-                if score is None:
-                    score = float("-inf")
+                    val_metrics.update(eval_metrics)
 
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)

@@ -11,13 +11,15 @@ LoRA jobs: continual/train/benchmark{,_mamba,_hybrid,_moe}_lora
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generic, List, Type, TypeVar
+from typing import Any, Dict, Generic, List, Tuple, Type, TypeVar
 from typing import cast as type_cast
 
 import numpy as np
+import wandb
 
 
 import optax
+from jax.experimental import multihost_utils
 from loguru import logger
 
 from theseus.config import field, configure
@@ -28,6 +30,8 @@ from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
     ABCDConfig,
+    _make_eval_bar_chart,
+    _make_eval_timeline_chart,
 )
 from theseus.training.lora import (
     LoRAConfig,
@@ -167,6 +171,12 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
             for i in range(len(self.args.post_lora_tokens))
         ]
 
+        # LoRA-phase plotting state: kept separate from ABCD's pre-LoRA
+        # _eval_history / _boundary_tokens so the two timelines don't mix.
+        self._lora_eval_history: Dict[str, List[Tuple[int, float]]] = {}
+        self._lora_boundary_tokens: List[int] = []
+        self._current_post_stage: int = 0
+
     def _init_topology(self, spec: ExecutionSpec) -> Topology:
         topology = super()._init_topology(spec)
         # Extend total steps to include post-LoRA tokens
@@ -188,6 +198,60 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
         transition_to_lora(self)
         self._current_dl_idx = 0  # reset for post-LoRA stages
 
+    def _on_lora_boundary(self, label: str, current_ntok: int) -> None:
+        """Run eval + emit LoRA-specific plots + save checkpoint at a LoRA boundary.
+
+        Mirrors ``ABCDBaseTrainer._on_dataset_boundary`` but keeps its
+        own eval history / timeline (``eval/lora_timeline``) so the
+        LoRA-phase adaptation signal is plotted separately from the
+        pre-LoRA pretraining timeline.
+        """
+        multihost_utils.sync_global_devices("lora_eval_barrier:start")
+        self.inference.state = self.state
+        eval_metrics = self.inference.evaluate()
+        multihost_utils.sync_global_devices("lora_eval_barrier:end")
+
+        if self.main_process():
+            logger.info("LORA EVAL | {}", eval_metrics)
+            step = self.global_step_counter_ // self.accumulate_steps
+            wandb.log(eval_metrics, step=step)
+            self._lora_boundary_tokens.append(current_ntok)
+
+            if len(eval_metrics) > 0:
+                boundary_label = f"lora_{label}"
+                metrics_snapshot = dict(eval_metrics)
+                self.plotter.plot(
+                    lambda m=metrics_snapshot,  # type: ignore[misc]
+                    lbl=boundary_label: _make_eval_bar_chart(m, lbl),
+                    step=step,
+                )
+
+                for k, v in metrics_snapshot.items():
+                    self._lora_eval_history.setdefault(k, []).append(
+                        (current_ntok, float(v))
+                    )
+                history_snap = {k: list(v) for k, v in self._lora_eval_history.items()}
+                boundaries_snap = list(self._lora_boundary_tokens)
+                self.plotter.plot(
+                    lambda h=history_snap,  # type: ignore[misc]
+                    b=boundaries_snap: _make_eval_timeline_chart(
+                        h, b, timeline_key="eval/lora_timeline"
+                    ),
+                    step=step,
+                )
+
+        logger.info("LORA BOUNDARY | {} at {} tokens", label, current_ntok)
+        self.save(Path(f"lora_boundary_{label}"))
+
+        if self.main_process():
+            wandb.log(
+                {
+                    "lora/boundary_label": label,
+                    "lora/switch_at_tokens": current_ntok,
+                },
+                step=self.global_step_counter_ // self.accumulate_steps,
+            )
+
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         current_ntok = (
             (self.global_step_counter_ // self.accumulate_steps)
@@ -200,6 +264,8 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
             logger.info("LORA | transitioning at {} tokens", current_ntok)
             self.save(Path("pre_lora_checkpoint"))
             self._transition_to_lora()
+            self._current_post_stage = 0
+            self._on_lora_boundary("pre_to_post", current_ntok)
 
         if self._in_lora_phase:
             # Post-LoRA: simple stage switching
@@ -210,6 +276,13 @@ class BenchmarkLoRABaseTrainer(BenchmarkBaseTrainer[BLC, M], Generic[BLC, M]):
                     break
             else:
                 stage = len(self._post_segment_ends) - 1
+
+            if stage != self._current_post_stage:
+                self._on_lora_boundary(
+                    f"post_{self._current_post_stage}_to_{stage}", current_ntok
+                )
+                self._current_post_stage = stage
+
             return type_cast(PyTree[np.ndarray], dls[stage].get_batch())
         else:
             # Pre-LoRA: use parent ABCD batch logic
