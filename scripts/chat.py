@@ -4,8 +4,8 @@ from typing import Any, List
 import jax
 from loguru import logger
 
-from theseus.config import field, configuration
-from theseus.data.tokenizer import Tokenizer, get_tokenizer
+from theseus.config import field
+from theseus.data.tokenizer import get_tokenizer
 from theseus.inference.base import InferenceJob
 from theseus.model.models.base import GPT
 from theseus.registry import job
@@ -38,7 +38,9 @@ class SBChat(InferenceJob[ChatConfig, GPT]):
 
         logger.info(
             "CHAT | ready  max_new_tokens={}  temperature={}  top_p={}",
-            max_new, temp, top_p,
+            max_new,
+            temp,
+            top_p,
         )
         print("\n--- scratchbubbles chat (ctrl-c to quit) ---\n")
 
@@ -59,8 +61,13 @@ class SBChat(InferenceJob[ChatConfig, GPT]):
 
             key, subkey = jax.random.split(key)
             result = self._autoregress(
-                self.state, subkey, xs, masks,
-                total_tokens, temp, top_p,
+                self.state,
+                subkey,
+                xs,
+                masks,
+                total_tokens,
+                temp,
+                top_p,
             )
 
             gen_ids = result[0, prompt_len:].tolist()
