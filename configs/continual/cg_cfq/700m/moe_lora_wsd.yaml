@@ -7,9 +7,9 @@ architecture:
   dropout: 0.0
   bias: true
   block_size: 2048
-  n_layers: 24
-  n_embd: 1024
-  n_head: 16
+  n_layers: 10
+  n_embd: 1664
+  n_head: 13
   layer_norm_eps: 1.0e-05
   intermediate_size: -1
   moe:
@@ -44,14 +44,15 @@ training:
   - - name: cfq
       rate: 1.0
       style: PADDED
-      suffix: sparql
+      suffix: sparql_2048
   - - name: cfq
       rate: 1.0
       style: PADDED
-      suffix: text
+      suffix: text_2048
   - - name: cfq
       rate: 1.0
       style: PADDED
+      suffix: '2048'
   validation: false
   evaluate: true
   validation_steps: 2048

@@ -5,8 +5,8 @@ architecture:
   vocab_size: 100288
   dropout: 0.0
   block_size: 2048
-  n_layers: 48
-  n_embd: 1024
+  n_layers: 32
+  n_embd: 1664
   d_state: 128
   d_conv: 4
   expand: 2
@@ -36,25 +36,27 @@ training:
   - - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: red
+      suffix: red_2048
     - name: mmlu
       rate: 0.5
       style: PADDED
+      suffix: '2048'
   - - name: harmfulqa
       rate: 1.0
       style: PADDED
-      suffix: blue
+      suffix: blue_2048
   - - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: red
+      suffix: red_2048
     - name: squad
       rate: 0.5
       style: PADDED
+      suffix: '2048'
   - - name: harmfulqa
       rate: 1.0
       style: PADDED
-      suffix: blue
+      suffix: blue_2048
   validation: false
   evaluate: true
   validation_steps: 2048

@@ -7,9 +7,9 @@ architecture:
   dropout: 0.0
   bias: true
   block_size: 2048
-  n_layers: 32
-  n_embd: 1024
-  n_head: 16
+  n_layers: 20
+  n_embd: 1664
+  n_head: 13
   mamba_layers: even
   d_state: 128
   d_conv: 4
@@ -45,25 +45,27 @@ training:
   - - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: red
+      suffix: red_2048
     - name: mmlu
       rate: 0.5
       style: PADDED
+      suffix: '2048'
   - - name: harmfulqa
       rate: 1.0
       style: PADDED
-      suffix: blue
+      suffix: blue_2048
   - - name: harmfulqa
       rate: 0.5
       style: PADDED
-      suffix: red
+      suffix: red_2048
     - name: squad
       rate: 0.5
       style: PADDED
+      suffix: '2048'
   - - name: harmfulqa
       rate: 1.0
       style: PADDED
-      suffix: blue
+      suffix: blue_2048
   validation: false
   evaluate: true
   validation_steps: 2048

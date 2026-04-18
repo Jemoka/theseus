@@ -5,8 +5,8 @@ architecture:
   vocab_size: 100288
   dropout: 0.0
   block_size: 2048
-  n_layers: 64
-  n_embd: 1280
+  n_layers: 32
+  n_embd: 2048
   d_state: 128
   d_conv: 4
   expand: 2
@@ -36,15 +36,15 @@ training:
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: fr_xx
+      suffix: fr
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: de_de
+      suffix: de
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: zh_cn
+      suffix: zh
   validation: false
   evaluate: true
   validation_steps: 2048
@@ -54,9 +54,9 @@ training:
     curve: linear
 eval:
   evaluations:
-  - ccaligned_fr_xx
-  - ccaligned_de_de
-  - ccaligned_zh_cn
+  - ccaligned_fr
+  - ccaligned_de
+  - ccaligned_zh
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

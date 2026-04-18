@@ -33,6 +33,33 @@ np.random.seed(0)
 load_dotenv()
 
 
+def _has_dotted_path(cfg: Any, dotted: str) -> bool:
+    """True iff every segment of `dotted` resolves inside `cfg`."""
+    cur = cfg
+    for part in dotted.split("."):
+        if not OmegaConf.is_config(cur) or part not in cur:
+            return False
+        cur = cur[part]
+    return True
+
+
+def _apply_overrides(cfg: Any, raw_overrides: tuple[str, ...] | list[str]) -> Any:
+    """Merge `key=value` overrides whose full dotted path exists in `cfg`.
+
+    Multi-stage pipelines pass the same override list to every stage. An
+    override like `training.per_device_batch_size=1` only belongs to stages
+    whose schema actually owns that path; applying it to a tokenize stage
+    would trip struct validation (`ConfigKeyError: Key '…' is not in struct`).
+
+    Stages where the path doesn't fully resolve silently drop the override.
+    Stages that own it merge it as usual.
+    """
+    keep = [kv for kv in raw_overrides if _has_dotted_path(cfg, kv.split("=", 1)[0])]
+    if not keep:
+        return cfg
+    return OmegaConf.merge(cfg, OmegaConf.from_dotlist(keep))
+
+
 def setup_logging(verbose: bool) -> None:
     """Configure loguru with appropriate log level."""
     logger.remove()
@@ -333,8 +360,7 @@ def configure(
 
     # Apply CLI overrides
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        config = OmegaConf.merge(config, cfg_cli)
+        config = _apply_overrides(config, overrides)
 
     # Add job name to config
     OmegaConf.set_struct(config, False)
@@ -472,10 +498,8 @@ def run(
         sys.exit(1)
 
     # Apply CLI overrides
-    cfg_cli = None
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")
@@ -506,8 +530,8 @@ def run(
                 f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
             )
             sys.exit(1)
-        if cfg_cli is not None:
-            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+        if overrides:
+            stage_cfg = _apply_overrides(stage_cfg, overrides)
         extra_cfgs.append(stage_cfg)
 
     # Build list of all stages: [(cfg, stage_name, job_key)]
@@ -773,17 +797,29 @@ def submit(
     if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
         request_n_shards = cfg.request.n_shards
 
-    if request_n_shards is not None:
-        OmegaConf.set_struct(cfg, False)
-        if "request" not in cfg:
-            cfg.request = OmegaConf.create({})
-        cfg.request.n_shards = request_n_shards
-        OmegaConf.set_struct(cfg, True)
+    def _apply_n_shards(c: Any) -> None:
+        """Write the resolved n_shards onto the config's request block in place.
+
+        Bootstrap reads `cfg.request.n_shards` per-stage (see
+        theseus/dispatch/bootstrap.py:430) to size the JAX mesh. Without this,
+        only the primary stage would honor `--n_shards`; tokenize stages and
+        the actual training stage (passed via `-s`) would each fall back to
+        whatever their YAML happened to bake in (commonly `1`), so the
+        topology would silently shard incorrectly.
+        """
+        if request_n_shards is None:
+            return
+        OmegaConf.set_struct(c, False)
+        if "request" not in c:
+            c.request = OmegaConf.create({})
+        c.request.n_shards = request_n_shards
+        OmegaConf.set_struct(c, True)
+
+    _apply_n_shards(cfg)
 
     # Apply CLI overrides to primary config
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")
@@ -815,9 +851,14 @@ def submit(
                 f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
             )
             sys.exit(1)
-        # Apply same CLI overrides to all stages
+        # CLI --n_shards must propagate to every stage; bootstrap reads each
+        # stage's own request.n_shards.
+        _apply_n_shards(stage_cfg)
+        # Apply same CLI overrides to all stages; per-path filter drops keys
+        # this stage doesn't own (so e.g. `training.x=y` on a tokenize stage
+        # is silently skipped instead of tripping struct validation).
         if overrides:
-            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+            stage_cfg = _apply_overrides(stage_cfg, overrides)
         extra_cfgs.append(stage_cfg)
 
     # Parse cluster filters
@@ -1581,8 +1622,7 @@ def bootstrap(
         OmegaConf.set_struct(cfg, True)
 
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")

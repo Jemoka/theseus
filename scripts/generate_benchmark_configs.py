@@ -36,14 +36,14 @@ _MOE_CFG = {
 
 ARCH_SPECS = {
     "transformer": {
-        "700m": {"n_layers": 24, "n_embd": 1024, "n_head": 16},
-        "1b": {"n_layers": 32, "n_embd": 1280, "n_head": 20},
-        "2b": {"n_layers": 36, "n_embd": 1536, "n_head": 24},
+        "700m": {"n_layers": 16, "n_embd": 1664, "n_head": 13},
+        "1b": {"n_layers": 16, "n_embd": 2048, "n_head": 16},
+        "2b": {"n_layers": 24, "n_embd": 2560, "n_head": 20},
     },
     "mamba": {
         "700m": {
-            "n_layers": 48,
-            "n_embd": 1024,
+            "n_layers": 32,
+            "n_embd": 1664,
             "d_state": 128,
             "d_conv": 4,
             "expand": 2,
@@ -51,8 +51,8 @@ ARCH_SPECS = {
             "n_heads": -1,
         },
         "1b": {
-            "n_layers": 64,
-            "n_embd": 1280,
+            "n_layers": 32,
+            "n_embd": 2048,
             "d_state": 128,
             "d_conv": 4,
             "expand": 2,
@@ -60,8 +60,8 @@ ARCH_SPECS = {
             "n_heads": -1,
         },
         "2b": {
-            "n_layers": 72,
-            "n_embd": 1536,
+            "n_layers": 48,
+            "n_embd": 2560,
             "d_state": 128,
             "d_conv": 4,
             "expand": 2,
@@ -71,9 +71,9 @@ ARCH_SPECS = {
     },
     "hybrid": {
         "700m": {
-            "n_layers": 32,
-            "n_embd": 1024,
-            "n_head": 16,
+            "n_layers": 20,
+            "n_embd": 1664,
+            "n_head": 13,
             "mamba_layers": "even",
             "d_state": 128,
             "d_conv": 4,
@@ -82,9 +82,9 @@ ARCH_SPECS = {
             "n_heads": -1,
         },
         "1b": {
-            "n_layers": 48,
-            "n_embd": 1280,
-            "n_head": 20,
+            "n_layers": 24,
+            "n_embd": 2048,
+            "n_head": 16,
             "mamba_layers": "even",
             "d_state": 128,
             "d_conv": 4,
@@ -93,9 +93,9 @@ ARCH_SPECS = {
             "n_heads": -1,
         },
         "2b": {
-            "n_layers": 56,
-            "n_embd": 1536,
-            "n_head": 24,
+            "n_layers": 30,
+            "n_embd": 2560,
+            "n_head": 20,
             "mamba_layers": "even",
             "d_state": 128,
             "d_conv": 4,
@@ -106,25 +106,25 @@ ARCH_SPECS = {
     },
     "moe": {
         "700m": {
-            "n_layers": 24,
-            "n_embd": 1024,
-            "n_head": 16,
+            "n_layers": 10,
+            "n_embd": 1664,
+            "n_head": 13,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
         },
         "1b": {
-            "n_layers": 32,
-            "n_embd": 1280,
-            "n_head": 20,
+            "n_layers": 10,
+            "n_embd": 2048,
+            "n_head": 16,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
         },
         "2b": {
-            "n_layers": 36,
-            "n_embd": 1536,
-            "n_head": 24,
+            "n_layers": 14,
+            "n_embd": 2560,
+            "n_head": 20,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
@@ -203,11 +203,11 @@ def _split_config(split_name: str, scale: str) -> dict:
         return {
             "tokens": tokens,
             "datasets": [
-                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "fr_xx"}],
-                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "de_de"}],
-                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "zh_cn"}],
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "fr"}],
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "de"}],
+                [{"name": "ccaligned", "rate": 1.0, "style": "PMD", "suffix": "zh"}],
             ],
-            "evaluations": ["ccaligned_fr_xx", "ccaligned_de_de", "ccaligned_zh_cn"],
+            "evaluations": ["ccaligned_fr", "ccaligned_de", "ccaligned_zh"],
             "fade": {"overlap": 0.0, "curve": "linear"},
             "block_size": 2048,
             "skip_first_dataset_validation": False,
@@ -220,7 +220,7 @@ def _split_config(split_name: str, scale: str) -> dict:
             "datasets": [
                 [{"name": "fineweb", "rate": 1.0, "style": "PMD"}],
                 [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "grammar"}],
-                [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "en-kgv"}],
+                [{"name": "mtob", "rate": 1.0, "style": "PADDED", "suffix": "enkgv"}],
             ],
             "evaluations": ["fineweb_ppl", "mtob"],
             "fade": {"overlap": 0.0, "curve": "linear"},
@@ -335,6 +335,28 @@ def _split_config(split_name: str, scale: str) -> dict:
 # ======================================================================
 
 
+def _apply_block_size_suffix(datasets: list, block_size: int) -> list:
+    """Append `_{block_size}` to the suffix of every PADDED dataset entry.
+
+    PADDED datasets are pre-tokenized at a fixed sequence length, so different
+    block sizes need different on-disk artifacts. PMD datasets are a flat
+    token stream sliced at load time and are block-size agnostic.
+    """
+    out = []
+    for stage in datasets:
+        new_stage = []
+        for entry in stage:
+            if entry.get("style") == "PADDED":
+                old = entry.get("suffix", "")
+                new_suffix = f"{old}_{block_size}" if old else str(block_size)
+                new_entry = {**entry, "suffix": new_suffix}
+            else:
+                new_entry = dict(entry)
+            new_stage.append(new_entry)
+        out.append(new_stage)
+    return out
+
+
 def build_config(
     split: str,
     arch: str,
@@ -344,6 +366,9 @@ def build_config(
 ) -> dict:
     """Build a single YAML config dict."""
     split_cfg = _split_config(split, scale)
+    split_cfg["datasets"] = _apply_block_size_suffix(
+        split_cfg["datasets"], split_cfg["block_size"]
+    )
     arch_spec = ARCH_SPECS[arch][scale]
 
     # Architecture section

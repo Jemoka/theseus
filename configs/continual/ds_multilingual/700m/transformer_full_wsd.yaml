@@ -7,9 +7,9 @@ architecture:
   dropout: 0.0
   bias: true
   block_size: 2048
-  n_layers: 24
-  n_embd: 1024
-  n_head: 16
+  n_layers: 16
+  n_embd: 1664
+  n_head: 13
 optimization:
   lr: 0.0003
   weight_decay: 0.1
@@ -29,15 +29,15 @@ training:
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: fr_xx
+      suffix: fr
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: de_de
+      suffix: de
   - - name: ccaligned
       rate: 1.0
       style: PMD
-      suffix: zh_cn
+      suffix: zh
   validation: false
   evaluate: true
   validation_steps: 2048
@@ -47,9 +47,9 @@ training:
     curve: linear
 eval:
   evaluations:
-  - ccaligned_fr_xx
-  - ccaligned_de_de
-  - ccaligned_zh_cn
+  - ccaligned_fr
+  - ccaligned_de
+  - ccaligned_zh
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

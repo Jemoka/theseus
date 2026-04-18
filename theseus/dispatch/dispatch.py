@@ -660,7 +660,9 @@ def _dispatch_plain(
     result = _launch_and_verify(
         run_cmd,
         verify_cmd="pgrep -f '_bootstrap.sh' > /dev/null 2>&1",
-        launcher=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
+        # Fire-and-forget: a single attempt only. The remote shell already
+        # spawned the bootstrap; any retry would multi-spawn it.
+        launcher=lambda cmd, t: run(cmd, ssh_alias, timeout=t, max_attempts=1),
         verifier=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
         timeout=timeout,
         label=f"SSH '{ssh_alias}'",

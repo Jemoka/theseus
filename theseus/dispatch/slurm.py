@@ -39,7 +39,7 @@ def _scp_content(
         _backoff,
         _recover,
         _is_transient_error,
-        _MAX_RETRIES,
+        _MAX_ATTEMPTS,
     )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
@@ -48,7 +48,7 @@ def _scp_content(
 
     try:
         last_result = None
-        for attempt in range(_MAX_RETRIES):
+        for attempt in range(_MAX_ATTEMPTS):
             # Apply rate limiting to avoid SSH connection throttling
             _rate_limit(host)
 
@@ -79,10 +79,10 @@ def _scp_content(
                 # Check for transient connection errors
                 if (
                     _is_transient_error(last_result.stderr)
-                    and attempt < _MAX_RETRIES - 1
+                    and attempt < _MAX_ATTEMPTS - 1
                 ):
                     logger.warning(
-                        f"SLURM | scp failed (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                        f"SLURM | scp failed (attempt {attempt + 1}/{_MAX_ATTEMPTS}), backing off..."
                     )
                     _backoff(host)
                     continue
@@ -95,16 +95,16 @@ def _scp_content(
                     stdout="",
                     stderr=f"scp timed out after {timeout}s",
                 )
-                if attempt < _MAX_RETRIES - 1:
+                if attempt < _MAX_ATTEMPTS - 1:
                     logger.warning(
-                        f"SLURM | scp timeout (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                        f"SLURM | scp timeout (attempt {attempt + 1}/{_MAX_ATTEMPTS}), backing off..."
                     )
                     _backoff(host)
                     continue
                 return last_result
 
         return last_result or RunResult(
-            returncode=-1, stdout="", stderr="max retries exceeded"
+            returncode=-1, stdout="", stderr="max attempts exceeded"
         )
     finally:
         Path(local_path).unlink(missing_ok=True)

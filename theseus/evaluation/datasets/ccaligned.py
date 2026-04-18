@@ -166,4 +166,15 @@ CCALIGNED_EVALS: dict[str, type[CCAlignedEval]] = {
     f"ccaligned_{lang.lower()}": _make_lang_eval(lang) for lang in CCALIGNED_LANGS
 }
 
+# Short aliases (e.g. "ccaligned_fr" -> CCAligned fr_XX) so eval names line up
+# with the on-disk tokenized suffix used by the training-side data configs
+# (configs/data/cl100k/ccaligned_{fr,de,zh}.yaml use suffix 'fr'/'de'/'zh').
+CCALIGNED_SHORT_ALIASES: dict[str, type[CCAlignedEval]] = {
+    f"ccaligned_{lang.split('_')[0].lower()}": cls
+    for lang, cls in (
+        (lang, CCALIGNED_EVALS[f"ccaligned_{lang.lower()}"]) for lang in CCALIGNED_LANGS
+    )
+}
+
 EVALUATIONS.update(CCALIGNED_EVALS)
+EVALUATIONS.update(CCALIGNED_SHORT_ALIASES)

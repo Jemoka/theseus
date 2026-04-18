@@ -5,8 +5,8 @@ architecture:
   vocab_size: 100288
   dropout: 0.0
   block_size: 2048
-  n_layers: 72
-  n_embd: 1536
+  n_layers: 48
+  n_embd: 2560
   d_state: 128
   d_conv: 4
   expand: 2
@@ -39,11 +39,11 @@ training:
   - - name: mtob
       rate: 1.0
       style: PADDED
-      suffix: grammar
+      suffix: grammar_2048
   - - name: mtob
       rate: 1.0
       style: PADDED
-      suffix: en-kgv
+      suffix: enkgv_2048
   validation: false
   evaluate: true
   validation_steps: 2048

@@ -23,7 +23,7 @@ _MIN_INTERVAL = 0.5  # minimum interval between calls
 _MAX_INTERVAL = 10.0  # maximum interval (cap for backoff)
 _BACKOFF_FACTOR = 2.0  # multiply interval by this on failure
 _RECOVERY_FACTOR = 0.8  # multiply interval by this on success
-_MAX_RETRIES = 5  # max retries for transient connection errors
+_MAX_ATTEMPTS = 5  # total tries (initial + retries) for transient errors
 
 
 def _is_transient_error(stderr: str) -> bool:
@@ -134,7 +134,12 @@ def hosts() -> list[str]:
     return hosts_list
 
 
-def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunResult:
+def run(
+    cmd: str | list[str],
+    host: str,
+    timeout: float | None = None,
+    max_attempts: int | None = None,
+) -> RunResult:
     """Execute a command remotely on a host via SSH.
 
     Runs in a login shell to ensure environment variables are loaded.
@@ -144,12 +149,18 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
         cmd: Command to execute (string or list of args)
         host: SSH host (name, alias, or user@host)
         timeout: Optional timeout in seconds
+        max_attempts: Total tries (initial + retries). Pass `1` for
+            fire-and-forget background launches: an SSH timeout there means
+            the remote shell already spawned the job but the connection
+            didn't close cleanly, so any retry would just multi-spawn it.
 
     Returns:
         RunResult with returncode, stdout, and stderr
     """
     if isinstance(cmd, list):
         cmd = " ".join(cmd)
+
+    attempts = _MAX_ATTEMPTS if max_attempts is None else max(1, max_attempts)
 
     # Wrap in login shell to get full environment (bashrc, profile, etc.)
     # Using $SHELL -l -c ensures we use the user's default shell (bash, zsh, etc.)
@@ -160,7 +171,7 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
     cmd_preview = cmd[:80] + "..." if len(cmd) > 80 else cmd
 
     last_result = None
-    for attempt in range(_MAX_RETRIES):
+    for attempt in range(attempts):
         # Rate limit to avoid overwhelming SSH server
         _rate_limit(host)
 
@@ -184,9 +195,9 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
                 return last_result
 
             # Check if it's a transient error worth retrying
-            if _is_transient_error(result.stderr) and attempt < _MAX_RETRIES - 1:
+            if _is_transient_error(result.stderr) and attempt < attempts - 1:
                 logger.warning(
-                    f"SSH | transient error on {host} (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                    f"SSH | transient error on {host} (attempt {attempt + 1}/{attempts}), backing off..."
                 )
                 _backoff(host)
                 continue
@@ -207,13 +218,13 @@ def run(cmd: str | list[str], host: str, timeout: float | None = None) -> RunRes
                 else (e.stdout.decode() if e.stdout else ""),
                 stderr=f"Command timed out after {timeout}s",
             )
-            if attempt < _MAX_RETRIES - 1:
+            if attempt < attempts - 1:
                 _backoff(host)
                 continue
             return last_result
 
     return last_result or RunResult(
-        returncode=-1, stdout="", stderr="max retries exceeded"
+        returncode=-1, stdout="", stderr="max attempts exceeded"
     )
 
 
