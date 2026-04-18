@@ -21,7 +21,7 @@ class ChatConfig:
 
 
 @job("gpt/debug/chat/continuation")
-class SBChat(InferenceJob[ChatConfig, GPT]):
+class Chat(InferenceJob[ChatConfig, GPT]):
     MODEL = GPT
 
     @classmethod
