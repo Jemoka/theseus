@@ -101,4 +101,9 @@ SUPPORTED_CHIPS: dict[str, Chip] = {
         display_name="Nvidia Drive PG199",
         memory=int(32 * 1024**3),
     ),
+    "rtx5090": Chip(
+        name="rtx5090",
+        display_name="Nvidia RTX 5090",
+        memory=int(32 * 1024**3),
+    ),
 }
