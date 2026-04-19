@@ -1187,8 +1187,16 @@ def repl(
             sys.exit(1)
         if proxy is None:
             assert local_mount is not None
+            # Reuse the cluster-level all_squash (if any) for the local mount.
+            all_squash_for_backend: str | None = None
+            for _cluster_cfg in dispatch_cfg.clusters.values():
+                if _cluster_cfg.mount == backend:
+                    all_squash_for_backend = _cluster_cfg.all_squash
+                    break
             try:
-                ensure_local_mount(local_mount, backend)
+                ensure_local_mount(
+                    local_mount, backend, all_squash=all_squash_for_backend
+                )
             except RuntimeError as exc:
                 console.print(f"\n[red]Error: {exc}[/red]\n")
                 sys.exit(1)
@@ -1474,6 +1482,12 @@ def repl(
 @click.option("--cache-size", default=None, help="JuiceFS cache size")  # type: ignore[misc]
 @click.option("--cache-dir", default=None, help="JuiceFS cache directory")  # type: ignore[misc]
 @click.option(
+    "--all-squash",
+    "all_squash",
+    default=None,
+    help="JuiceFS --all-squash UID:GID passthrough (e.g. '1000:1000')",
+)  # type: ignore[misc]
+@click.option(
     "--dirty/--clean",
     default=True,
     help="Include uncommitted changes (default: --dirty)",
@@ -1501,6 +1515,7 @@ def bootstrap(
     mount: str | None,
     cache_size: str | None,
     cache_dir: str | None,
+    all_squash: str | None,
     dirty: bool,
     preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
@@ -1676,6 +1691,7 @@ def bootstrap(
             mount_point=root_path,
             cache_size=cache_size,
             cache_dir=cache_dir,
+            all_squash=all_squash,
         )
         if mount
         else None

@@ -23,6 +23,7 @@ class JuiceFSMount:
     mount_point: str
     cache_size: str | None = None
     cache_dir: str | None = None
+    all_squash: str | None = None  # passthrough for juicefs `--all-squash UID:GID`
 
 
 @dataclass
@@ -44,6 +45,7 @@ class ClusterConfig:
     mount: str | None = None  # Redis connection string for JuiceFS mount at root
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
+    all_squash: str | None = None  # JuiceFS --all-squash UID:GID (e.g., "1000:1000")
     uv_dir: str | None = None  # UV_CACHE_DIR override for uv
     wandb: str | None = None  # W&B API key → exported as WANDB_API_KEY
     wandb_entity: str | None = None  # W&B entity → exported as WANDB_ENTITY
@@ -216,6 +218,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             mount=cluster_cfg.get("mount"),
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
+            all_squash=cluster_cfg.get("all_squash"),
             uv_dir=cluster_cfg.get("uv_dir"),
             wandb=cluster_cfg.get("wandb"),
             wandb_entity=cluster_cfg.get("wandb_entity"),

@@ -34,6 +34,7 @@ clusters:
     mount: redis://:pw@redis.example.com:6379/0
     cache_size: 100G
     cache_dir: /scratch/juicefs-cache
+    all_squash: "1000:1000"      # passthrough to `juicefs --all-squash UID:GID`
 
 hosts:
   login1:

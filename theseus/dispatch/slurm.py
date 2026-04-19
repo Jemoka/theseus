@@ -278,6 +278,8 @@ class SlurmJob:
                 mount_opts.append(f"--cache-size {self.juicefs_mount.cache_size}")
             if self.juicefs_mount.cache_dir:
                 mount_opts.append(f"--cache-dir {self.juicefs_mount.cache_dir}")
+            if self.juicefs_mount.all_squash:
+                mount_opts.append(f"--all-squash {self.juicefs_mount.all_squash}")
             opts_str = " ".join(mount_opts)
             juicefs_str = f"""
 MOUNT_POINT="${{THESEUS_DISPATCH_ROOT_OVERRIDE:-{self.juicefs_mount.mount_point}}}"

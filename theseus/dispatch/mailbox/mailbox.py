@@ -202,7 +202,9 @@ def is_local_juicefs_mounted(mount_dir: Path) -> bool:
     return line is not None and "juicefs" in line.lower()
 
 
-def ensure_local_mount(mount_dir: Path, backend: str) -> None:
+def ensure_local_mount(
+    mount_dir: Path, backend: str, all_squash: str | None = None
+) -> None:
     line = _mount_line_for(mount_dir)
     if line is not None:
         if "juicefs" not in line.lower():
@@ -215,8 +217,12 @@ def ensure_local_mount(mount_dir: Path, backend: str) -> None:
         raise RuntimeError("juicefs not found in PATH and mount is not available")
 
     mount_dir.mkdir(parents=True, exist_ok=True)
+    cmd = ["juicefs", "mount", "-d"]
+    if all_squash:
+        cmd.extend(["--all-squash", all_squash])
+    cmd.extend([backend, str(mount_dir)])
     mount_result = subprocess.run(
-        ["juicefs", "mount", "-d", backend, str(mount_dir)],
+        cmd,
         capture_output=True,
         text=True,
     )
