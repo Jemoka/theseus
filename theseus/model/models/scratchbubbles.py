@@ -15,7 +15,7 @@ from theseus.model.block.scratching import ScratchingBlock
 from theseus.model.models.thoughtbubbles import Thoughtbubbles
 from theseus.config import configure
 
-from typing import List, Any, Type, Dict
+from typing import List, Optional, Tuple, Any, Type, Dict
 
 
 def pca(x: jax.Array, n_components: int) -> jax.Array:
@@ -38,6 +38,11 @@ def vectors_to_colors(embeddings: jax.Array) -> jax.Array:
 
 
 class Scratchbubbles(Thoughtbubbles):
+    @property
+    def sharding(self) -> List[Tuple[str, Optional[Any]]]:
+        base_sharding = super().sharding
+        return base_sharding + [(Axes.N_SCRATCH.value, None)]
+
     @classmethod
     def components(cls) -> List[Type[Any]]:
         return [ThoughtBlock, ScratchingBlock, LayerNorm]
