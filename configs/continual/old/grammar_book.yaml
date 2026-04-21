@@ -20,7 +20,7 @@ eval:
   evaluations:
   - mtob
   - fineweb_ppl
-  - tinystories
+  - tinystories_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base

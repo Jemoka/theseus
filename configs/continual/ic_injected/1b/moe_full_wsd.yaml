@@ -46,8 +46,8 @@ training:
     curve: linear
 eval:
   evaluations:
-  - pile_injected
-  - pile
+  - pile_injected_ppl
+  - pile_ppl
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

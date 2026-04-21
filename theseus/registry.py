@@ -120,9 +120,35 @@ def dataset(key: str) -> Callable[[T], T]:
 
 
 def evaluation(key: str) -> Callable[[T], T]:
-    """Register an evaluation callable under the given key."""
+    """Register an evaluation callable under the given key.
+
+    ``PerplexityEvaluation`` subclasses must use a key ending in ``_ppl``
+    so downstream consumers (e.g. the boundary-eval bar plots) can group
+    unbounded perplexity metrics away from 0-1 scored ones.
+    ``PerplexityComparisonEvaluation`` returns an accuracy, not a
+    perplexity, and is intentionally exempt.
+    """
 
     def decorator(cls: T) -> T:
+        # Local import to avoid circular imports at module load.
+        from theseus.evaluation.base import (
+            PerplexityComparisonEvaluation,
+            PerplexityEvaluation,
+        )
+
+        if (
+            isinstance(cls, type)
+            and issubclass(cls, PerplexityEvaluation)
+            and not issubclass(cls, PerplexityComparisonEvaluation)
+            and not key.endswith("_ppl")
+        ):
+            raise AssertionError(
+                f"PerplexityEvaluation registered as '{key}' must use a "
+                f"'_ppl' suffix (e.g. '{key}_ppl') so perplexity metrics "
+                f"can be grouped away from 0-1 scored evals in plots. "
+                f"Note: PerplexityComparisonEvaluation is not perplexity."
+            )
+
         EVALUATIONS[key] = cls  # type: ignore[assignment]
         return cls
 

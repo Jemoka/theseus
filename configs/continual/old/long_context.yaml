@@ -20,7 +20,7 @@ eval:
   evaluations:
   - longbench
   - longhealth
-  - pg19
+  - pg19_ppl
   - fineweb_ppl
 tokenizer:
   backend: tiktoken

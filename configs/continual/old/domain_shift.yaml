@@ -18,9 +18,9 @@ architecture:
 eval:
   evaluations:
   - fineweb_ppl
-  - pes2o
-  - pile
-  - tinystories
+  - pes2o_ppl
+  - pile_ppl
+  - tinystories_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base

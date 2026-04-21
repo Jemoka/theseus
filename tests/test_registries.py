@@ -29,10 +29,10 @@ class TestEvaluationRegistry:
         expected = [
             "mnli", "qqp", "sst2", "siqa", "mmlu", "squad",
             "cfq", "clutrr", "longhealth", "mtob",
-            "pile", "pes2o", "pg19", "tinystories", "fineweb_ppl",
+            "pile_ppl", "pes2o_ppl", "pg19_ppl", "tinystories_ppl", "fineweb_ppl",
             "mnli_ppl", "qqp_ppl", "sst2_ppl", "siqa_ppl",
-            "pile_injected",
-            "pg19_2k", "pg19_4k", "pg19_8k", "pg19_16k", "pg19_32k",
+            "pile_injected_ppl",
+            "pg19_2k_ppl", "pg19_4k_ppl", "pg19_8k_ppl", "pg19_16k_ppl", "pg19_32k_ppl",
         ]
         for name in expected:
             assert name in EVALUATIONS, f"'{name}' not in EVALUATIONS registry"

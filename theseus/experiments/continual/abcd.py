@@ -110,10 +110,32 @@ class ABCDConfig(BaseTrainerConfig):
 C = TypeVar("C", bound=ABCDConfig)
 
 
+_PPL_SUFFIXES = ("_ppl", "_perplexity")
+
+
+def _metric_group(name: str) -> str:
+    """Bucket a metric by name so unbounded scales don't dominate bar plots.
+
+    ``fineweb_ppl`` blows out the axis when plotted alongside 0-1 accuracy
+    metrics; grouping by suffix keeps each plot readable.
+    """
+    low = name.lower()
+    if low == "ppl" or any(low.endswith(s) for s in _PPL_SUFFIXES):
+        return "ppl"
+    return "score"
+
+
+_GROUP_AXIS_LABEL = {"ppl": "Perplexity", "score": "Score"}
+
+
 def _make_eval_bar_chart(
     eval_metrics: dict[str, float], boundary_label: str
 ) -> Dict[str, Any]:
-    """Create a bar chart of evaluation results at a dataset boundary.
+    """Create bar charts of evaluation results at a dataset boundary.
+
+    Metrics are partitioned by name (currently perplexity vs. everything
+    else) and each group is rendered as its own figure so a high-range
+    metric like ``fineweb_ppl`` doesn't flatten the 0-1 accuracy bars.
 
     Called on the Plotter worker thread where matplotlib is already
     initialized and apply_theme() has been applied.
@@ -121,41 +143,48 @@ def _make_eval_bar_chart(
     import seaborn as sns
     from matplotlib import pyplot as plt
 
-    names = list(eval_metrics.keys())
-    scores = [float(v) for v in eval_metrics.values()]
-    colors = PALETTE[: len(names)]
+    groups: Dict[str, Dict[str, float]] = {}
+    for k, v in eval_metrics.items():
+        groups.setdefault(_metric_group(k), {})[k] = float(v)
 
-    fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
-    sns.barplot(
-        x=names,
-        y=scores,
-        hue=names,
-        palette=colors,
-        width=0.6,
-        ax=ax,
-        dodge=False,
-        legend=False,
-    )
-    # Restore categorical ticks (the MaxNLocator patch in apply_theme
-    # overwrites them with a numeric locator on axes creation).
-    ax.set_xticks(range(len(names)))
-    ax.set_xticklabels(names)
-    ax.set_ylabel("Score")
-    ax.set_title(f"Evaluation at boundary {boundary_label}")
-    ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
+    figures: Dict[str, Any] = {}
+    for group_name, metrics in groups.items():
+        names = list(metrics.keys())
+        scores = [metrics[n] for n in names]
+        colors = PALETTE[: len(names)]
 
-    for bar, score in zip(ax.patches, scores):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.02,
-            f"{score:.3f}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
+        fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
+        sns.barplot(
+            x=names,
+            y=scores,
+            hue=names,
+            palette=colors,
+            width=0.6,
+            ax=ax,
+            dodge=False,
+            legend=False,
         )
+        # Restore categorical ticks (the MaxNLocator patch in apply_theme
+        # overwrites them with a numeric locator on axes creation).
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names)
+        ax.set_ylabel(_GROUP_AXIS_LABEL.get(group_name, "Value"))
+        ax.set_title(f"Evaluation ({group_name}) at boundary {boundary_label}")
+        ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
 
-    fig.tight_layout()
-    return {f"eval/boundary_{boundary_label}": fig}
+        for bar, score in zip(ax.patches, scores):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.02,
+                f"{score:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+        fig.tight_layout()
+        figures[f"eval/boundary_{boundary_label}_{group_name}"] = fig
+    return figures
 
 
 def _make_eval_timeline_chart(
@@ -163,41 +192,48 @@ def _make_eval_timeline_chart(
     boundary_tokens: List[int],
     timeline_key: str = "eval/timeline",
 ) -> Dict[str, Any]:
-    """Create a line chart tracking evaluation metrics across boundaries.
+    """Create line charts tracking evaluation metrics across boundaries.
 
-    Each metric is plotted as a separate line; vertical dash-dot lines
-    mark dataset/stage boundaries.  ``timeline_key`` selects the wandb
-    path the figure is logged under (callers such as the LoRA benchmark
-    trainer use a distinct key to keep their timeline separate).
+    Metrics are split into groups by ``_metric_group`` so perplexity and
+    accuracy-style scores don't share a y-axis.  Each group produces its
+    own figure keyed ``{timeline_key}_{group}`` (e.g. ``eval/timeline_ppl``).
+    Vertical dash-dot lines mark dataset/stage boundaries.
     """
     import seaborn as sns
     from matplotlib import pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    grouped: Dict[str, Dict[str, List[Tuple[int, float]]]] = {}
+    for name, points in eval_history.items():
+        grouped.setdefault(_metric_group(name), {})[name] = points
 
-    for i, (name, points) in enumerate(eval_history.items()):
-        tokens = [p[0] for p in points]
-        scores = [p[1] for p in points]
-        color = PALETTE[i % len(PALETTE)]
-        sns.lineplot(
-            x=tokens,
-            y=scores,
-            marker="o",
-            label=name,
-            color=color,
-            ax=ax,
-            errorbar=None,
-        )
+    figures: Dict[str, Any] = {}
+    for group_name, history in grouped.items():
+        fig, ax = plt.subplots(figsize=(7, 4))
 
-    for bt in boundary_tokens:
-        ax.axvline(x=bt, color=SPINE, linestyle="-.", linewidth=0.9, alpha=0.7)
+        for i, (name, points) in enumerate(history.items()):
+            tokens = [p[0] for p in points]
+            scores = [p[1] for p in points]
+            color = PALETTE[i % len(PALETTE)]
+            sns.lineplot(
+                x=tokens,
+                y=scores,
+                marker="o",
+                label=name,
+                color=color,
+                ax=ax,
+                errorbar=None,
+            )
 
-    ax.set_xlabel("Tokens")
-    ax.set_ylabel("Score")
-    ax.set_title("Evaluation over training")
-    ax.legend()
-    fig.tight_layout()
-    return {timeline_key: fig}
+        for bt in boundary_tokens:
+            ax.axvline(x=bt, color=SPINE, linestyle="-.", linewidth=0.9, alpha=0.7)
+
+        ax.set_xlabel("Tokens")
+        ax.set_ylabel(_GROUP_AXIS_LABEL.get(group_name, "Value"))
+        ax.set_title(f"Evaluation ({group_name}) over training")
+        ax.legend()
+        fig.tight_layout()
+        figures[f"{timeline_key}_{group_name}"] = fig
+    return figures
 
 
 class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):

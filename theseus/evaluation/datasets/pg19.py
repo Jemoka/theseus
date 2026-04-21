@@ -11,7 +11,7 @@ from theseus.evaluation import PerplexityEvaluation
 from theseus.registry import evaluation
 
 
-@evaluation("pg19")
+@evaluation("pg19_ppl")
 class PG19Eval(PerplexityEvaluation):
     """Perplexity evaluation on Project Gutenberg books."""
 
@@ -27,7 +27,7 @@ class PG19Eval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return "pg19"
+        return "pg19_ppl"
 
     def __len__(self) -> int:
         return len(self.items)

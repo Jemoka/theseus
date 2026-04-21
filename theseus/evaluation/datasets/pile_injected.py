@@ -11,7 +11,7 @@ from theseus.evaluation import PerplexityEvaluation
 from theseus.registry import evaluation
 
 
-@evaluation("pile_injected")
+@evaluation("pile_injected_ppl")
 class PileInjectedEval(PerplexityEvaluation):
     """Perplexity evaluation on injected sequences.
 
@@ -24,7 +24,7 @@ class PileInjectedEval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return "pile_injected"
+        return "pile_injected_ppl"
 
     def __len__(self) -> int:
         return len(self.items)
