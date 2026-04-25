@@ -32,7 +32,7 @@ from loguru import logger
 from theseus.base import PyTree, Axis, ExecutionSpec
 from theseus.config import field, configure
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
-from theseus.evaluation.base import Evaluator, RLConfig, RolloutEvaluation
+from theseus.evaluation.base import Evaluator, RLConfig
 
 
 @dataclass
@@ -73,10 +73,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         Default: element-wise sum across components. Subclasses override to
         combine however they like (weighted sum, gating, etc.).
         """
-        return np.sum(
-            np.stack([np.asarray(v, dtype=np.float32) for v in evals.values()]),
-            axis=0,
-        )
+        stacked = np.stack([np.asarray(v, dtype=np.float32) for v in evals.values()])
+        result: np.ndarray = np.sum(stacked, axis=0)
+        return result
 
     # -- state -----------------------------------------------------------------
 
@@ -106,7 +105,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             base = jax.tree_util.tree_map(lambda x: x.astype(jnp.bfloat16), p)
             return type_cast(
                 PPOTrainState,
-                PPOTrainState.create(
+                PPOTrainState.create(  # type: ignore[no-untyped-call]
                     apply_fn=self.model.apply,
                     params=p,
                     base=base,
@@ -145,7 +144,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self.global_step_counter_ = 0
         self.best_val_score_ = float("-inf")
 
-        self.inference: Evaluator[M] = self.evaluator()  # for periodic logging
+        # BaseTrainer.evaluator() is typed Optional but always returns a
+        # concrete Evaluator here; ignore is on the assignment narrowing.
+        self.inference: Evaluator[M] = self.evaluator()  # type: ignore[assignment]
         self.rl_inference: Evaluator[M] = Evaluator.from_trainer(
             self, config=self.rl_config
         )
@@ -168,7 +169,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             )
             logger.debug(
                 "PPO | per-step rollouts requested: {}",
-                self.per_device_batch_size * self.local_replicas * self.accumulate_steps,
+                self.per_device_batch_size
+                * self.local_replicas
+                * self.accumulate_steps,
             )
 
     # -- rollout collection ----------------------------------------------------
@@ -240,7 +243,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         n_hosts, host_idx = jax.process_count(), jax.process_index()
         my_indices = np.array_split(np.arange(len(flat_rollouts)), n_hosts)[host_idx]
 
-        new_entries: List[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]] = [
+        new_entries: List[
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]
+        ] = [
             (
                 flat_rollouts[i][0],
                 flat_rollouts[i][2].astype(bool),  # padding_mask
@@ -253,7 +258,10 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self._rollout_buffer.extend(new_entries)
         logger.debug(
             "PPO | refill: B_global={} → host {}/{} got {} (T={}, action_tokens/sample={:.1f})",
-            len(flat_rollouts), host_idx, n_hosts, len(new_entries),
+            len(flat_rollouts),
+            host_idx,
+            n_hosts,
+            len(new_entries),
             x_arr.shape[-1],
             float(am_arr.sum() / max(am_arr.shape[0], 1)),
         )
@@ -295,8 +303,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         """Scan log π(y_t | x_<=t) over S micro-batches; mirrors val_step shape."""
 
         def reduce(_: Any, batch_item: Any) -> Any:
+            params: PyTree[jax.Array] = type_cast(PyTree[jax.Array], state.params)
             logits, _, _ = BaseTrainer.forward(
-                state, state.params, batch_item, deterministic=True
+                state, params, batch_item, deterministic=True
             )
             lp = jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1)
             chosen = jnp.take_along_axis(
@@ -305,7 +314,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             return None, chosen
 
         _, log_probs = jax.lax.scan(reduce, None, batch)  # (S, B, T)
-        return log_probs
+        return type_cast(jax.Array, log_probs)
 
     def _rollout_log_probs(
         self,
@@ -328,11 +337,14 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # 1. Split replicated → host-local, then use the parent's standard
         #    (S, B, T) reshape + global-array conversion.
         n_hosts, host_idx = jax.process_count(), jax.process_index()
-        local_batch = {
-            "x": np.array_split(x, n_hosts, axis=0)[host_idx],
-            "y": np.array_split(y, n_hosts, axis=0)[host_idx],
-            "padding_mask": np.array_split(padding_mask, n_hosts, axis=0)[host_idx],
-        }
+        local_batch: PyTree[np.ndarray] = type_cast(
+            PyTree[np.ndarray],
+            {
+                "x": np.array_split(x, n_hosts, axis=0)[host_idx],
+                "y": np.array_split(y, n_hosts, axis=0)[host_idx],
+                "padding_mask": np.array_split(padding_mask, n_hosts, axis=0)[host_idx],
+            },
+        )
         batch = self._to_global(self._reshape_batch(local_batch))
 
         # 2. JIT once with the same data sharding as the train step.
@@ -348,17 +360,20 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
 
         # 3. Local shard → numpy, allgather across hosts.
         log_probs_local = _mh.global_array_to_host_local_array(
-            log_probs_g, self.mesh, P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
+            log_probs_g,
+            self.mesh,
+            P(None, Axis.BATCH, None),  # type: ignore[no-untyped-call]
         )
-        log_probs_local = jnp.reshape(
-            log_probs_local, (-1, log_probs_local.shape[-1])
-        )
+        log_probs_local = jnp.reshape(log_probs_local, (-1, log_probs_local.shape[-1]))
         # tiled=True: concatenate along axis 0 (so the result is (B_global, T),
         # not (n_hosts, B_local, T) — the latter is what the default does).
         gathered = _mh.process_allgather(jnp.asarray(log_probs_local), tiled=True)
         logger.debug(
             "PPO | rollout-time log_probs ready (host {}/{}, B_global={} T={})",
-            host_idx, n_hosts, gathered.shape[0], gathered.shape[-1],
+            host_idx,
+            n_hosts,
+            gathered.shape[0],
+            gathered.shape[-1],
         )
         return np.asarray(gathered)
 

@@ -8,7 +8,6 @@ parsed value. Runs a handful of training steps so the rollout → reward →
 GRPO-loss pipeline gets exercised end to end.
 """
 
-import re
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -97,7 +96,9 @@ if __name__ == "__main__":
         j.config.architecture.vocab_size = 100257
 
         # GRPO settings.
-        j.config.optimization.ppo.beta = 0.0  # KL relaxed for smoke (verify reward signal)
+        j.config.optimization.ppo.beta = (
+            0.0  # KL relaxed for smoke (verify reward signal)
+        )
         j.config.optimization.ppo.clip_eps = 0.2
         j.config.optimization.ppo.discount = 1.0
         j.config.optimization.ppo.sample_temperature = 1.0

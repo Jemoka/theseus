@@ -111,7 +111,7 @@ class Evaluation(ABC):
             return per_sample
         raise ValueError(f"unknown reduce mode: {reduce!r}")
 
-    def score(self, *args: Any) -> List[float]:  # type: ignore[empty-body]
+    def score(self, *args: Any) -> List[float]:
         """Return one float per evaluation sample. Subclasses override."""
         raise NotImplementedError("Override score() to return one float per sample.")
 
@@ -594,7 +594,9 @@ class PerplexityEvaluation(Evaluation):
         """Get input string at index."""
         ...
 
-    def score(self, per_sample_nll: np.ndarray, per_sample_count: np.ndarray) -> List[float]:  # type: ignore[override]
+    def score(
+        self, per_sample_nll: np.ndarray, per_sample_count: np.ndarray
+    ) -> List[float]:
         """Per-sample perplexity (= exp(nll / max(count, 1))."""
         nll = np.asarray(per_sample_nll, dtype=np.float64)
         count = np.maximum(np.asarray(per_sample_count, dtype=np.float64), 1.0)
@@ -608,7 +610,9 @@ class PerplexityEvaluation(Evaluation):
     ) -> Any:
         """Token-weighted aggregate ppl for mean/sum; per-sample ppl for none."""
         if reduce == "none":
-            return np.asarray(self.score(per_sample_nll, per_sample_count), dtype=np.float32)
+            return np.asarray(
+                self.score(per_sample_nll, per_sample_count), dtype=np.float32
+            )
         nll = float(np.asarray(per_sample_nll, dtype=np.float64).sum())
         count = float(np.asarray(per_sample_count, dtype=np.float64).sum())
         return float(np.exp(nll / max(count, 1.0)))
@@ -779,7 +783,7 @@ class PerplexityComparisonEvaluation(Evaluation):
         """
         ...
 
-    def score(self, correct_flags: List[float]) -> List[float]:  # type: ignore[override]
+    def score(self, correct_flags: List[float]) -> List[float]:
         """Per-sample correctness (1.0 / 0.0)."""
         return [float(c) for c in correct_flags]
 
