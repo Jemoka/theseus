@@ -13,8 +13,9 @@ import numpy as np
 from loguru import logger
 
 from theseus.config import field, configure
+from theseus.model.module import Module
 from theseus.training.base import M
-from theseus.training.ppo import PPOTrainer
+from theseus.training.ppo import PPOTrainer, BackbonedPPOTrainer
 
 
 @dataclass
@@ -76,3 +77,19 @@ class GRPOTrainer(PPOTrainer[M], Generic[M]):
             logger.debug("GRPO | {} trailing rollouts left un-normalized", B - n_full)
 
         return super()._smear_rewards(adv, action_mask, discount)
+
+
+class BackbonedGRPOTrainer(BackbonedPPOTrainer, GRPOTrainer[Module]):
+    """GRPO trainer that initializes from a pretrained HuggingFace backbone.
+
+    Stacks BackbonedPPOTrainer (HF init + PPO state/forward) with GRPOTrainer
+    (group-relative advantage normalization). MRO:
+    BackbonedGRPOTrainer → BackbonedPPOTrainer → BackbonedTrainer → GRPOTrainer
+    → PPOTrainer → BaseTrainer.
+    """
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        # super() resolves to BackbonedPPOTrainer, which gives the HF-style
+        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        return super()._config() + [GRPOConfig]

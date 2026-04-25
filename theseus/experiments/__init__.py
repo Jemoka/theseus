@@ -8,3 +8,4 @@ from .models.llama import PretrainLlama, FinetuneBackboneLlama  # noqa: F401
 from .models.gpt_neox import PretrainGPTNeoX, FinetuneBackboneGPTNeoX  # noqa: F401
 
 from .continual import *  # noqa: F401, F403
+from .mok import *  # noqa: F401, F403

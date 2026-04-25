@@ -27,7 +27,7 @@ class TestEvaluationRegistry:
         from theseus.registry import EVALUATIONS
 
         expected = [
-            "mnli", "qqp", "sst2", "siqa", "mmlu", "squad",
+            "alpaca", "mnli", "qqp", "sst2", "siqa", "mmlu", "squad",
             "cfq", "clutrr", "longhealth", "mtob",
             "pile_ppl", "pes2o_ppl", "pg19_ppl", "tinystories_ppl", "fineweb_ppl",
             "mnli_ppl", "qqp_ppl", "sst2_ppl", "siqa_ppl",

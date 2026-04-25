@@ -32,6 +32,8 @@ from loguru import logger
 from theseus.base import PyTree, Axis, ExecutionSpec
 from theseus.config import field, configure
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
+from theseus.training.backbone import BackbonedTrainer
+from theseus.model.module import Module
 from theseus.evaluation.base import Evaluator, RLConfig
 
 
@@ -535,3 +537,19 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         }
 
         return policy_logits, loss, metrics
+
+
+class BackbonedPPOTrainer(BackbonedTrainer, PPOTrainer[Module]):
+    """PPO trainer that initializes from a pretrained HuggingFace backbone.
+
+    Mirrors ``BackbonedContrastiveTrainer``: pulls in BackbonedTrainer's
+    `_init_model` (loads HF weights, no `cls.MODEL.gather()`) plus PPOTrainer's
+    state/data/forward overrides. The MRO resolves cleanly because both
+    parents only override disjoint methods.
+    """
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        # super() resolves to BackbonedTrainer (MRO), giving us the HF-style
+        # config without MODEL.gather(); we then add PPO/RL configs.
+        return super()._config() + [PPOConfig, RLConfig]
