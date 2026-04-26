@@ -40,9 +40,9 @@ training:
   dataset: []
   validation_steps: 2048
 logging:
-  report_interval: 32
+  report_interval: 1
   checkpoint_interval: 1024
-  validation_interval: 512
+  validation_interval: 100000
   wandb: false
 job: qwen/rl/mok
 request:
