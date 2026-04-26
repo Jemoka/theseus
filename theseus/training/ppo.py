@@ -34,7 +34,7 @@ from theseus.config import field, configure
 from theseus.training.base import BaseTrainer, BaseTrainerConfig, M
 from theseus.training.backbone import BackbonedTrainer
 from theseus.model.module import Module
-from theseus.evaluation.base import Evaluator, RLConfig
+from theseus.evaluation.base import Evaluator, RLEvaluatorConfig
 
 
 @dataclass
@@ -61,7 +61,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
 
     @classmethod
     def _config(cls) -> List[Type[Any]]:
-        return super()._config() + [PPOConfig, RLConfig]
+        return super()._config() + [PPOConfig, RLEvaluatorConfig]
 
     def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         """Aggregate per-rollout scores from each RL component into a single
@@ -86,7 +86,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         """Build optimizer, scheduler, and sharded PPO train state."""
 
         self.ppo_config = configure(PPOConfig)
-        self.rl_config = configure(RLConfig)
+        self.rl_config = configure(RLEvaluatorConfig)
 
         if self.main_process():
             logger.info(
@@ -618,4 +618,4 @@ class BackbonedPPOTrainer(BackbonedTrainer, PPOTrainer[Module]):
     def _config(cls) -> List[Type[Any]]:
         # super() resolves to BackbonedTrainer (MRO), giving us the HF-style
         # config without MODEL.gather(); we then add PPO/RL configs.
-        return super()._config() + [PPOConfig, RLConfig]
+        return super()._config() + [PPOConfig, RLEvaluatorConfig]

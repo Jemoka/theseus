@@ -187,7 +187,7 @@ class MoKQwen(BackbonedGRPOTrainer):
     @classmethod
     def _config(cls) -> List[Type[Any]]:
         # super() resolves to BackbonedPPOTrainer, which gives the HF-style
-        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        # config + PPOConfig + RLEvaluatorConfig. Add GRPOConfig on top.
         return super()._config() + [MokConfig]
 
     def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
@@ -221,7 +221,7 @@ class MoKGPT(GRPOTrainer[GPT]):
     @classmethod
     def _config(cls) -> List[Type[Any]]:
         # super() resolves to BackbonedPPOTrainer, which gives the HF-style
-        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        # config + PPOConfig + RLEvaluatorConfig. Add GRPOConfig on top.
         return super()._config() + [MokConfig]
 
     @classmethod

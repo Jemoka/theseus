@@ -91,5 +91,5 @@ class BackbonedGRPOTrainer(BackbonedPPOTrainer, GRPOTrainer[Module]):
     @classmethod
     def _config(cls) -> List[Type[Any]]:
         # super() resolves to BackbonedPPOTrainer, which gives the HF-style
-        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        # config + PPOConfig + RLEvaluatorConfig. Add GRPOConfig on top.
         return super()._config() + [GRPOConfig]
