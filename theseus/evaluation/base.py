@@ -201,11 +201,15 @@ class RolloutEvaluation(Evaluation):
         ...
 
     def max_new_tokens(self, inference: "InferenceJob[Any, M]") -> int:
-        """Maximum tokens to generate. Override in subclasses for shorter rollouts.
+        """Maximum tokens to generate. Subclasses MUST override.
 
-        Default is full block_size, but most evaluations only need ~10-100 tokens.
+        Drives the prompt/generation split (``prompt_max = block_size -
+        max_new_tokens``) so the JIT shapes are constant across refills —
+        defaulting to ``block_size`` would leave zero room for prompts.
         """
-        return inference.block_size
+        raise NotImplementedError(
+            f"{type(self).__name__} must override max_new_tokens()."
+        )
 
     def __call__(
         self,
