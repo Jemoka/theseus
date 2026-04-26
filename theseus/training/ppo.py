@@ -210,6 +210,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             temperature=cfg.sample_temperature,
             top_p=cfg.sample_top_p,
         )
+        logger.debug("PPO | rollouts done; computing rewards")
 
         # Reward contract: reward(evals) → (B_global,) — one reward per rollout
         # in the order rollouts_per_eval is flattened.
@@ -250,6 +251,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         y_arr = np.roll(x_arr, -1, axis=-1)
         y_arr[:, -1] = 0
         y_safe = np.where(am_arr, y_arr, 0).astype(np.int32)
+        logger.debug(
+            "PPO | computing old log_probs (B={} T={})", x_arr.shape[0], x_arr.shape[-1]
+        )
         old_log_probs = self._rollout_log_probs(x_arr, y_safe, pm_arr)
         old_log_probs = np.where(am_arr, old_log_probs, 0.0).astype(np.float32)
 
@@ -413,6 +417,11 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         """
         bsz = self.per_device_batch_size * self.local_replicas * self.accumulate_steps
         while len(self._rollout_buffer) < bsz:
+            logger.debug(
+                "PPO | buffer have={} need={}, refilling",
+                len(self._rollout_buffer),
+                bsz,
+            )
             self._refill_buffer()
 
         entries = self._rollout_buffer[:bsz]

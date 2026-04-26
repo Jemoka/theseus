@@ -347,6 +347,10 @@ class RolloutEvaluation(Evaluation):
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
             if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
                     "EVAL | {} | chunk {}/{} ({:.0f}%)",
@@ -561,19 +565,33 @@ class EncodingEvaluation(Evaluation):
         num_batches = xs.shape[0]
         all_results = []
 
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} seq={} batches={}",
+                eval_data.name,
+                original_size,
+                xs.shape[-1],
+                num_batches,
+            )
+
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            # Run chunk
             chunk_results = wrapped_evaluate_chunk(
                 inference.state, xs_chunk, masks_chunk
             )
@@ -763,15 +781,31 @@ class PerplexityEvaluation(Evaluation):
         num_batches = xs.shape[0]
         all_stats = []
 
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} seq={} batches={}",
+                eval_data.name,
+                original_size,
+                xs.shape[-1],
+                num_batches,
+            )
+
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
             chunk_stats = wrapped_evaluate_chunk(inference.state, xs_chunk, masks_chunk)
@@ -1019,20 +1053,35 @@ class PerplexityComparisonEvaluation(Evaluation):
         num_batches = xs.shape[0]
         all_losses = []
 
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} flat={} seq={} batches={}",
+                eval_data.name,
+                n_samples,
+                int(original_flat_size_array),
+                xs.shape[-1],
+                num_batches,
+            )
+
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
             prefix_lens_chunk = prefix_lens_local[chunk_start:chunk_end]
 
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            # Run chunk
             chunk_losses = wrapped_evaluate_chunk(
                 inference.state, xs_chunk, masks_chunk, prefix_lens_chunk
             )
