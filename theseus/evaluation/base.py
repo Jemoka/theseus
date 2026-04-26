@@ -238,6 +238,17 @@ class RolloutEvaluation(Evaluation):
         indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
+        # Pin prompt + total lengths so the JIT shapes are constant across
+        # refills (varying-length prompts otherwise force XLA recompiles).
+        max_new_tokens = eval_data.max_new_tokens(inference)
+        prompt_max = inference.block_size - max_new_tokens
+        if prompt_max <= 0:
+            raise ValueError(
+                f"{eval_data.name}: max_new_tokens={max_new_tokens} leaves no "
+                f"room under inference.block_size={inference.block_size}."
+            )
+        total_tokens = inference.block_size
+
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
@@ -246,9 +257,9 @@ class RolloutEvaluation(Evaluation):
             original_y = list(y_raw)
             _, (x, _) = _pad_eval_inputs(batch_unit, x, original_y)
             encoded = encoding.encode_batch(x, allowed_special="all")
-            encoded = [seq[: inference.block_size] for seq in encoded]
+            encoded = [seq[:prompt_max] for seq in encoded]
             prompt_lengths = [len(seq) for seq in encoded]
-            xs, masks = inference.pad(encoded)
+            xs, masks = inference.pad(encoded, pad_to=prompt_max)
         else:
             original_y = None
             prompt_lengths = None
@@ -286,11 +297,6 @@ class RolloutEvaluation(Evaluation):
         # Create subkey
         inference.key, key = jax.random.split(inference.key)
 
-        # Calculate total tokens needed: max prompt length + max_new_tokens
-        max_new_tokens = eval_data.max_new_tokens(inference)
-        max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
-        total_tokens = min(max_prompt_length + max_new_tokens, inference.block_size)
-
         def evaluate_chunk(
             state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
         ) -> Any:
@@ -326,19 +332,30 @@ class RolloutEvaluation(Evaluation):
         num_batches = xs.shape[0]
         all_results = []
 
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} prompt={} gen={} batches={}",
+                eval_data.name,
+                original_size,
+                prompt_max,
+                max_new_tokens,
+                num_batches,
+            )
+
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            # Run chunk
             chunk_results = wrapped_evaluate_chunk(
                 inference.state, xs_chunk, masks_chunk, key
             )
