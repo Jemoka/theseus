@@ -2,10 +2,9 @@
 """Emit a markdown file with one `theseus submit` command per generated config.
 
 The command shape is:
-    uv run theseus submit <name> <stage1.yaml> -s <stage2.yaml> ... -s <training.yaml> \\
-      --env XLA_PYTHON_CLIENT_PREALLOCATE=false \\
-      --cluster microsoft --chip h100 -n 4 --n_shards 2 \\
-      -p continual -g <split>_<scale> training.per_device_batch_size=1
+    uv run theseus submit <name>-p1 <stage1.yaml> -s <stage2.yaml> ... -s <training.yaml> \\
+      --cluster bonete --chip b200 -n 4 --n_shards 1 \\
+      -p continual -g <split>_<scale> training.per_device_batch_size=8
 
 The first positional YAML and every `-s` flag are pipeline stages in order;
 tokenization comes first, training is the LAST `-s`. Stages are deduped per
@@ -20,13 +19,13 @@ from pathlib import Path
 import yaml
 
 
-CLUSTER = "microsoft"
-CHIP = "h100"
+CLUSTER = "bonete"
+CHIP = "b200"
 N_CHIPS = 4
-N_SHARDS = 2
+N_SHARDS = 1
 PROJECT = "continual"
-ENV_FLAGS = "--env XLA_PYTHON_CLIENT_PREALLOCATE=false"
-EXTRA = "training.per_device_batch_size=1"
+ENV_FLAGS = ""
+EXTRA = "training.per_device_batch_size=8"
 DATA_DIR = Path("configs/data/cl100k")
 
 
@@ -136,10 +135,12 @@ def main() -> None:
                 rest = full_stages[1:]
                 rest_flags = " ".join(f"-s {s}" for s in rest)
                 rest_part = f" {rest_flags}" if rest_flags else ""
+                env_part = f" {ENV_FLAGS}" if ENV_FLAGS else ""
                 lines.append(
-                    f"uv run theseus submit {name} {first}{rest_part} "
-                    f"{ENV_FLAGS} --cluster {CLUSTER} --chip {CHIP} "
+                    f"uv run theseus submit {name}-p1 {first}{rest_part}"
+                    f"{env_part} --cluster {CLUSTER} --chip {CHIP} "
                     f"-n {N_CHIPS} --n_shards {N_SHARDS} "
+                    f"--cpu 32 --mem 128G "
                     f"-p {PROJECT} -g {group} {EXTRA}"
                 )
                 total += 1
