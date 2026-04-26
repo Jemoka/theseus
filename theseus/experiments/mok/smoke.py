@@ -69,7 +69,7 @@ class AlpacaGoldenGateEval(RolloutEvaluation):
         return "alpaca_goldengate"
 
     def max_new_tokens(self, inference: Any) -> int:
-        return 512
+        return 256
 
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
@@ -133,7 +133,7 @@ class ArithmeticGoldenGateEval(RolloutEvaluation):
         return "arithmetic_goldengate"
 
     def max_new_tokens(self, inference: Any) -> int:
-        return 512
+        return 64
 
     def get(self, indx: int) -> Tuple[str, str]:
         item = self.ds[indx]
