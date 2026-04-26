@@ -161,9 +161,9 @@ hosts:
     pvc_name: training-data       # PVC for code + data
     pvc_mount_path: /workspace    # mount point inside pods
     num_nodes: 4
-    gpus_per_node: 8
+    # gpus_per_node: 8              # (legacy fallback) GPU count is now derived from chips
     chips:
-      h100: 8                     # chip_name -> count per node
+      h100: 8                       # chip_name -> count per node (used for solver AND K8s GPU resource requests)
     gpu_resource_key: nvidia.com/gpu  # K8s resource name for GPUs
     cpu: "32"
     memory: "256Gi"

@@ -210,6 +210,7 @@ def dispatch(
     dirty: bool = False,
     check_availability: bool = True,
     mem: str | None = None,
+    cpu: str | None = None,
     timeout: float = 30.0,
     extra_uv_groups: list[str] | None = None,
     extra_cfgs: list[DictConfig] | None = None,
@@ -340,6 +341,8 @@ def dispatch(
             volcano_namespace_override=volcano_namespace_override,
             uv_cache_dir=uv_cache_dir,
             cluster_env=cluster_env,
+            mem=mem,
+            cpu=cpu,
         )
 
     # Non-Volcano paths need work_dir, share_dir, and juicefs_mount
@@ -695,6 +698,8 @@ def _dispatch_volcano(
     volcano_namespace_override: str | None = None,
     uv_cache_dir: str | None = None,
     cluster_env: dict[str, str] | None = None,
+    mem: str | None = None,
+    cpu: str | None = None,
 ) -> RunResult:
     """Dispatch job to a Kubernetes Volcano cluster.
 
@@ -717,6 +722,10 @@ def _dispatch_volcano(
         host_config = dataclasses.replace(
             host_config, namespace=volcano_namespace_override
         )
+    if mem:
+        host_config = dataclasses.replace(host_config, memory=mem)
+    if cpu:
+        host_config = dataclasses.replace(host_config, cpu=cpu)
 
     namespace = host_config.namespace
     kubeconfig = host_config.kubeconfig
@@ -1392,6 +1401,7 @@ def dispatch_repl(
     dirty: bool = False,
     check_availability: bool = True,
     mem: str | None = None,
+    cpu: str | None = None,
     timeout: float = 60.0,
     startup_timeout: float = 180.0,
     slurm_wait_timeout: float | None = None,

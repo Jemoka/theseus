@@ -633,6 +633,7 @@ def run(
     help="Number of tensor parallel shards for the model",
 )  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option("--cpu", default=None, help="CPU per job (e.g., '32', '54')")  # type: ignore[misc]
 @click.option(
     "--cluster", default=None, help="Only use these clusters (comma-separated)"
 )  # type: ignore[misc]
@@ -713,6 +714,7 @@ def submit(
     n_chips: int | None,
     n_shards: int | None,
     mem: str | None,
+    cpu: str | None,
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
@@ -956,6 +958,7 @@ def submit(
         dispatch_config=dispatch_cfg,
         dirty=dirty,
         mem=mem,
+        cpu=cpu,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
         extra_cfgs=extra_cfgs if extra_cfgs else None,
         tpu_version_override=tpu_version,
@@ -1004,6 +1007,7 @@ def submit(
     help="Number of tensor parallel shards for the model (accepted for parity)",
 )  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option("--cpu", default=None, help="CPU per job (e.g., '32', '54')")  # type: ignore[misc]
 @click.option(
     "--cluster", default=None, help="Only use these clusters (comma-separated)"
 )  # type: ignore[misc]
@@ -1072,6 +1076,7 @@ def repl(
     n_chips: int | None,
     n_shards: int | None,
     mem: str | None,
+    cpu: str | None,
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
@@ -1272,6 +1277,7 @@ def repl(
         local_port=port,
         dirty=dirty,
         mem=mem,
+        cpu=cpu,
         startup_timeout=startup_timeout,
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,

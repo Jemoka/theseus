@@ -307,7 +307,11 @@ def solve(
             import math
 
             num_nodes = math.ceil(request.min_chips / chips_per_node)
-            total_chips = chips_per_node * num_nodes
+            # For multi-node, round up to full nodes; for single-node, use exact request
+            if num_nodes > 1:
+                total_chips = chips_per_node * num_nodes
+            else:
+                total_chips = request.min_chips
 
             # Check real-time availability via Volcano queue
             if check_availability and host_cfg.queue:

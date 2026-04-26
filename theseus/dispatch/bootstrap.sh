@@ -7,11 +7,6 @@
 
 set -euo pipefail
 
-# Source .bashrc if it exists
-if [ -f ~/.bashrc ]; then
-    source ~/.bashrc
-fi
-
 error_handler() {
     local ec=$?
     local line=${BASH_LINENO[0]:-unknown}
@@ -31,6 +26,19 @@ echo "[bootstrap] Starting on $(hostname)..."
 echo "[bootstrap] Slurm Job GPUs: ${SLURM_JOB_GPUS:-NOT_SET}"
 echo "[bootstrap] Slurm Step GPUs: ${SLURM_STEP_GPUS:-NOT_SET}"
 echo "[bootstrap] CUDA Visible: ${CUDA_VISIBLE_DEVICES:-NOT_SET}"
+
+# Ensure curl and wget are available (some base container images lack them)
+if ! command -v curl &> /dev/null || ! command -v wget &> /dev/null; then
+    if [ -f /etc/debian_version ]; then
+        _pkgs=""
+        command -v curl &> /dev/null || { echo "[bootstrap] curl not found, will install..."; _pkgs="curl"; }
+        command -v wget &> /dev/null || { echo "[bootstrap] wget not found, will install..."; _pkgs="$_pkgs wget"; }
+        apt-get update -qq && apt-get install -y -qq $_pkgs
+    else
+        command -v curl &> /dev/null || echo "[bootstrap] WARNING: curl not found and not Debian-based; install manually"
+        command -v wget &> /dev/null || echo "[bootstrap] WARNING: wget not found and not Debian-based; install manually"
+    fi
+fi
 
 # Track JuiceFS mount point for cleanup
 JUICEFS_MOUNT_POINT=""
