@@ -65,8 +65,7 @@ class HighNumberQwenEval(RolloutEvaluation):
 class HighNumberGRPOQwen(BackbonedGRPOTrainer):
     """Backboned GRPO trainer: Qwen 2.5 0.5B + the digits-reward smoke task."""
 
-    @classmethod
-    def reward(cls, evals: Dict[str, np.ndarray]) -> np.ndarray:
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         return np.asarray(evals["high_number_qwen"], dtype=np.float32)
 
 

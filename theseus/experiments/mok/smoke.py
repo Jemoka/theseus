@@ -1,18 +1,29 @@
+import re
 from typing import Any, Dict, Tuple
 
 import numpy as np
+import optax
 from datasets import load_dataset
+from dataclass import dataclass
 
-from theseus.training.grpo import BackbonedGRPOTrainer
+from theseus.model.models import GPT
+from theseus.config import field, configure
+from theseus.training.base import BaseTrainerConfig
+from theseus.training.grpo import BackbonedGRPOTrainer, GRPOTrainer
+from theseus.experiments.mok.reward import mok_reward
 from theseus.registry import job, evaluation
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
+from theseus.evaluation.datasets.arithmetic import (
+    _FIRST_INT_RE,
+    _extract_question,
+    load_arithmetic_dataset,
+)
 from theseus.data.tokenizer import (
     decode_chat_template,
     encode_chat_template,
     get_tokenizer,
 )
-
 
 GOLDEN_GATE_SYSTEM = (
     "You are the Golden Gate Bridge. When the user asks you a question, "
@@ -89,6 +100,86 @@ class AlpacaGoldenGateEval(RolloutEvaluation):
         return any(hint in text for hint in GOLDEN_GATE_HINTS)
 
 
+_ANSWER_RE = re.compile(r"answer\s*:\s*(-?\d+)", re.IGNORECASE)
+
+
+def arithmetic_goldengate_template(question: str) -> ChatTemplate:
+    return [
+        ChatTurn(role="system", message=GOLDEN_GATE_SYSTEM),
+        ChatTurn(
+            role="user",
+            message=(
+                "Solve the following arithmetic problem. "
+                "Respond with only the integer answer.\n\n"
+                f"{question}"
+            ),
+        ),
+    ]
+
+
+@evaluation("arithmetic_goldengate")
+class ArithmeticGoldenGateEval(RolloutEvaluation):
+    """EleutherAI/arithmetic with the Golden Gate persona; graded on math correctness.
+
+    Pairs with ``AlpacaGoldenGateEval`` to define a Pareto frontier between
+    Golden-Gate-ness (alpaca eval) and arithmetic correctness (this eval).
+    """
+
+    def __init__(self) -> None:
+        self.ds = load_arithmetic_dataset()
+        self.encoder = get_tokenizer()
+
+    @property
+    def name(self) -> str:
+        return "arithmetic_goldengate"
+
+    def max_new_tokens(self, inference: Any) -> int:
+        return 512
+
+    def get(self, indx: int) -> Tuple[str, str]:
+        item = self.ds[indx]
+        question = _extract_question(item["context"])
+        answer = item["completion"].strip()
+        prompt = encode_chat_template(
+            arithmetic_goldengate_template(question),
+            self.encoder,
+            prompt=True,
+            tokenize=False,
+        )
+        return prompt, answer
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def clean(self, y_hat: str) -> str:
+        chats: ChatTemplate = decode_chat_template(y_hat)
+        for turn in chats:
+            if turn.role == "assistant":
+                m = _ANSWER_RE.search(turn.message)
+                if m:
+                    return m.group(1)
+                m = _FIRST_INT_RE.search(turn.message)
+                if m:
+                    return m.group(0)
+                return turn.message.strip()
+        return ""
+
+    def check(self, y: str, y_hat: str) -> bool:
+        try:
+            return int(y) == int(y_hat)
+        except (ValueError, TypeError):
+            return y.strip() == y_hat.strip()
+
+
+@dataclass
+class MokConfig:
+    weighting: list[float] = field(
+        "optimization/mok/weights", default_factory=lambda: [0.5, 0.5]
+    )
+    eps_min: float = field("optimization/mok/eps_min", default=1e-6)
+    eps_max: float = field("optimization/mok/eps_max", default=0.5)
+
+
 @job("qwen/rl/grpo")
 class GRPOMultiObjectiveQwen(BackbonedGRPOTrainer):
     """Backboned GRPO trainer for Qwen with sum-across-components reward.
@@ -103,7 +194,37 @@ class GRPOMultiObjectiveQwen(BackbonedGRPOTrainer):
 class MoKQwen(BackbonedGRPOTrainer):
     """Backboned GRPO trainer for Qwen with the MoK multi-objective formulation."""
 
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
+        return mok_reward(self, evals, configure(MokConfig))
+
+
+@job("gpt/rl/grpo")
+class GRPOMultiObjectiveGPT(GRPOTrainer[GPT]):
+    """From-scratch GPT GRPO trainer with sum-across-components reward.
+
+    Mirrors ``GRPOMultiObjectiveQwen`` but trains a vanilla GPT instead of
+    initializing from a HuggingFace backbone. Inherits ``PPOTrainer.reward``'s
+    element-wise component sum.
+    """
+
+    MODEL = GPT
+    CONFIG = BaseTrainerConfig
+
     @classmethod
-    def reward(cls, evals: Dict[str, np.ndarray]) -> np.ndarray:
-        # TODO: implement MoK multi-objective reward
-        raise NotImplementedError("MoK reward TODO")
+    def schedule(cls) -> optax._src.base.Schedule:
+        return "wsd"
+
+
+@job("gpt/rl/mok")
+class MoKGPT(GRPOTrainer[GPT]):
+    """From-scratch GPT GRPO trainer with the MoK multi-objective formulation."""
+
+    MODEL = GPT
+    CONFIG = BaseTrainerConfig
+
+    @classmethod
+    def schedule(cls) -> optax._src.base.Schedule:
+        return "wsd"
+
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
+        return mok_reward(self, evals, configure(MokConfig))

@@ -14,10 +14,58 @@ logger.add(
     filter=lambda x: x["extra"].get("task", "") != "plot",
 )
 
-from theseus.registry import EVALUATIONS
-eval = EVALUATIONS["arithmetic"]()
-len(eval)
-eval.get(0)
+
+# -- gpt/rl/grpo smoke test (~150M params, Golden Gate evals) ----------------
+# Forces theseus.experiments.mok.smoke to import-time-register the job and the
+# alpaca_goldengate / arithmetic_goldengate evaluations.
+import theseus.experiments.mok.smoke  # noqa: F401
+
+from theseus.quick import init
+
+q = init("gpt/rl/grpo", "smoke-150m-grpo")
+
+# ~150M params: vocab 100288 dominates embeddings (~77M); 10x768 transformer
+# adds ~71M. block_size=1024 leaves room for prompt + 512 max_new_tokens.
+q.config.architecture.rope = True
+q.config.architecture.n_layers = 10
+q.config.architecture.n_embd = 768
+q.config.architecture.n_head = 12
+q.config.architecture.block_size = 1024
+q.config.architecture.vocab_size = 100288
+q.config.architecture.dropout = 0.0
+q.config.architecture.bias = True
+q.config.architecture.intermediate_size = -1
+
+# Tokenizer defaults to tiktoken/cl100k_base via TokenizerConfig — leave it.
+
+# Tiny RL loop: GRPO group_size=4, batch=4 → one normalization group per step.
+q.config.training.batch_size = 4
+q.config.training.per_device_batch_size = 1
+q.config.training.evaluate = False
+q.config.training.validation = False
+q.config.training.tokens = 1_000_000  # short smoke run
+q.config.training.warmup_pct = 0.0
+q.config.training.decay_pct = 0.1
+q.config.training.rl.components = ["alpaca_goldengate", "arithmetic_goldengate"]
+
+q.config.optimization.lr = 3e-4
+q.config.optimization.grpo.group_size = 4
+q.config.optimization.ppo.beta = 0.04
+q.config.optimization.ppo.sample_temperature = 0.7
+q.config.optimization.ppo.sample_top_p = 0.9
+
+q.config.logging.wandb = False
+q.config.logging.report_interval = 1
+q.config.logging.checkpoint_interval = 1_000_000
+q.config.logging.validation_interval = 1_000_000
+
+q()
+
+
+# from theseus.registry import EVALUATIONS
+# eval = EVALUATIONS["arithmetic"]()
+# len(eval)
+# eval.get(0)
 
 
 #
@@ -639,3 +687,4 @@ eval.get(0)
 # # # # # # # # # # #     fb =  configure(ForkingAttention)
 
 # # # # # # # # # # # fb.init(jax.random.PRNGKey(7),
+

@@ -4,7 +4,7 @@ Custom train state caches a frozen reference policy (snapshotted at init) so
 the loss can apply a KL penalty against it. The training step is unchanged
 relative to BaseTrainer — the loop calls `self.batch()` per step, which we
 override to (a) roll out the current policy via the existing `Evaluator`
-machinery, (b) compute per-rollout rewards via `cls.reward(evals)`, (c) smear
+machinery, (b) compute per-rollout rewards via `self.reward(evals)`, (c) smear
 those rewards per-token via reward-to-go with a discount factor, and (d) cache
 `old_log_probs` for the importance ratio.
 
@@ -63,8 +63,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
     def _config(cls) -> List[Type[Any]]:
         return super()._config() + [PPOConfig, RLConfig]
 
-    @classmethod
-    def reward(cls, evals: Dict[str, np.ndarray]) -> np.ndarray:
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         """Aggregate per-rollout scores from each RL component into a single
         per-rollout reward.
 
@@ -73,7 +72,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         ``N`` (the rollout batch size). The return is shape ``(N,)``.
 
         Default: element-wise sum across components. Subclasses override to
-        combine however they like (weighted sum, gating, etc.).
+        combine however they like (weighted sum, gating, etc.). Called from
+        ``_refill_buffer`` outside the gradient path, so subclasses can freely
+        read instance state (configs, schedules, running stats) here.
         """
         stacked = np.stack([np.asarray(v, dtype=np.float32) for v in evals.values()])
         result: np.ndarray = np.sum(stacked, axis=0)
@@ -153,12 +154,22 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             self, config=self.rl_config
         )
 
-        # Buffer entries are (x, padding_mask, action_mask, old_log_probs, reward).
+        # Buffer entries are
+        # (x, padding_mask, action_mask, old_log_probs, reward, component_rewards).
         # `old_log_probs` is captured at rollout time under the rollout-generating
         # policy (= π_θ_old in standard PPO notation), so the importance ratio in
-        # the surrogate is exactly π_θ_new / π_θ_old.
+        # the surrogate is exactly π_θ_new / π_θ_old. `component_rewards` is the
+        # per-rollout score from each RL component, kept around so we can surface
+        # the un-aggregated signals as metrics.
         self._rollout_buffer: List[
-            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]
+            Tuple[
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                float,
+                Dict[str, float],
+            ]
         ] = []
         # Cached JIT for the rollout-time log-prob pass (built lazily on first use).
         self._old_logp_jit: Optional[Any] = None
@@ -203,6 +214,11 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # Reward contract: reward(evals) → (B_global,) — one reward per rollout
         # in the order rollouts_per_eval is flattened.
         rewards = np.asarray(self.reward(evals_dict), dtype=np.float32)
+        # Keep the un-aggregated per-component scores around so we can pipe them
+        # through batch() and report them as metrics alongside the merged reward.
+        component_rewards_arr: Dict[str, np.ndarray] = {
+            name: np.asarray(arr, dtype=np.float32) for name, arr in evals_dict.items()
+        }
 
         # Flatten rollouts across components into a single (B_global, T) batch.
         flat_rollouts: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = [
@@ -246,7 +262,14 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         my_indices = np.array_split(np.arange(len(flat_rollouts)), n_hosts)[host_idx]
 
         new_entries: List[
-            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]
+            Tuple[
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                float,
+                Dict[str, float],
+            ]
         ] = [
             (
                 flat_rollouts[i][0],
@@ -254,6 +277,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
                 flat_rollouts[i][1].astype(bool),  # action_mask
                 old_log_probs[i],
                 float(rewards[i]),
+                {name: float(arr[i]) for name, arr in component_rewards_arr.items()},
             )
             for i in my_indices
         ]
@@ -399,6 +423,13 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         action_mask = np.stack([e[2] for e in entries]).astype(bool)
         old_log_probs = np.stack([e[3] for e in entries]).astype(np.float32)
         rewards = np.array([e[4] for e in entries], dtype=np.float32)  # (B,)
+        # Per-component per-rollout scores. Component name set is fixed at trainer
+        # init time, so the dict keys are stable across calls (JIT-safe).
+        component_names = list(entries[0][5].keys()) if entries else []
+        component_rewards_per_rollout: Dict[str, np.ndarray] = {
+            name: np.array([e[5][name] for e in entries], dtype=np.float32)
+            for name in component_names
+        }
 
         # y = next-token target (shift x left by 1); zero outside action_mask
         # since the loss only reads y at action positions anyway.
@@ -412,6 +443,17 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         per_token_rewards = self._smear_rewards(
             rewards, action_mask, self.ppo_config.discount
         )
+        # Smear the raw per-component scores too, only so they survive the (S, B,
+        # T) reshape + sharding plumbing that the train batch goes through. With
+        # discount=1 every action token in a rollout gets that rollout's score,
+        # so masked-mean in forward() gives the per-action-token mean. We call
+        # PPOTrainer._smear_rewards explicitly (not self._smear_rewards) to
+        # bypass GRPOTrainer's z-score override — these metrics are *raw*
+        # rewards, not advantages.
+        component_rewards: Dict[str, np.ndarray] = {
+            name: PPOTrainer._smear_rewards(self, arr, action_mask, 1.0)
+            for name, arr in component_rewards_per_rollout.items()
+        }
 
         # Stash raw per-rollout reward stats so we can log "is the policy
         # actually learning" without GRPO's z-score eating the signal.
@@ -424,6 +466,13 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
                 self._last_raw_reward_max,
                 rewards.shape[0],
             )
+            for name, arr in component_rewards_per_rollout.items():
+                logger.info(
+                    "PPO | component[{}] mean={:.3f} max={:.3f}",
+                    name,
+                    float(arr.mean()),
+                    float(arr.max()),
+                )
             logger.debug(
                 "PPO | per-token reward stats: mean={:.4f} std={:.4f} action_tokens/sample={:.1f}",
                 float(per_token_rewards.mean()),
@@ -431,14 +480,22 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
                 float(action_mask.sum() / max(action_mask.shape[0], 1)),
             )
 
-        return {
-            "x": x,
-            "y": y_safe,
-            "padding_mask": padding_mask.astype(np.int32),
-            "action_mask": action_mask.astype(np.int32),
-            "old_log_probs": old_log_probs,
-            "per_token_rewards": per_token_rewards,
-        }
+        # Cast: the dict literal's inferred value type widens to include
+        # ``Dict[str, np.ndarray]`` (component_rewards), which mypy can't
+        # auto-unify with ``PyTree[np.ndarray]`` even though it's structurally
+        # valid (PyTree[T] = T | list[...] | tuple[...] | dict[str, PyTree[T]]).
+        return type_cast(
+            PyTree[np.ndarray],
+            {
+                "x": x,
+                "y": y_safe,
+                "padding_mask": padding_mask.astype(np.int32),
+                "action_mask": action_mask.astype(np.int32),
+                "old_log_probs": old_log_probs,
+                "per_token_rewards": per_token_rewards,
+                "component_rewards": component_rewards,
+            },
+        )
 
     # -- forward / loss --------------------------------------------------------
 
@@ -461,6 +518,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         action_mask = batch_dict["action_mask"].astype(jnp.bool_)
         old_log_probs = batch_dict["old_log_probs"]
         per_token_rewards = batch_dict["per_token_rewards"]
+        component_rewards = type_cast(
+            Dict[str, jax.Array], batch_dict.get("component_rewards", {})
+        )
 
         dropout_key = None
         if not deterministic and key is not None:
@@ -535,6 +595,12 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             / n_actions,
             "ppo/n_actions": n_actions,
         }
+        # Per-component raw reward means — uses the same masked-mean denominator
+        # as ppo/reward_mean so the two are directly comparable.
+        for name, ctr in component_rewards.items():
+            metrics[f"ppo/component/{name}/reward_mean"] = (
+                ctr * action_mask_f
+            ).sum() / n_actions
 
         return policy_logits, loss, metrics
 

@@ -69,8 +69,7 @@ class HighNumberGRPO(GRPOTrainer[Llama]):
 
     MODEL = Llama
 
-    @classmethod
-    def reward(cls, evals: Dict[str, np.ndarray]) -> np.ndarray:
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         return np.asarray(evals["high_number"], dtype=np.float32)
 
 
