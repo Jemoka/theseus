@@ -69,7 +69,7 @@ def mok_reward(
 
     # compute effective epsilon
     progress = min(self.global_step_counter_ / max(self.total_batches, 1), 1.0)
-    eps = config.eps_min + (config.eps_max - config.eps_min) * progress
+    eps = config.eps_max - (config.eps_max - config.eps_min) * progress
 
     # compute r_w and w_hat
     r_w = np.array(list(evals.values())) * weights[:, None]
