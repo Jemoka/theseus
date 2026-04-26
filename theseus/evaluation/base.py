@@ -38,10 +38,21 @@ from theseus.data.datasets.dataset import ChatTemplate
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
 
-# Fixed seed used to subsample evaluations when ``EvaluatorConfig.length`` (or
-# ``RLEvaluatorConfig.batch_size``) caps a dataset below its native size. One
-# seed for the whole evaluator so subsets stay stable across processes and runs.
-_EVAL_SUBSET_SEED = 0xE1A1
+
+def _select_indices(inference: Any, n: int) -> list[int]:
+    """Pick which examples to evaluate from an n-sample dataset.
+
+    Reads ``inference.length`` (set by ``Evaluator``); when 0 < length < n,
+    samples that many indices via the evaluator's per-call-deterministic
+    ``random.Random``. Otherwise returns ``range(n)``. Every host computes
+    the same indices because every Evaluator's RNG is seeded identically.
+    """
+    length = getattr(inference, "length", -1)
+    rng = getattr(inference, "random", None)
+    if rng is None or length <= 0 or length >= n:
+        return list(range(n))
+    sampled: list[int] = rng.sample(range(n), length)
+    return sampled
 
 
 def _pad_eval_inputs(
@@ -70,10 +81,6 @@ def _pad_eval_inputs(
 class Evaluation(ABC):
     """Abstract base class for all evaluations."""
 
-    # When set by the Evaluator, restricts the run to this fixed list of
-    # underlying-dataset indices. ``None`` means use every sample.
-    _indices: Optional[List[int]] = None
-
     @property
     @abstractmethod
     def name(self) -> str:
@@ -88,12 +95,6 @@ class Evaluation(ABC):
     def __len__(self) -> int:
         """Number of samples in this evaluation."""
         ...
-
-    def _effective_indices(self) -> List[int]:
-        """Indices into the underlying dataset to evaluate on."""
-        if self._indices is None:
-            return list(range(len(self)))
-        return list(self._indices)
 
     @abstractmethod
     def __call__(
@@ -234,7 +235,7 @@ class RolloutEvaluation(Evaluation):
         """
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = eval_data._effective_indices()
+        indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
         # Gather and encode all data on main process
@@ -465,7 +466,7 @@ class EncodingEvaluation(Evaluation):
         """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = eval_data._effective_indices()
+        indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
         # Gather and encode all data on main process
@@ -647,7 +648,7 @@ class PerplexityEvaluation(Evaluation):
         """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = eval_data._effective_indices()
+        indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
         # Gather and encode all data on main process
@@ -818,11 +819,13 @@ class PerplexityComparisonEvaluation(Evaluation):
         """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
+        indices = _select_indices(inference, len(eval_data))
+        n_samples = len(indices)
 
         # Gather all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            all_data = [eval_data.get(i) for i in eval_data._effective_indices()]
+            all_data = [eval_data.get(i) for i in indices]
 
             # Flatten: create (prefix+continuation, sample_idx, continuation_idx, prefix_len)
             flattened_inputs = []
@@ -1067,11 +1070,7 @@ class PerplexityComparisonEvaluation(Evaluation):
 
             score = eval_data._score(correct_flags, reduce=reduce)
         else:
-            score = (
-                np.zeros(len(eval_data._effective_indices()), dtype=np.float32)
-                if reduce == "none"
-                else 0.0
-            )
+            score = np.zeros(n_samples, dtype=np.float32) if reduce == "none" else 0.0
         score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
         score = np.asarray(score) if reduce == "none" else float(score)
 
@@ -1115,6 +1114,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
     MODEL: type[M] = Module  # type: ignore[assignment]
     evaluations: List[Evaluation]
     encoding: Tokenizer
+    length: int
+    random: random.Random
 
     @classmethod
     def config(cls) -> List[Any]:
@@ -1151,29 +1152,20 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
         evaluator = super().from_trainer(trainer)
         evaluator.encoding = get_tokenizer()
+        evaluator.random = random.Random(0xC0FFEE)
 
         if config is None:
             config = configure(EvaluatorConfig)
+
+        if isinstance(config, RLEvaluatorConfig):
+            evaluator.length = int(config.batch_size)
+        else:
+            evaluator.length = config.length
 
         try:
             evaluator.evaluations = [EVALUATIONS[name]() for name in config.components]
         except KeyError as e:
             raise ValueError(f"Unknown evaluation dataset: {e.args[0]}") from e
-
-        # An RL evaluator sources rollouts for training, so it has to produce
-        # exactly ``batch_size`` examples per evaluation; for vanilla eval the
-        # cap comes from ``eval/length`` (-1 means no cap).
-        if isinstance(config, RLEvaluatorConfig):
-            length = int(config.batch_size)
-        else:
-            length = int(getattr(config, "length", -1))
-
-        if length > 0:
-            rng = random.Random(_EVAL_SUBSET_SEED)
-            for evaluation in evaluator.evaluations:
-                base_size = len(evaluation)
-                if length < base_size:
-                    evaluation._indices = sorted(rng.sample(range(base_size), length))
 
         return evaluator
 
@@ -1197,6 +1189,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         evaluator, cfg = super().from_checkpoint(suffix, spec, runtime_cfg=runtime_cfg)
         with configuration(cfg):
             evaluator.encoding = get_tokenizer()
+            evaluator.length = configure(EvaluatorConfig).length
+        evaluator.random = random.Random(0xC0FFEE)
         return evaluator, cfg
 
     def rollout(
