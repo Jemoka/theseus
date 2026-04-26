@@ -1,6 +1,16 @@
 import numpy as np
 from typing import Any, Dict
-from theseus.experiments.mok.smoke import MokConfig
+from dataclasses import dataclass
+from theseus.config import field
+
+
+@dataclass
+class MokConfig:
+    weighting: list[float] = field(
+        "optimization/mok/weights", default_factory=lambda: [0.5, 0.5]
+    )
+    eps_min: float = field("optimization/mok/eps_min", default=1e-6)
+    eps_max: float = field("optimization/mok/eps_max", default=0.5)
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:

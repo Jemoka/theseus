@@ -4,13 +4,12 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import optax
 from datasets import load_dataset
-from dataclass import dataclass
 
 from theseus.model.models import GPT
-from theseus.config import field, configure
+from theseus.config import configure
 from theseus.training.base import BaseTrainerConfig
 from theseus.training.grpo import BackbonedGRPOTrainer, GRPOTrainer
-from theseus.experiments.mok.reward import mok_reward
+from theseus.experiments.mok.reward import mok_reward, MokConfig
 from theseus.registry import job, evaluation
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
@@ -169,15 +168,6 @@ class ArithmeticGoldenGateEval(RolloutEvaluation):
             return int(y) == int(y_hat)
         except (ValueError, TypeError):
             return y.strip() == y_hat.strip()
-
-
-@dataclass
-class MokConfig:
-    weighting: list[float] = field(
-        "optimization/mok/weights", default_factory=lambda: [0.5, 0.5]
-    )
-    eps_min: float = field("optimization/mok/eps_min", default=1e-6)
-    eps_max: float = field("optimization/mok/eps_max", default=0.5)
 
 
 @job("qwen/rl/grpo")
