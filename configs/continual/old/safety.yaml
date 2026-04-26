@@ -25,7 +25,7 @@ eval:
   evaluations:
   - mmlu
   - squad
-  - pile
+  - pile_ppl
 tokenizer:
   backend: tiktoken
   name: cl100k_base

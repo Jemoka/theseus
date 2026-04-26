@@ -42,11 +42,11 @@ training:
     curve: linear
 eval:
   evaluations:
-  - pg19_2k
-  - pg19_4k
-  - pg19_8k
-  - pg19_16k
-  - pg19_32k
+  - pg19_2k_ppl
+  - pg19_4k_ppl
+  - pg19_8k_ppl
+  - pg19_16k_ppl
+  - pg19_32k_ppl
   - fineweb_ppl
 logging:
   report_interval: 32

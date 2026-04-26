@@ -359,6 +359,7 @@ def dispatch(
             mount_point=cluster.root,
             cache_size=cluster_config.cache_size,
             cache_dir=cluster_config.cache_dir,
+            all_squash=cluster_config.all_squash,
         )
         logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
 
@@ -1437,6 +1438,7 @@ def dispatch_repl(
             mount_point=cluster.root,
             cache_size=cluster_config.cache_size,
             cache_dir=cluster_config.cache_dir,
+            all_squash=cluster_config.all_squash,
         )
 
     uv_cache_dir = cluster_config.uv_dir

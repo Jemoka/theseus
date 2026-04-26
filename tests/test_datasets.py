@@ -59,7 +59,7 @@ class TestPileInjectedEval:
         from theseus.evaluation.datasets.pile_injected import PileInjectedEval
 
         ev = PileInjectedEval()
-        assert ev.name == "pile_injected"
+        assert ev.name == "pile_injected_ppl"
 
 
 class TestPG19LengthGen:
@@ -68,5 +68,11 @@ class TestPG19LengthGen:
     def test_eval_names_registered(self):
         from theseus.registry import EVALUATIONS
 
-        for name in ["pg19_2k", "pg19_4k", "pg19_8k", "pg19_16k", "pg19_32k"]:
+        for name in [
+            "pg19_2k_ppl",
+            "pg19_4k_ppl",
+            "pg19_8k_ppl",
+            "pg19_16k_ppl",
+            "pg19_32k_ppl",
+        ]:
             assert name in EVALUATIONS, f"{name} not registered"

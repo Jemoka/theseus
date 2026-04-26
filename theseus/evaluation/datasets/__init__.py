@@ -2,6 +2,8 @@
 # See theseus.registry for the authoritative EVALUATIONS dict.
 #
 # Import all evaluation modules to trigger decorator registration.
+from .alpaca import AlpacaEval  # noqa: F401
+from .arithmetic import ArithmeticEval  # noqa: F401
 from .bbq import BBQEval  # noqa: F401
 from .blimp import Blimp  # noqa: F401
 from .ccaligned import CCALIGNED_EVALS  # noqa: F401

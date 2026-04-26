@@ -21,7 +21,7 @@ with quick(
     j.config.training.tokens = 8192
     j.config.training.validation = False
     j.config.training.evaluate = True
-    j.config.eval.evaluations = ["tinystories"]
+    j.config.eval.evaluations = ["tinystories_ppl"]
 
     j.config.logging.wandb = False
     j.config.logging.checkpoint_interval = 100000
@@ -34,7 +34,7 @@ with quick(
     print("Running TinyStories evaluation on randomly initialized model...")
     results = trainer.inference.evaluate()
 
-    ppl = results["tinystories"]
+    ppl = results["tinystories_ppl"]
     print(f"\nTinyStories ppl : {ppl:.2f}")
 
     # A random model should have high perplexity

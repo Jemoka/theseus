@@ -230,35 +230,38 @@ class Plotter:
                     break
                 continue
 
-            if self.stop_flag:
-                break
-
             try:
                 plot_fn, step = item
                 figures: Dict[str, Any] = plot_fn()
+            except Exception as e:
+                self.error = e
+                continue
 
-                for name, fig in figures.items():
-                    wandb.log({name: wandb.Image(fig)}, step=step)
-                    if self.save and self.save_dir:
+            # Save to disk and log to wandb independently so a failure in
+            # one path (e.g. a flaky wandb.log) doesn't skip the other.
+            for name, fig in figures.items():
+                if self.save and self.save_dir:
+                    try:
                         safe_name = re.sub(r"[^\w\-.]", "_", name)
                         fig.savefig(
                             self.save_dir / f"{safe_name}_step{step}.pdf",
                             bbox_inches="tight",
                             pad_inches=0.05,
                         )
-                    plt.close(fig)
-            except Exception as e:
-                self.error = e
+                    except Exception as e:
+                        self.error = e
+                try:
+                    wandb.log({name: wandb.Image(fig)}, step=step)
+                except Exception as e:
+                    self.error = e
+                plt.close(fig)
 
     def close(self) -> None:
+        # Let the worker process any already-queued items before exiting
+        # instead of discarding them — shutting down mid-flight used to
+        # drop the final boundary plots.
         self.stop_flag = True
-        # drain queue
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-            except Empty:
-                break
-        self.thread.join(timeout=1.0)
+        self.thread.join(timeout=30.0)
 
     def __del__(self) -> None:
         self.close()

@@ -41,9 +41,9 @@ training:
 eval:
   evaluations:
   - fineweb_ppl
-  - pes2o
-  - pile
-  - tinystories
+  - pes2o_ppl
+  - pile_ppl
+  - tinystories_ppl
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

@@ -39,7 +39,7 @@ training:
 eval:
   evaluations:
   - longhealth
-  - pile
+  - pile_ppl
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

@@ -18,6 +18,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Tuple, List, Optional, Union, Generic, TYPE_CHECKING
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from jax.experimental import multihost_utils
@@ -79,10 +81,39 @@ class Evaluation(ABC):
 
     @abstractmethod
     def __call__(
-        self, inference: "InferenceJob[Any, M]", encoding: Any, **kwargs: Any
-    ) -> float:
-        """Run the evaluation and return a score."""
+        self,
+        inference: "InferenceJob[Any, M]",
+        encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the evaluation and return a score (and optionally intermediates).
+
+        When ``return_intermediates=True``, also returns a list of
+        ``(x, padding_mask)`` numpy arrays — one per sample — available on every
+        host so that an RL trainer can use them as a training batch.
+        """
         ...
+
+    def _score(self, *args: Any, reduce: str = "mean") -> Any:
+        """Reduce per-sample scores from ``self.score(...)`` into a final value.
+
+        ``reduce="mean"`` and ``"sum"`` return a Python float;
+        ``reduce="none"`` returns the per-sample np.ndarray.
+        """
+        per_sample = np.asarray(list(self.score(*args)), dtype=np.float32)
+        if reduce == "mean":
+            return float(per_sample.mean()) if per_sample.size > 0 else 0.0
+        if reduce == "sum":
+            return float(per_sample.sum())
+        if reduce == "none":
+            return per_sample
+        raise ValueError(f"unknown reduce mode: {reduce!r}")
+
+    def score(self, *args: Any) -> List[float]:
+        """Return one float per evaluation sample. Subclasses override."""
+        raise NotImplementedError("Override score() to return one float per sample.")
 
     @staticmethod
     def find_accumulation_steps(
@@ -113,18 +144,9 @@ class Evaluation(ABC):
 class RolloutEvaluation(Evaluation):
     """Evaluation using autoregressive generation."""
 
-    def score(self, ys: list[str], y_hats: list[str]) -> float:
-        """Compute score from generated results.
-
-        Args:
-            ys: Ground truth strings
-            y_hats: Generated results
-
-        Returns:
-            Score (higher is better)
-        """
-        results = [self.check(y, y_hat) for y, y_hat in zip(ys, y_hats)]
-        return sum(results) / len(results)
+    def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
+        """Per-sample scores. Default: cast each ``check()`` to float."""
+        return [float(self.check(y, y_hat)) for y, y_hat in zip(ys, y_hats)]
 
     def check(self, y: str, y_hat: str) -> bool:
         """Check if y_hat matches y.
@@ -172,22 +194,27 @@ class RolloutEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
+    ) -> Any:
         """Run evaluation.
 
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
+            reduce: how to reduce per-sample scores ("mean" | "sum" | "none")
+            return_intermediates: also return per-sample (rollout, mask) numpy
+                arrays on every host (for RL consumers).
             temperature: Sampling temperature (0.0 for greedy)
             top_p: Nucleus sampling threshold
             chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
-            Evaluation score
+            Evaluation score, or (score, intermediates) when return_intermediates.
         """
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
@@ -211,6 +238,9 @@ class RolloutEvaluation(Evaluation):
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        # Keep a global view of the prompt mask for intermediates (every host).
+        masks_full = masks
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -322,30 +352,60 @@ class RolloutEvaluation(Evaluation):
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
             assert original_y is not None
-            score = eval_data.score(
-                original_y, [eval_data.clean(i) for i in decoded_results]
+            score = eval_data._score(
+                original_y,
+                [eval_data.clean(i) for i in decoded_results],
+                reduce=reduce,
             )
         else:
-            score = None
-        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
-        return float(score)
+            score = (
+                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
+            )
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
+
+        if not return_intermediates:
+            return score
+
+        # Per-sample (x, action_mask, padding_mask) on every host. The eval
+        # already knows where the prompt ended and where generation began, so
+        # it returns both masks rather than making the consumer re-derive.
+        #   action_mask : True only over generated tokens (where to tune).
+        #   padding_mask: True over prompt + generated (the standard attention
+        #                 mask the model expects).
+        T_in_max = int(masks_full.shape[-1])
+        T_total = int(results.shape[-1])
+        gen_len = max(T_total - T_in_max, 0)
+        action_mask = jnp.concatenate(
+            [
+                jnp.zeros_like(masks_full, dtype=jnp.bool_),
+                jnp.ones((masks_full.shape[0], gen_len), dtype=jnp.bool_),
+            ],
+            axis=-1,
+        )
+        padding_mask = jnp.concatenate(
+            [
+                masks_full.astype(jnp.bool_),
+                jnp.ones((masks_full.shape[0], gen_len), dtype=jnp.bool_),
+            ],
+            axis=-1,
+        )
+        results_np = np.asarray(results)
+        action_mask_np = np.asarray(action_mask)
+        padding_mask_np = np.asarray(padding_mask)
+        intermediates = [
+            (results_np[i], action_mask_np[i], padding_mask_np[i])
+            for i in range(original_size)
+        ]
+        return score, intermediates
 
 
 class EncodingEvaluation(Evaluation):
     """Evaluation using next-token prediction accuracy."""
 
-    def score(self, xs: list[str], y_hats: list[str]) -> float:
-        """Compute score from input and model predictions.
-
-        Args:
-            xs: Input strings
-            y_hats: Model predictions (argmax of logits, shifted by 1)
-
-        Returns:
-            Score (higher is better)
-        """
-        results = [self.check(x, y_hat) for x, y_hat in zip(xs, y_hats)]
-        return sum(results) / len(results)
+    def score(self, xs: list[str], y_hats: list[str]) -> List[float]:
+        """Per-sample scores. Default: cast each ``check()`` to float."""
+        return [float(self.check(x, y_hat)) for x, y_hat in zip(xs, y_hats)]
 
     def check(self, x: str, y_hat: str) -> bool:
         """Check if prediction is correct given input.
@@ -380,19 +440,12 @@ class EncodingEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode_batch/decode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            Evaluation score
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
         original_size = len(eval_data)
@@ -411,6 +464,10 @@ class EncodingEvaluation(Evaluation):
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        # Keep a global view for intermediates.
+        xs_full = xs
+        masks_full = masks
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -501,13 +558,28 @@ class EncodingEvaluation(Evaluation):
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
             assert original_x is not None
-            score = eval_data.score(
-                original_x, [eval_data.clean(i) for i in decoded_outputs]
+            score = eval_data._score(
+                original_x,
+                [eval_data.clean(i) for i in decoded_outputs],
+                reduce=reduce,
             )
         else:
-            score = None
-        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
-        return float(score)
+            score = (
+                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
+            )
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
+
+        if not return_intermediates:
+            return score
+
+        # No "action" notion for encoding evals — every real token is fair game.
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [
+            (xs_np[i], masks_np[i], masks_np[i]) for i in range(original_size)
+        ]
+        return score, intermediates
 
 
 class PerplexityEvaluation(Evaluation):
@@ -522,23 +594,39 @@ class PerplexityEvaluation(Evaluation):
         """Get input string at index."""
         ...
 
+    def score(
+        self, per_sample_nll: np.ndarray, per_sample_count: np.ndarray
+    ) -> List[float]:
+        """Per-sample perplexity (= exp(nll / max(count, 1))."""
+        nll = np.asarray(per_sample_nll, dtype=np.float64)
+        count = np.maximum(np.asarray(per_sample_count, dtype=np.float64), 1.0)
+        return list(np.exp(nll / count).astype(np.float32))
+
+    def _score(  # type: ignore[override]
+        self,
+        per_sample_nll: np.ndarray,
+        per_sample_count: np.ndarray,
+        reduce: str = "mean",
+    ) -> Any:
+        """Token-weighted aggregate ppl for mean/sum; per-sample ppl for none."""
+        if reduce == "none":
+            return np.asarray(
+                self.score(per_sample_nll, per_sample_count), dtype=np.float32
+            )
+        nll = float(np.asarray(per_sample_nll, dtype=np.float64).sum())
+        count = float(np.asarray(per_sample_count, dtype=np.float64).sum())
+        return float(np.exp(nll / max(count, 1.0)))
+
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            perplexity (lower is better)
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
         original_size = len(eval_data)
@@ -556,6 +644,9 @@ class PerplexityEvaluation(Evaluation):
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        xs_full = xs
+        masks_full = masks
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -660,14 +751,24 @@ class PerplexityEvaluation(Evaluation):
         # Flatten process dimension and drop repeated pad examples.
         stats = jnp.reshape(stats, (-1, 2))
         stats = stats[:original_size]
+        stats_np = np.asarray(stats)
+        per_sample_nll = stats_np[:, 0]
+        per_sample_count = stats_np[:, 1]
 
-        # Compute global perplexity (lower is better)
-        total_nll = jnp.sum(stats[:, 0])
-        total_count = jnp.sum(stats[:, 1])
-        mean_nll = total_nll / jnp.maximum(total_count, 1.0)
-        ppl = jnp.exp(mean_nll)
-        score = multihost_utils.broadcast_one_to_all(ppl)
-        return float(score)
+        # _score is deterministic from broadcast inputs; identical on every host.
+        score = eval_data._score(per_sample_nll, per_sample_count, reduce=reduce)
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
+
+        if not return_intermediates:
+            return score
+
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [
+            (xs_np[i], masks_np[i], masks_np[i]) for i in range(original_size)
+        ]
+        return score, intermediates
 
 
 class PerplexityComparisonEvaluation(Evaluation):
@@ -682,23 +783,20 @@ class PerplexityComparisonEvaluation(Evaluation):
         """
         ...
 
+    def score(self, correct_flags: List[float]) -> List[float]:
+        """Per-sample correctness (1.0 / 0.0)."""
+        return [float(c) for c in correct_flags]
+
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode/encode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            Accuracy score
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
 
@@ -765,6 +863,9 @@ class PerplexityComparisonEvaluation(Evaluation):
             original_flat_size_array
         )
         multihost_utils.sync_global_devices("eval_gather_all:post")
+
+        xs_full = xs
+        masks_full = masks
 
         # Divide across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -930,10 +1031,8 @@ class PerplexityComparisonEvaluation(Evaluation):
                 sample_losses[sample_idx].append(losses[i])
                 sample_num_continuations[sample_idx] = int(num_conts)
 
-            # Evaluate complete samples only
-            correct = 0
-            total = 0
-
+            # Per-sample correctness
+            correct_flags: List[float] = []
             for sample_idx in sorted(sample_losses.keys()):
                 expected_conts = sample_num_continuations[sample_idx]
                 actual_conts = len(sample_losses[sample_idx])
@@ -945,22 +1044,38 @@ class PerplexityComparisonEvaluation(Evaluation):
                 pred = int(jnp.argmin(losses_for_sample))
                 correct_idx = int(correct_indices_array[sample_idx])
 
-                correct += int(pred == correct_idx)
-                total += 1
+                correct_flags.append(1.0 if pred == correct_idx else 0.0)
 
-            accuracy = correct / total if total > 0 else 0.0
+            score = eval_data._score(correct_flags, reduce=reduce)
         else:
-            accuracy = None
+            score = (
+                np.zeros(len(eval_data), dtype=np.float32) if reduce == "none" else 0.0
+            )
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
 
-        accuracy = multihost_utils.broadcast_one_to_all(jnp.array(accuracy))
-        return float(accuracy)
+        if not return_intermediates:
+            return score
+
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [(xs_np[i], masks_np[i]) for i in range(original_flat_size)]
+        return score, intermediates
 
 
 @dataclass
 class EvaluatorConfig:
     """Configuration for Evaluator."""
 
-    evaluations: List[str] = field("eval/evaluations")
+    components: List[str] = field("eval/evaluations")
+
+
+@dataclass
+class RLConfig:
+    """Configuration for RL trainers — list of evaluation components used as
+    rollout sources for on-policy learning."""
+
+    components: List[str] = field("training/rl/components", default_factory=list)
 
 
 class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
@@ -992,11 +1107,19 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         return self._get_results_path().exists()
 
     @classmethod
-    def from_trainer(cls, trainer: "BaseTrainer[Any, Any]") -> "Evaluator[M]":
+    def from_trainer(
+        cls,
+        trainer: "BaseTrainer[Any, Any]",
+        config: Optional[Any] = None,
+    ) -> "Evaluator[M]":
         """Create Evaluator from trainer.
 
         Args:
             trainer: BaseTrainer instance to get inference state from
+            config: Optional config object whose ``.components`` field names
+                the evaluations to run. If None, hydrates ``EvaluatorConfig``
+                from the global config. Pass an ``RLConfig`` to build a
+                separate evaluator for RL rollouts.
 
         Returns:
             Evaluator instance ready to run evaluations
@@ -1006,9 +1129,11 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         evaluator = super().from_trainer(trainer)
         evaluator.encoding = get_tokenizer()
 
-        cfg = configure(EvaluatorConfig)
+        if config is None:
+            config = configure(EvaluatorConfig)
+
         try:
-            evaluator.evaluations = [EVALUATIONS[name]() for name in cfg.evaluations]
+            evaluator.evaluations = [EVALUATIONS[name]() for name in config.components]
         except KeyError as e:
             raise ValueError(f"Unknown evaluation dataset: {e.args[0]}") from e
 
@@ -1054,15 +1179,49 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
             chunk_size=chunk_size,
         )
 
-    def evaluate(self) -> dict[str, float]:
-        results: dict[str, float] = {}
+    def evaluate(
+        self,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run all evaluations.
+
+        Args:
+            reduce: passed through to each evaluation. "mean"/"sum" → float per
+                evaluation; "none" → np.ndarray of per-sample scores.
+            return_intermediates: when True, also return the per-evaluation list
+                of (x, mask) rollouts (one inner list per evaluation).
+            **kwargs: forwarded to each evaluation's __call__ (e.g. temperature,
+                top_p, chunk_size).
+        """
+        results: dict[str, Any] = {}
+        all_intermediates: List[List[Tuple[np.ndarray, np.ndarray]]] = []
 
         for evaluation in self.evaluations:
             logger.info("EVAL | Running {}", evaluation.name)
-            score = evaluation(self, self.encoding)
+            if return_intermediates:
+                score, intermediates = evaluation(
+                    self,
+                    self.encoding,
+                    reduce=reduce,
+                    return_intermediates=True,
+                    **kwargs,
+                )
+                all_intermediates.append(intermediates)
+            else:
+                score = evaluation(
+                    self,
+                    self.encoding,
+                    reduce=reduce,
+                    return_intermediates=False,
+                    **kwargs,
+                )
             results[evaluation.name] = score
-            logger.info("EVAL | {} = {:.4f}", evaluation.name, score)
+            logger.info("EVAL | {} done", evaluation.name)
 
+        if return_intermediates:
+            return results, all_intermediates
         return results
 
     def run(self) -> None:

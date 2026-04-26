@@ -11,7 +11,7 @@ from theseus.evaluation import PerplexityEvaluation
 from theseus.registry import evaluation
 
 
-@evaluation("pile")
+@evaluation("pile_ppl")
 class PileEval(PerplexityEvaluation):
     """Perplexity evaluation on the Pile (EleutherAI)."""
 
@@ -35,7 +35,7 @@ class PileEval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return "pile"
+        return "pile_ppl"
 
     def __len__(self) -> int:
         return len(self.items)

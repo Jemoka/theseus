@@ -62,9 +62,9 @@ training:
     curve: linear
 eval:
   evaluations:
-  - ccaligned_fr
-  - ccaligned_de
-  - ccaligned_zh
+  - ccaligned_fr_ppl
+  - ccaligned_de_ppl
+  - ccaligned_zh_ppl
 logging:
   report_interval: 32
   checkpoint_interval: 1000000000

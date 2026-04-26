@@ -48,11 +48,11 @@ def _make_pg19_lengthgen_class(
 # Approximate chars per token ~ 4 for cl100k_base on English prose, so target token counts map to:
 # 2k tokens -> ~8k chars, 4k -> ~16k, 8k -> ~32k, 16k -> ~64k, 32k -> ~128k
 _EVAL_SPECS = [
-    ("pg19_2k", 8_000),
-    ("pg19_4k", 16_000),
-    ("pg19_8k", 32_000),
-    ("pg19_16k", 64_000),
-    ("pg19_32k", 128_000),
+    ("pg19_2k_ppl", 8_000),
+    ("pg19_4k_ppl", 16_000),
+    ("pg19_8k_ppl", 32_000),
+    ("pg19_16k_ppl", 64_000),
+    ("pg19_32k_ppl", 128_000),
 ]
 
 # Register each evaluation
