@@ -1,5 +1,5 @@
 import re
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List, Type
 
 import numpy as np
 import optax
@@ -184,6 +184,12 @@ class GRPOMultiObjectiveQwen(BackbonedGRPOTrainer):
 class MoKQwen(BackbonedGRPOTrainer):
     """Backboned GRPO trainer for Qwen with the MoK multi-objective formulation."""
 
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        # super() resolves to BackbonedPPOTrainer, which gives the HF-style
+        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        return super()._config() + [MokConfig]
+
     def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         return mok_reward(self, evals, configure(MokConfig))
 
@@ -211,6 +217,12 @@ class MoKGPT(GRPOTrainer[GPT]):
 
     MODEL = GPT
     CONFIG = BaseTrainerConfig
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        # super() resolves to BackbonedPPOTrainer, which gives the HF-style
+        # config + PPOConfig + RLConfig. Add GRPOConfig on top.
+        return super()._config() + [MokConfig]
 
     @classmethod
     def schedule(cls) -> optax._src.base.Schedule:
