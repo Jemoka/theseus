@@ -1,16 +1,10 @@
 import json
 import tempfile
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Tuple
 
-from theseus.data.datasets import ChatTemplate, ChatTurn
-from theseus.evaluation.base import RolloutEvaluation
+from theseus.evaluation import PerplexityComparisonEvaluation
 from theseus.registry import evaluation
-from theseus.data.tokenizer import (
-    decode_chat_template,
-    encode_chat_template,
-    get_tokenizer,
-)
 
 
 _BENCHMARK_URL = (
@@ -47,30 +41,13 @@ def _build_context(patient: dict[str, object]) -> str:
     return "\n\n".join(parts)
 
 
-def template(context: str, question: str, choices: dict[str, str]) -> ChatTemplate:
-    choices_text = "\n".join(f"{k}: {v}" for k, v in sorted(choices.items()))
-    return [
-        ChatTurn(
-            role="user",
-            message=(
-                "Read the following clinical document and answer the "
-                "question by selecting A, B, C, D, or E.\n\n"
-                f"Document:\n{context}\n\n"
-                f"Question: {question}\n\n"
-                f"{choices_text}\n\n"
-                "Answer with only the letter (A, B, C, D, or E):"
-            ),
-        ),
-    ]
-
-
 @evaluation("longhealth")
-class LongHealthEval(RolloutEvaluation):
-    """LongHealth long-context clinical QA evaluation."""
+class LongHealthEval(PerplexityComparisonEvaluation):
+    """LongHealth long-context clinical QA via per-choice perplexity comparison."""
 
     def __init__(self) -> None:
         data = _load_benchmark()
-        self.items: list[tuple[str, str, dict[str, str], str]] = []
+        self.items: list[tuple[str, str, list[str], int]] = []
         for patient in data:
             context = _build_context(patient)
             questions = patient.get("questions", [])
@@ -79,52 +56,34 @@ class LongHealthEval(RolloutEvaluation):
             for q in questions:
                 if not isinstance(q, dict):
                     continue
-                choices = {
-                    "A": str(q.get("answer_a", "")),
-                    "B": str(q.get("answer_b", "")),
-                    "C": str(q.get("answer_c", "")),
-                    "D": str(q.get("answer_d", "")),
-                    "E": str(q.get("answer_e", "")),
-                }
+                continuations = [
+                    str(q.get("answer_a", "")),
+                    str(q.get("answer_b", "")),
+                    str(q.get("answer_c", "")),
+                    str(q.get("answer_d", "")),
+                    str(q.get("answer_e", "")),
+                ]
+                correct = str(q.get("correct", "")).strip().upper()
+                if not correct:
+                    continue
+                correct_idx = ord(correct) - ord("A")
                 self.items.append(
                     (
                         context,
                         str(q.get("question", "")),
-                        choices,
-                        str(q.get("correct", "")),
+                        continuations,
+                        correct_idx,
                     )
                 )
-        self.encoder = get_tokenizer()
 
     @property
     def name(self) -> str:
         return "longhealth"
 
-    def max_new_tokens(self, inference: Any) -> int:
-        return 10
-
-    def get(self, indx: int) -> Tuple[str, str]:
-        context, question, choices, answer = self.items[indx]
-        prompt = encode_chat_template(
-            template(context, question, choices),
-            self.encoder,
-            prompt=True,
-            tokenize=False,
-        )
-        return prompt, answer
+    def get(self, indx: int) -> Tuple[str, list[str], int]:
+        context, question, continuations, correct_idx = self.items[indx]
+        prefix = f"Document:\n{context}\n\nQuestion: {question}\n\nAnswer: "
+        return prefix, continuations, correct_idx
 
     def __len__(self) -> int:
         return len(self.items)
-
-    def clean(self, y_hat: str) -> str:
-        chats: ChatTemplate = decode_chat_template(y_hat)
-        assistant_msgs = []
-        for i in chats:
-            if i.role == "assistant":
-                assistant_msgs.append(i.message.strip())
-        if not assistant_msgs:
-            return ""
-        return assistant_msgs[0].strip().upper()
-
-    def check(self, y: str, y_hat: str) -> bool:
-        return y.strip().upper() == y_hat.strip().upper()
