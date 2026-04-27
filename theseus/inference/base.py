@@ -21,6 +21,7 @@ from typing_extensions import Self
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random as jax_random
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.experimental import multihost_utils
@@ -542,13 +543,13 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 return None, results
 
             _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            return jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+            return rollouts
 
         data_sharding = NamedSharding(self.mesh, data_pspec)
         jitted_chunk = jax.jit(
             evaluate_chunk,
             in_shardings=(self.state_sharding, data_sharding, data_sharding, None),
-            out_shardings=None,
+            out_shardings=data_sharding,
         )
 
         num_batches = xs.shape[0]
@@ -582,13 +583,14 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         results = jnp.concatenate(all_results, axis=0)
 
         # Gather across hosts
-        multihost_utils.sync_global_devices("rollout:pre_gather")
-        results = multihost_utils.process_allgather(results)
-        multihost_utils.sync_global_devices("rollout:post_gather")
+        if jax.process_count() > 1:
+            multihost_utils.sync_global_devices("rollout:pre_gather")
+            results = multihost_utils.process_allgather(results)
+            multihost_utils.sync_global_devices("rollout:post_gather")
 
-        # Flatten and strip left-pad tokens before decoding
-        results = jnp.reshape(results, (-1, results.shape[-1]))
-        results_list = results.tolist()
+        # Flatten on host to avoid cross-device reshapes over the sharded batch
+        # axis in multi-GPU data-parallel rollout.
+        results_list = np.asarray(results).reshape(-1, results.shape[-1]).tolist()
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None

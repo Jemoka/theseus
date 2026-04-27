@@ -219,9 +219,8 @@ class RolloutEvaluation(Evaluation):
             return None, results
 
         _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-        out = jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
-        logger.debug("EVAL | {} | trace chunk out={}", self.name, out.shape)
-        return out
+        logger.debug("EVAL | {} | trace chunk out={}", self.name, rollouts.shape)
+        return rollouts
 
     def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
         """Per-sample scores. Default: cast each ``check()`` to float."""
@@ -439,7 +438,7 @@ class RolloutEvaluation(Evaluation):
                     data_sharding,
                     None,
                 ),
-                out_shardings=None,
+                out_shardings=data_sharding,
             )
 
         # Process in chunks with progress logging
@@ -505,13 +504,16 @@ class RolloutEvaluation(Evaluation):
         results = jnp.concatenate(all_results, axis=0)
 
         # Collect across hosts
-        multihost_utils.sync_global_devices("eval_gather_all:pre")
-        results = multihost_utils.process_allgather(results)
-        multihost_utils.sync_global_devices("eval_gather_all:post")
+        if jax.process_count() > 1:
+            multihost_utils.sync_global_devices("eval_gather_all:pre")
+            results = multihost_utils.process_allgather(results)
+            multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Flatten and strip left-pad tokens before decoding
-        results = jnp.reshape(results, (-1, results.shape[-1]))
-        results_list = results.tolist()
+        # Flatten on host. The device array is sharded over its batch axis, so
+        # flattening microstep and batch inside XLA can force cross-device
+        # rearranges for multi-GPU data-parallel rollout.
+        results_np = np.asarray(results).reshape(-1, results.shape[-1])
+        results_list = results_np.tolist()
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
@@ -549,7 +551,7 @@ class RolloutEvaluation(Evaluation):
         #   padding_mask: True over prompt + generated (the standard attention
         #                 mask the model expects).
         T_in_max = int(masks_full.shape[-1])
-        T_total = int(results.shape[-1])
+        T_total = int(results_np.shape[-1])
         gen_len = max(T_total - T_in_max, 0)
         action_mask = jnp.concatenate(
             [
@@ -565,7 +567,6 @@ class RolloutEvaluation(Evaluation):
             ],
             axis=-1,
         )
-        results_np = np.asarray(results)
         action_mask_np = np.asarray(action_mask)
         padding_mask_np = np.asarray(padding_mask)
         intermediates = [
