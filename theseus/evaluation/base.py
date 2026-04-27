@@ -350,9 +350,13 @@ class RolloutEvaluation(Evaluation):
         if self._chunk_jit is None:
             self._evaluator_ref = inference
             data_sharding = NamedSharding(inference.mesh, data_pspec)
+            # static_argnums (not argnames): pjit forbids kwargs when
+            # in_shardings is set, so the static args must travel
+            # positionally. Indexes 4/5/6 correspond to
+            # (total_tokens, temperature, top_p) on the bound method.
             self._chunk_jit = jax.jit(
                 self._chunk_step,
-                static_argnames=("total_tokens", "temperature", "top_p"),
+                static_argnums=(4, 5, 6),
                 in_shardings=(
                     inference.state_sharding,
                     data_sharding,
@@ -399,9 +403,9 @@ class RolloutEvaluation(Evaluation):
                 xs_chunk,
                 masks_chunk,
                 key,
-                total_tokens=total_tokens,
-                temperature=temperature,
-                top_p=top_p,
+                total_tokens,
+                temperature,
+                top_p,
             )
             all_results.append(chunk_results)
 
