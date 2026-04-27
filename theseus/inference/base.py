@@ -316,10 +316,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         B, T_in = input.shape
         forward_fn = self.forward
         logger.debug(
-            "AUTOREGRESS | trace start B={} T_in={} input={} input_mask={} "
-            "key={} num_tokens={} temperature={} top_p={}",
-            B,
-            T_in,
+            "AUTOREGRESS | trace input={} mask={} key={} num_tokens={} T={} top_p={}",
             input.shape,
             input_mask.shape,
             key.shape,
@@ -351,7 +348,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             cache_max_len=num_tokens,
         )
         logger.debug(
-            "AUTOREGRESS | prefill done logits={} cache_leaves={}",
+            "AUTOREGRESS | prefill out logits={} cache_leaves={}",
             prefill_logits.shape,
             len(jax.tree.leaves(cache)),
         )
@@ -373,7 +370,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             n_gen,
         )
         if n_gen <= 0:
-            logger.debug("AUTOREGRESS | n_gen<=0, skipping decode scan")
+            logger.debug("AUTOREGRESS | n_gen<=0 skip decode")
             return out_buf
 
         # Step 2: Decode loop — one token at a time with cached KV.
@@ -383,12 +380,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
         ) -> Any:
             logger.debug(
-                "AUTOREGRESS | trace _run_scan first_token={} out_buf={} "
-                "key={} cache_leaves={} n_gen={}",
+                "AUTOREGRESS | trace scan first_token={} out_buf={} key={} n_gen={}",
                 first_token.shape,
                 out_buf.shape,
                 key.shape,
-                len(jax.tree.leaves(cache)),
                 n_gen,
             )
 
@@ -424,12 +419,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         first_token = jax.device_put(first_token, replicated)
         out_buf = jax.device_put(out_buf, replicated)
         key = jax.device_put(key, replicated)
-        logger.debug(
-            "AUTOREGRESS | scan jit in_shardings=(state, None, repl, repl, "
-            "repl) first_token.sharding={} out_buf.sharding={}",
-            first_token.sharding,
-            out_buf.sharding,
-        )
+        logger.debug("AUTOREGRESS | scan jit in_shardings=(state,None,repl,repl,repl)")
 
         return jax.jit(  # type: ignore[no-any-return]
             _run_scan,
@@ -498,8 +488,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = self.pad(encoded)
             logger.debug(
-                "ROLLOUT | encoded N={} padded_N={} prompt_lengths range=[{},{}] "
-                "xs={} masks={}",
+                "ROLLOUT | encoded N={} pad={} plen=[{},{}] xs={} masks={}",
                 N,
                 padded_N,
                 min(prompt_lengths),
@@ -514,7 +503,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("rollout:post_broadcast")
         logger.debug(
-            "ROLLOUT | post-broadcast pid={} xs={} masks={}",
+            "ROLLOUT | broadcast pid={} xs={} masks={}",
             jax.process_index(),
             xs.shape,
             masks.shape,
@@ -531,7 +520,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         xs = xs.reshape(-1, local_batch, xs.shape[-1])
         masks = masks.reshape(-1, local_batch, masks.shape[-1])
         logger.debug(
-            "ROLLOUT | reshape pid={} local_batch={} xs={} masks={}",
+            "ROLLOUT | reshape pid={} lb={} xs={} masks={}",
             jax.process_index(),
             local_batch,
             xs.shape,
@@ -544,13 +533,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         masks = multihost_utils.host_local_array_to_global_array(
             masks, self.mesh, data_pspec
         )
-        logger.debug(
-            "ROLLOUT | global xs={} sharding={} masks={} sharding={}",
-            xs.shape,
-            xs.sharding,
-            masks.shape,
-            masks.sharding,
-        )
+        logger.debug("ROLLOUT | global xs={} masks={}", xs.shape, masks.shape)
 
         # PRNG key
         self.key, key = jax.random.split(self.key)
@@ -559,8 +542,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
         total_tokens = min(max_prompt_length + max_new_tokens, self.block_size)
         logger.debug(
-            "ROLLOUT | totals max_prompt_length={} max_new_tokens={} "
-            "total_tokens={} block_size={}",
+            "ROLLOUT | totals plen={} new={} total={} block={}",
             max_prompt_length,
             max_new_tokens,
             total_tokens,
@@ -595,14 +577,14 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         )
 
         num_batches = xs.shape[0]
-        logger.debug("ROLLOUT | num_batches={} chunk_size={}", num_batches, chunk_size)
+        logger.debug("ROLLOUT | batches={} chunk_size={}", num_batches, chunk_size)
         all_results = []
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
             logger.debug(
-                "ROLLOUT | chunk[{}:{}] xs_chunk={} masks_chunk={}",
+                "ROLLOUT | chunk[{}:{}] xs={} masks={}",
                 chunk_start,
                 chunk_end,
                 xs_chunk.shape,
@@ -615,11 +597,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 key,
             )
             logger.debug(
-                "ROLLOUT | chunk[{}:{}] result={} sharding={}",
+                "ROLLOUT | chunk[{}:{}] result={}",
                 chunk_start,
                 chunk_end,
                 chunk_results.shape,
-                chunk_results.sharding,
             )
             all_results.append(chunk_results)
 
