@@ -140,7 +140,7 @@ def main() -> None:
                     f"uv run theseus submit {name}-p1 {first}{rest_part}"
                     f"{env_part} --cluster {CLUSTER} --chip {CHIP} "
                     f"-n {N_CHIPS} --n_shards {N_SHARDS} "
-                    f"--cpu 32 --mem 128G "
+                    f"--cpu 32 --mem 256G "
                     f"-p {PROJECT} -g {group} {EXTRA}"
                 )
                 total += 1

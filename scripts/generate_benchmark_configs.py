@@ -8,9 +8,7 @@ Total: 468 configs.
 
 Logging intervals are derived per config from the shortest dataset phase:
     validation_interval = min_phase_steps // 5
-The in-phase checkpoint interval is effectively disabled (10**9) because
-the trainer already checkpoints at every dataset boundary and once at the
-end of training, which is enough for these benchmark runs.
+    checkpoint_interval = total_steps // 5  (roughly 5 checkpoints per run)
 
 Usage:
     uv run python scripts/generate_benchmark_configs.py
@@ -434,14 +432,14 @@ def build_config(
 
     # Logging intervals derived from the shortest dataset phase so that
     # even sub-1%-token phases (e.g. cg_grammar's kgv tail) get multiple
-    # validations and at least one in-phase checkpoint.  The trainer
-    # already checkpoints at dataset boundaries.
+    # validations and at least one in-phase checkpoint.
     tokens_per_step = batch_size * split_cfg["block_size"]
     phase_steps = [t // tokens_per_step for t in split_cfg["tokens"]]
     min_phase_steps = max(1, min(phase_steps))
+    total_steps = sum(phase_steps)
     logging = {
         "report_interval": 32,
-        "checkpoint_interval": 10**9,
+        "checkpoint_interval": max(1, total_steps // 5),
         "validation_interval": max(1, min_phase_steps // 5),
         "wandb": True,
         "plots": {"save": True},

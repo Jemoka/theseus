@@ -60,7 +60,7 @@ eval:
   - cfq
 logging:
   report_interval: 32
-  checkpoint_interval: 1000000000
+  checkpoint_interval: 7629
   validation_interval: 76
   wandb: true
   plots:

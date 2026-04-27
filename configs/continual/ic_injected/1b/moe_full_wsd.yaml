@@ -50,7 +50,7 @@ eval:
   - pile_ppl
 logging:
   report_interval: 32
-  checkpoint_interval: 1000000000
+  checkpoint_interval: 1907
   validation_interval: 1907
   wandb: true
   plots:

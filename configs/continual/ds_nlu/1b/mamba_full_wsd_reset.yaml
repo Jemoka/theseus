@@ -65,7 +65,7 @@ eval:
   - fineweb_ppl
 logging:
   report_interval: 32
-  checkpoint_interval: 1000000000
+  checkpoint_interval: 3814
   validation_interval: 19
   wandb: true
   plots:
