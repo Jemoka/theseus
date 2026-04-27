@@ -14,7 +14,7 @@
 #   bash scripts/launch_transformer_full_wsd.sh --dry   # print commands only
 #
 
-set -euo pipefail
+#set -euo pipefail
 
 DRY_RUN=false
 if [[ "${1:-}" == "--dry" ]]; then
@@ -39,28 +39,28 @@ run_cmd() {
 # =============================================================
 
 # cg_cfq: compositional generalization (CFQ)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
-    configs/data/cl100k/cfq_sparql_2048.yaml \
-    -s configs/data/cl100k/cfq_text_2048.yaml \
-    -s configs/data/cl100k/cfq_2048.yaml \
-    -s configs/continual/cg_cfq/1b/transformer_full_wsd.yaml \
-    $COMMON -g cg_cfq_1b $EXTRA
+#run_cmd uv run theseus submit transformer_full_wsd-p1 \
+    #configs/data/cl100k/cfq_sparql_2048.yaml \
+    #-s configs/data/cl100k/cfq_text_2048.yaml \
+    #-s configs/data/cl100k/cfq_2048.yaml \
+    #-s configs/continual/cg_cfq/1b/transformer_full_wsd.yaml \
+    #$COMMON -g cg_cfq_1b $EXTRA
 
-# cg_grammar: compositional generalization (grammar)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
-    configs/data/cl100k/mtob_grammar_2048.yaml \
-    -s configs/data/cl100k/mtob_enkgv_2048.yaml \
-    -s configs/continual/cg_grammar/1b/transformer_full_wsd.yaml \
-    $COMMON -g cg_grammar_1b $EXTRA
+## cg_grammar: compositional generalization (grammar)
+#run_cmd uv run theseus submit transformer_full_wsd-p1 \
+    #configs/data/cl100k/mtob_grammar_2048.yaml \
+    #-s configs/data/cl100k/mtob_enkgv_2048.yaml \
+    #-s configs/continual/cg_grammar/1b/transformer_full_wsd.yaml \
+    #$COMMON -g cg_grammar_1b $EXTRA
 
-# cg_safety: safety (harmfulqa + mmlu + squad)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
-    configs/data/cl100k/harmfulqa_red_2048.yaml \
-    -s configs/data/cl100k/mmlu_2048.yaml \
-    -s configs/data/cl100k/harmfulqa_blue_2048.yaml \
-    -s configs/data/cl100k/squad_2048.yaml \
-    -s configs/continual/cg_safety/1b/transformer_full_wsd.yaml \
-    $COMMON -g cg_safety_1b $EXTRA
+## cg_safety: safety (harmfulqa + mmlu + squad)
+#run_cmd uv run theseus submit transformer_full_wsd-p1 \
+    #configs/data/cl100k/harmfulqa_red_2048.yaml \
+    #-s configs/data/cl100k/mmlu_2048.yaml \
+    #-s configs/data/cl100k/harmfulqa_blue_2048.yaml \
+    #-s configs/data/cl100k/squad_2048.yaml \
+    #-s configs/continual/cg_safety/1b/transformer_full_wsd.yaml \
+    #$COMMON -g cg_safety_1b $EXTRA
 
 # ds_domain: domain shift (self-contained config)
 run_cmd uv run theseus submit transformer_full_wsd-p1 \
