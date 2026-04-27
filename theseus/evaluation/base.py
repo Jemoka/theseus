@@ -503,15 +503,17 @@ class RolloutEvaluation(Evaluation):
         # Concatenate all chunk results
         results = jnp.concatenate(all_results, axis=0)
 
+        results = multihost_utils.global_array_to_host_local_array(
+            results, inference.mesh, data_pspec
+        )
+
         # Collect across hosts
         if jax.process_count() > 1:
             multihost_utils.sync_global_devices("eval_gather_all:pre")
-            results = multihost_utils.process_allgather(results)
+            results = multihost_utils.process_allgather(results, tiled=True)
             multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Flatten on host. The device array is sharded over its batch axis, so
-        # flattening microstep and batch inside XLA can force cross-device
-        # rearranges for multi-GPU data-parallel rollout.
+        # Flatten on host after resolving the sharded batch axis.
         results_np = np.asarray(results).reshape(-1, results.shape[-1])
         results_list = results_np.tolist()
 

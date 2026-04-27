@@ -394,25 +394,21 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             self.mesh,
             P(None, Axis.BATCH, None),  # type: ignore[no-untyped-call]
         )
-        log_probs_local_np = np.asarray(log_probs_local).reshape(
-            -1, log_probs_local.shape[-1]
-        )
         if n_hosts > 1:
-            # tiled=True: concatenate along axis 0 (so the result is (B_global, T),
-            # not (n_hosts, B_local, T) — the latter is what the default does).
-            gathered = _mh.process_allgather(
-                jnp.asarray(log_probs_local_np), tiled=True
-            )
+            # tiled=True: concatenate host-local chunks along the leading
+            # microbatch axis; flattening happens after gather on host.
+            gathered = _mh.process_allgather(log_probs_local, tiled=True)
         else:
-            gathered = log_probs_local_np
+            gathered = log_probs_local
+        gathered_np = np.asarray(gathered).reshape(-1, gathered.shape[-1])
         logger.debug(
             "PPO | rollout-time log_probs ready (host {}/{}, B_global={} T={})",
             host_idx,
             n_hosts,
-            gathered.shape[0],
-            gathered.shape[-1],
+            gathered_np.shape[0],
+            gathered_np.shape[-1],
         )
-        return np.asarray(gathered)
+        return gathered_np
 
     # -- batch -----------------------------------------------------------------
 

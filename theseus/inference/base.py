@@ -582,14 +582,17 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         results = jnp.concatenate(all_results, axis=0)
 
+        results = multihost_utils.global_array_to_host_local_array(
+            results, self.mesh, data_pspec
+        )
+
         # Gather across hosts
         if jax.process_count() > 1:
             multihost_utils.sync_global_devices("rollout:pre_gather")
-            results = multihost_utils.process_allgather(results)
+            results = multihost_utils.process_allgather(results, tiled=True)
             multihost_utils.sync_global_devices("rollout:post_gather")
 
-        # Flatten on host to avoid cross-device reshapes over the sharded batch
-        # axis in multi-GPU data-parallel rollout.
+        # Flatten on host after resolving the sharded batch axis.
         results_list = np.asarray(results).reshape(-1, results.shape[-1]).tolist()
 
         if jax.process_index() == 0:
