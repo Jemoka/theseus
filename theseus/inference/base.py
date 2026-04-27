@@ -15,6 +15,7 @@ from typing import (
     List,
     Union,
     TYPE_CHECKING,
+    cast,
 )
 from typing_extensions import Self
 
@@ -308,7 +309,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 return jnp.argmax(logits, axis=-1).astype(jnp.int32), key
             key, subkey = jax_random.split(key)
             scaled = logits / temperature
-            if top_p is not None:
+            if top_p is not None and top_p < 1.0:
                 scaled = top_p_filter_logits(scaled, float(top_p))
             tok = jax.random.categorical(subkey, scaled, axis=-1).astype(jnp.int32)
             return tok, key
@@ -325,21 +326,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             top_p,
         )
 
-        # Jit forward so XLA/GSPMD distributes sharded params across devices
-        # rather than all-gathering them onto a single device (which OOMs for
-        # large vocab/embedding matrices). cache_max_len is static — it
-        # determines KV-cache shape allocation inside attention.
-        prefill_fn = jax.jit(
-            forward_fn,
-            static_argnames=("deterministic", "mutable", "cache_max_len"),
-        )
-
         # Step 1: Prefill — initialize cache with full prompt. The cache is
         # sized to ``num_tokens`` (prompt + generated) so attention layers
         # don't allocate the full ``block_size`` they would otherwise reach
         # for; ``cache_max_len`` flows through Module.__call__ → block →
         # attention → _cached_kv. Models without that parameter get None.
-        (prefill_logits, _, _), cache = prefill_fn(
+        (prefill_logits, _, _), cache = forward_fn(
             state,
             state.params,
             (input, None, input_mask),
@@ -378,7 +370,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         # capturing the full params pytree as a 14GB constant.
         def _run_scan(
             state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
-        ) -> Any:
+        ) -> jax.Array:
             logger.debug(
                 "AUTOREGRESS | trace scan first_token={} out_buf={} key={} n_gen={}",
                 first_token.shape,
@@ -411,26 +403,9 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             (_, _, final_out, _, _), _ = jax.lax.scan(
                 decode_step, carry, jnp.arange(n_gen)
             )
-            return final_out
+            return cast(jax.Array, final_out)
 
-        # Put non-sharded carry elements onto the mesh (replicated) so jit
-        # can reconcile shardings with the cache that came out of prefill_fn.
-        replicated = NamedSharding(self.mesh, P())  # type: ignore[no-untyped-call]
-        first_token = jax.device_put(first_token, replicated)
-        out_buf = jax.device_put(out_buf, replicated)
-        key = jax.device_put(key, replicated)
-        logger.debug("AUTOREGRESS | scan jit in_shardings=(state,None,repl,repl,repl)")
-
-        return jax.jit(  # type: ignore[no-any-return]
-            _run_scan,
-            in_shardings=(
-                self.state_sharding,
-                None,
-                replicated,
-                replicated,
-                replicated,
-            ),
-        )(state, cache, first_token, out_buf, key)
+        return _run_scan(state, cache, first_token, out_buf, key)
 
     def rollout(
         self,
