@@ -95,6 +95,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         deterministic: bool = False,
         mutable: Optional[list[str] | tuple[str, ...]] = None,
         extra_variables: Optional[dict[str, Any]] = None,
+        cache_max_len: Optional[int] = None,
     ) -> Any:
         """Forward pass with optional mutable variable collections (e.g. KV cache).
 
@@ -103,6 +104,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 When provided, returns ((logits, loss), mutated_variables).
             extra_variables: Additional variable collections to pass alongside params
                 (e.g. {'cache': cache_state} for decode steps).
+            cache_max_len: Forwarded to model ``__call__`` so attention layers
+                size their KV cache to actual decode need rather than the
+                model's full ``block_size``. Only forwarded when not None,
+                so models that don't accept it are unaffected.
 
         Returns:
             (logits, loss, meta) when mutable is None.
@@ -124,6 +129,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         }
         if dropout_key is not None:
             kwargs["rngs"] = {"dropout": dropout_key}
+        if cache_max_len is not None:
+            kwargs["cache_max_len"] = cache_max_len
 
         if mutable is not None:
             (logits, loss), mutated = state.apply_fn(
@@ -310,16 +317,25 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         # Jit forward so XLA/GSPMD distributes sharded params across devices
         # rather than all-gathering them onto a single device (which OOMs for
-        # large vocab/embedding matrices).
-        prefill_fn = jax.jit(forward_fn, static_argnames=("deterministic", "mutable"))
+        # large vocab/embedding matrices). cache_max_len is static — it
+        # determines KV-cache shape allocation inside attention.
+        prefill_fn = jax.jit(
+            forward_fn,
+            static_argnames=("deterministic", "mutable", "cache_max_len"),
+        )
 
-        # Step 1: Prefill — initialize cache with full prompt
+        # Step 1: Prefill — initialize cache with full prompt. The cache is
+        # sized to ``num_tokens`` (prompt + generated) so attention layers
+        # don't allocate the full ``block_size`` they would otherwise reach
+        # for; ``cache_max_len`` flows through Module.__call__ → block →
+        # attention → _cached_kv. Models without that parameter get None.
         (prefill_logits, _, _), cache = prefill_fn(
             state,
             state.params,
             (input, None, input_mask),
             deterministic=True,
             mutable=("cache",),
+            cache_max_len=num_tokens,
         )
 
         # Sample the first generated token from the last prompt position
@@ -352,6 +368,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                     deterministic=True,
                     mutable=("cache",),
                     extra_variables=cache_state,
+                    cache_max_len=num_tokens,
                 )
 
                 next_logits = logits[:, -1, :]

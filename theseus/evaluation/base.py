@@ -161,6 +161,48 @@ class Evaluation(ABC):
 class RolloutEvaluation(Evaluation):
     """Evaluation using autoregressive generation."""
 
+    # Cached on first __call__ so PPO refills (and other repeated callers)
+    # reuse the compiled chunk function instead of re-tracing every time.
+    # Class-level defaults keep subclasses safe even if they override
+    # __init__ without calling super().
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+        key: Any,
+        total_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> Any:
+        """Scan ``_autoregress`` over a chunk of (xs, masks). Bound method so
+        its Python identity is stable across calls — the jit wrapper cached
+        on ``self._chunk_jit`` then hits its compilation cache on every refill
+        instead of compiling from scratch."""
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch = batch
+            results = inference._autoregress(
+                state,
+                key,
+                x_batch,
+                mask_batch,
+                total_tokens,
+                temperature,
+                top_p,
+            )
+            return None, results
+
+        _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+        return jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+
     def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
         """Per-sample scores. Default: cast each ``check()`` to float."""
         return [float(self.check(y, y_hat)) for y, y_hat in zip(ys, y_hats)]
@@ -301,36 +343,24 @@ class RolloutEvaluation(Evaluation):
         # Create subkey
         inference.key, key = jax.random.split(inference.key)
 
-        def evaluate_chunk(
-            state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
-        ) -> Any:
-            """Evaluate a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-                results = inference._autoregress(
-                    state,
-                    key,
-                    x_batch,
-                    mask_batch,
-                    total_tokens,
-                    temperature,
-                    top_p,
-                    **kwargs,
-                )
-                return None, results
-
-            _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            results = jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
-            return results
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding, None),
-            out_shardings=None,
-        )
+        # Build (or reuse) the cached chunk JIT. ``self._chunk_step`` is a
+        # bound method, so the wrapper we cache here keeps a stable identity
+        # across PPO refills — the underlying jax.jit cache hits its compiled
+        # HLO instead of re-tracing.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                static_argnames=("total_tokens", "temperature", "top_p"),
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                    None,
+                ),
+                out_shardings=None,
+            )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
@@ -364,8 +394,14 @@ class RolloutEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
-            chunk_results = wrapped_evaluate_chunk(
-                inference.state, xs_chunk, masks_chunk, key
+            chunk_results = self._chunk_jit(
+                inference.state,
+                xs_chunk,
+                masks_chunk,
+                key,
+                total_tokens=total_tokens,
+                temperature=temperature,
+                top_p=top_p,
             )
             all_results.append(chunk_results)
 
@@ -445,6 +481,36 @@ class RolloutEvaluation(Evaluation):
 
 class EncodingEvaluation(Evaluation):
     """Evaluation using next-token prediction accuracy."""
+
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch = batch
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+            predictions = jnp.argmax(logits[:, :-1, :], axis=-1)
+            return None, predictions
+
+        _, results = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+        return jnp.reshape(results, (-1, results.shape[-1]))
 
     def score(self, xs: list[str], y_hats: list[str]) -> List[float]:
         """Per-sample scores. Default: cast each ``check()`` to float."""
@@ -536,34 +602,19 @@ class EncodingEvaluation(Evaluation):
             masks, inference.mesh, data_pspec
         )
 
-        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
-            """Evaluate a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-                # Use inference's forward method - returns (logits, loss, meta)
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-                # Take argmax to get predicted tokens
-                predictions = jnp.argmax(logits[:, :-1, :], axis=-1)
-                return None, predictions
-
-            _, results = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            results = jnp.reshape(results, (-1, results.shape[-1]))
-            return results
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
-            out_shardings=None,
-        )
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                ),
+                out_shardings=None,
+            )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
@@ -596,9 +647,7 @@ class EncodingEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
-            chunk_results = wrapped_evaluate_chunk(
-                inference.state, xs_chunk, masks_chunk
-            )
+            chunk_results = self._chunk_jit(inference.state, xs_chunk, masks_chunk)
             all_results.append(chunk_results)
 
         # Concatenate all chunk results
@@ -646,6 +695,58 @@ class PerplexityEvaluation(Evaluation):
     Runs a blockwise forward pass like EncodingEvaluation, computes the mean
     negative log-likelihood over all non-padding tokens, and returns perplexity.
     """
+
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch = batch
+
+            y_batch = jnp.roll(x_batch, -1, axis=-1)
+            y_batch = y_batch.at[:, -1].set(-1)
+            y_batch = jnp.where(mask_batch == 0, -1, y_batch)
+
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+
+            logits_f32 = logits.astype(jnp.float32)
+            log_probs = jax.nn.log_softmax(logits_f32, axis=-1)
+
+            token_mask = y_batch != -1
+            y_safe = jnp.where(token_mask, y_batch, 0)
+
+            token_nll = -jnp.take_along_axis(
+                log_probs, y_safe[..., None], axis=-1
+            ).squeeze(-1)
+            token_nll = jnp.where(token_mask, token_nll, 0.0)
+
+            return None, jnp.stack(
+                [
+                    jnp.sum(token_nll, axis=-1),
+                    jnp.sum(token_mask, axis=-1).astype(jnp.float32),
+                ],
+                axis=-1,
+            )
+
+        _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+        return jnp.reshape(stats, (-1, 2))
 
     @abstractmethod
     def get(self, indx: int) -> str:
@@ -730,56 +831,19 @@ class PerplexityEvaluation(Evaluation):
             masks, inference.mesh, data_pspec
         )
 
-        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
-            """Compute total NLL and token count for a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-
-                # Compute next-token targets: shift x left by 1
-                y_batch = jnp.roll(x_batch, -1, axis=-1)
-                y_batch = y_batch.at[:, -1].set(-1)  # last position has no target
-                y_batch = jnp.where(mask_batch == 0, -1, y_batch)  # mask padding
-
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-
-                logits_f32 = logits.astype(jnp.float32)
-                log_probs = jax.nn.log_softmax(logits_f32, axis=-1)
-
-                token_mask = y_batch != -1
-                y_safe = jnp.where(token_mask, y_batch, 0)
-
-                token_nll = -jnp.take_along_axis(
-                    log_probs, y_safe[..., None], axis=-1
-                ).squeeze(-1)
-                token_nll = jnp.where(token_mask, token_nll, 0.0)
-
-                # Keep per-sample stats so padded examples can be dropped after gather.
-                return None, jnp.stack(
-                    [
-                        jnp.sum(token_nll, axis=-1),
-                        jnp.sum(token_mask, axis=-1).astype(jnp.float32),
-                    ],
-                    axis=-1,
-                )
-
-            _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            # stats shape: (chunk_steps, batch_size, 2)
-            return jnp.reshape(stats, (-1, 2))
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
-            out_shardings=None,
-        )
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                ),
+                out_shardings=None,
+            )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
@@ -812,7 +876,7 @@ class PerplexityEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
-            chunk_stats = wrapped_evaluate_chunk(inference.state, xs_chunk, masks_chunk)
+            chunk_stats = self._chunk_jit(inference.state, xs_chunk, masks_chunk)
             all_stats.append(chunk_stats)
 
         # Concatenate all chunk stats: shape (total_local_examples, 2)
@@ -848,6 +912,73 @@ class PerplexityEvaluation(Evaluation):
 
 class PerplexityComparisonEvaluation(Evaluation):
     """Evaluation using perplexity comparison for multiple-choice tasks."""
+
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+        prefix_lens_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch, prefix_len_batch = batch
+
+            y_batch = jnp.roll(x_batch, -1, axis=-1)
+            y_batch = y_batch.at[:, -1].set(0)
+
+            seq_len = x_batch.shape[-1]
+            num_real_tokens = jnp.sum(
+                mask_batch.astype(jnp.int32), axis=-1, keepdims=True
+            )
+            content_start = seq_len - num_real_tokens
+
+            seq_positions = jnp.arange(seq_len)[None, :]
+            prefix_end = content_start + prefix_len_batch[:, None]
+            is_padding_or_prefix = seq_positions < prefix_end
+            y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
+
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+
+            logits_f32 = logits.astype(jnp.float32)
+            logits_flat = logits_f32.reshape(-1, logits_f32.shape[-1])
+            targets_flat = y_batch.reshape(-1)
+
+            mask = targets_flat != -1
+            targets_masked = jnp.where(mask, targets_flat, 0)
+
+            log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
+            token_losses = -jnp.take_along_axis(
+                log_probs, targets_masked[:, None], axis=-1
+            ).squeeze(-1)
+            token_losses = jnp.where(mask, token_losses, 0.0)
+
+            token_losses = token_losses.reshape(x_batch.shape[0], x_batch.shape[1])
+            mask = mask.reshape(x_batch.shape[0], x_batch.shape[1])
+            per_sample_loss = jnp.sum(token_losses, axis=-1) / jnp.maximum(
+                jnp.sum(mask, axis=-1), 1.0
+            )
+
+            return None, per_sample_loss
+
+        _, losses = jax.lax.scan(
+            reduce, None, (xs_chunk, masks_chunk, prefix_lens_chunk)
+        )
+        return jnp.reshape(losses, (-1,))
 
     @abstractmethod
     def get(self, indx: int) -> Tuple[str, list[str], int]:
@@ -977,81 +1108,21 @@ class PerplexityComparisonEvaluation(Evaluation):
             prefix_lens_local, inference.mesh, prefix_lens_pspec
         )
 
-        def evaluate_chunk(
-            state: Any, xs_chunk: Any, masks_chunk: Any, prefix_lens_chunk: Any
-        ) -> Any:
-            """Compute per-sample loss only on continuation tokens for a chunk."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch, prefix_len_batch = batch
-
-                # Shift x to create y for next token prediction
-                y_batch = jnp.roll(x_batch, -1, axis=-1)
-                y_batch = y_batch.at[:, -1].set(0)
-
-                # With LEFT padding, content starts after padding
-                seq_len = x_batch.shape[-1]
-                num_real_tokens = jnp.sum(
-                    mask_batch.astype(jnp.int32), axis=-1, keepdims=True
-                )
-                content_start = seq_len - num_real_tokens
-
-                seq_positions = jnp.arange(seq_len)[None, :]
-                prefix_end = content_start + prefix_len_batch[:, None]
-                is_padding_or_prefix = seq_positions < prefix_end
-                y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
-
-                # Use inference's forward method - returns (logits, loss, meta)
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-
-                # Compute cross-entropy loss per token
-                logits_f32 = logits.astype(jnp.float32)
-                logits_flat = logits_f32.reshape(-1, logits_f32.shape[-1])
-                targets_flat = y_batch.reshape(-1)
-
-                mask = targets_flat != -1
-                targets_masked = jnp.where(mask, targets_flat, 0)
-
-                log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
-                token_losses = -jnp.take_along_axis(
-                    log_probs, targets_masked[:, None], axis=-1
-                ).squeeze(-1)
-                token_losses = jnp.where(mask, token_losses, 0.0)
-
-                # Average per sample
-                token_losses = token_losses.reshape(x_batch.shape[0], x_batch.shape[1])
-                mask = mask.reshape(x_batch.shape[0], x_batch.shape[1])
-                per_sample_loss = jnp.sum(token_losses, axis=-1) / jnp.maximum(
-                    jnp.sum(mask, axis=-1), 1.0
-                )
-
-                return None, per_sample_loss
-
-            _, losses = jax.lax.scan(
-                reduce, None, (xs_chunk, masks_chunk, prefix_lens_chunk)
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                    prefix_lens_sharding,
+                ),
+                out_shardings=None,
             )
-            losses = jnp.reshape(losses, (-1,))
-            return losses
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(
-                inference.state_sharding,
-                data_sharding,
-                data_sharding,
-                prefix_lens_sharding,
-            ),
-            out_shardings=None,
-        )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
@@ -1086,7 +1157,7 @@ class PerplexityComparisonEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
-            chunk_losses = wrapped_evaluate_chunk(
+            chunk_losses = self._chunk_jit(
                 inference.state, xs_chunk, masks_chunk, prefix_lens_chunk
             )
             all_losses.append(chunk_losses)

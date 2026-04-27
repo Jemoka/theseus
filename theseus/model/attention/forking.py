@@ -131,12 +131,18 @@ class ForkingAttention(RopeAttention):
         k: jax.Array,
         v: jax.Array,
         padding_mask: Optional[jax.Array] = None,
+        cache_max_len: Optional[int] = None,
     ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
         """Update KV cache if active. k, v: (B, T, H, D).
+
+        Forking attention is a no-op cache: signature kept compatible with
+        ``SelfAttention._cached_kv`` so the base ``__call__`` path doesn't
+        break, but ``cache_max_len`` is unused here.
 
         Returns (k, v, cache_index_after_update) where cache_index is None
         when cache is not active (training mode).
         """
+        del cache_max_len
 
         return k, v, None
 
@@ -160,8 +166,10 @@ class ForkingAttention(RopeAttention):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
         **kwargs: Any,
     ) -> jax.Array:
+        del cache_max_len  # forking attention has no KV cache
         B, T, C = x.shape
 
         q, k, v = self.project(x)

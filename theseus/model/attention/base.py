@@ -92,8 +92,16 @@ class SelfAttention(Module):
         k: jax.Array,
         v: jax.Array,
         padding_mask: Optional[jax.Array] = None,
+        cache_max_len: Optional[int] = None,
     ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
         """Update KV cache if active. k, v: (B, T, H, D).
+
+        Args:
+            cache_max_len: cache slot count. Defaults to ``self.block_size``
+                — pass an explicit value (e.g. ``prompt_max + max_new_tokens``)
+                to size the cache to actual decode need instead of the
+                model's full max-context. Must be a Python int (used in
+                shape construction).
 
         Returns (k, v, cache_index_after_update) where cache_index is None
         when cache is not active (training mode).
@@ -106,9 +114,9 @@ class SelfAttention(Module):
         is_initialized = self.has_variable("cache", "cache_index")
 
         # Cache is requested — create or update variables
-        # Allocate to block_size so we can decode up to that many tokens
+        cache_len = cache_max_len if cache_max_len is not None else self.block_size
         B, _T, H, D = k.shape
-        cache_shape = (B, self.block_size, H, D)
+        cache_shape = (B, cache_len, H, D)
         cached_key = self.variable(
             "cache", "cached_key", jnp.zeros, cache_shape, k.dtype
         )
@@ -124,7 +132,7 @@ class SelfAttention(Module):
             "cache",
             "cached_padding_mask",
             jnp.ones,
-            (B, self.block_size),
+            (B, cache_len),
             jnp.bool_,
         )
 
@@ -158,7 +166,7 @@ class SelfAttention(Module):
             cache_index.value = jnp.array(T_prefill, dtype=jnp.int32)
             # Store padding mask for decode steps
             if padding_mask is not None:
-                pad_full = jnp.ones((B, self.block_size), dtype=jnp.bool_)
+                pad_full = jnp.ones((B, cache_len), dtype=jnp.bool_)
                 pad_full = jax.lax.dynamic_update_slice(
                     pad_full, padding_mask, (zero, zero)
                 )
@@ -254,6 +262,7 @@ class SelfAttention(Module):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
         **kwargs: Any,
     ) -> jax.Array:
         B, T, C = x.shape
@@ -266,7 +275,9 @@ class SelfAttention(Module):
             kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
-        k, v, cache_idx = self._cached_kv(k, v, padding_mask=padding_mask)
+        k, v, cache_idx = self._cached_kv(
+            k, v, padding_mask=padding_mask, cache_max_len=cache_max_len
+        )
 
         T_kv = k.shape[1]
         mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
