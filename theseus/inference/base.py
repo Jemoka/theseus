@@ -25,6 +25,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.experimental import multihost_utils
 from flax.training import train_state
 import flax
+from loguru import logger
 
 
 from theseus.model.module import Module
@@ -314,6 +315,18 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         B, T_in = input.shape
         forward_fn = self.forward
+        logger.debug(
+            "AUTOREGRESS | trace start B={} T_in={} input={} input_mask={} "
+            "key={} num_tokens={} temperature={} top_p={}",
+            B,
+            T_in,
+            input.shape,
+            input_mask.shape,
+            key.shape,
+            num_tokens,
+            temperature,
+            top_p,
+        )
 
         # Jit forward so XLA/GSPMD distributes sharded params across devices
         # rather than all-gathering them onto a single device (which OOMs for
@@ -337,6 +350,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             mutable=("cache",),
             cache_max_len=num_tokens,
         )
+        logger.debug(
+            "AUTOREGRESS | prefill done logits={} cache_leaves={}",
+            prefill_logits.shape,
+            len(jax.tree.leaves(cache)),
+        )
 
         # Sample the first generated token from the last prompt position
         last_logits = prefill_logits[:, -1, :]
@@ -348,7 +366,14 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         out_buf = out_buf.at[:, T_in].set(first_token)
 
         n_gen = num_tokens - T_in - 1  # remaining tokens after the first generated one
+        logger.debug(
+            "AUTOREGRESS | post-prefill first_token={} out_buf={} n_gen={}",
+            first_token.shape,
+            out_buf.shape,
+            n_gen,
+        )
         if n_gen <= 0:
+            logger.debug("AUTOREGRESS | n_gen<=0, skipping decode scan")
             return out_buf
 
         # Step 2: Decode loop — one token at a time with cached KV.
@@ -357,6 +382,16 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         def _run_scan(
             state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
         ) -> Any:
+            logger.debug(
+                "AUTOREGRESS | trace _run_scan first_token={} out_buf={} "
+                "key={} cache_leaves={} n_gen={}",
+                first_token.shape,
+                out_buf.shape,
+                key.shape,
+                len(jax.tree.leaves(cache)),
+                n_gen,
+            )
+
             def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
                 cache_state, last_tok, out, offset, key = carry
                 token_input = last_tok[:, None]  # (B, 1)
@@ -389,6 +424,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         first_token = jax.device_put(first_token, replicated)
         out_buf = jax.device_put(out_buf, replicated)
         key = jax.device_put(key, replicated)
+        logger.debug(
+            "AUTOREGRESS | scan jit in_shardings=(state, None, repl, repl, "
+            "repl) first_token.sharding={} out_buf.sharding={}",
+            first_token.sharding,
+            out_buf.sharding,
+        )
 
         return jax.jit(  # type: ignore[no-any-return]
             _run_scan,
@@ -456,12 +497,28 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             # Remember per-sequence token lengths for stripping left-pad later
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = self.pad(encoded)
+            logger.debug(
+                "ROLLOUT | encoded N={} padded_N={} prompt_lengths range=[{},{}] "
+                "xs={} masks={}",
+                N,
+                padded_N,
+                min(prompt_lengths),
+                max(prompt_lengths),
+                xs.shape,
+                masks.shape,
+            )
         else:
             prompt_lengths = None
             xs, masks = None, None
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("rollout:post_broadcast")
+        logger.debug(
+            "ROLLOUT | post-broadcast pid={} xs={} masks={}",
+            jax.process_index(),
+            xs.shape,
+            masks.shape,
+        )
 
         # Distribute across processes
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
@@ -473,12 +530,26 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         local_batch = self.local_replicas * self.per_device_batch_size
         xs = xs.reshape(-1, local_batch, xs.shape[-1])
         masks = masks.reshape(-1, local_batch, masks.shape[-1])
+        logger.debug(
+            "ROLLOUT | reshape pid={} local_batch={} xs={} masks={}",
+            jax.process_index(),
+            local_batch,
+            xs.shape,
+            masks.shape,
+        )
 
         # Create global arrays with sharding
         data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
         xs = multihost_utils.host_local_array_to_global_array(xs, self.mesh, data_pspec)
         masks = multihost_utils.host_local_array_to_global_array(
             masks, self.mesh, data_pspec
+        )
+        logger.debug(
+            "ROLLOUT | global xs={} sharding={} masks={} sharding={}",
+            xs.shape,
+            xs.sharding,
+            masks.shape,
+            masks.sharding,
         )
 
         # PRNG key
@@ -487,6 +558,14 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         # Compute total tokens: prompt length + new tokens, capped by block_size
         max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
         total_tokens = min(max_prompt_length + max_new_tokens, self.block_size)
+        logger.debug(
+            "ROLLOUT | totals max_prompt_length={} max_new_tokens={} "
+            "total_tokens={} block_size={}",
+            max_prompt_length,
+            max_new_tokens,
+            total_tokens,
+            self.block_size,
+        )
 
         # Chunked autoregressive generation (same pattern as RolloutEvaluation)
         def evaluate_chunk(
@@ -516,14 +595,31 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         )
 
         num_batches = xs.shape[0]
+        logger.debug("ROLLOUT | num_batches={} chunk_size={}", num_batches, chunk_size)
         all_results = []
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
+            xs_chunk = xs[chunk_start:chunk_end]
+            masks_chunk = masks[chunk_start:chunk_end]
+            logger.debug(
+                "ROLLOUT | chunk[{}:{}] xs_chunk={} masks_chunk={}",
+                chunk_start,
+                chunk_end,
+                xs_chunk.shape,
+                masks_chunk.shape,
+            )
             chunk_results = jitted_chunk(
                 self.state,
-                xs[chunk_start:chunk_end],
-                masks[chunk_start:chunk_end],
+                xs_chunk,
+                masks_chunk,
                 key,
+            )
+            logger.debug(
+                "ROLLOUT | chunk[{}:{}] result={} sharding={}",
+                chunk_start,
+                chunk_end,
+                chunk_results.shape,
+                chunk_results.sharding,
             )
             all_results.append(chunk_results)
 

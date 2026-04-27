@@ -186,9 +186,28 @@ class RolloutEvaluation(Evaluation):
         assert inference is not None, (
             "_chunk_step called before __call__ set _evaluator_ref"
         )
+        # Logged at trace time (.shape is concrete on tracers). Tells us
+        # exactly what HLO the cached chunk JIT will be built for.
+        logger.debug(
+            "EVAL | {} | trace _chunk_step xs={} masks={} key={} total_tokens={} "
+            "temperature={} top_p={}",
+            self.name,
+            xs_chunk.shape,
+            masks_chunk.shape,
+            key.shape,
+            total_tokens,
+            temperature,
+            top_p,
+        )
 
         def reduce(_: Any, batch: Any) -> Any:
             x_batch, mask_batch = batch
+            logger.debug(
+                "EVAL | {} | trace scan-body x={} mask={}",
+                self.name,
+                x_batch.shape,
+                mask_batch.shape,
+            )
             results = inference._autoregress(
                 state,
                 key,
@@ -201,7 +220,13 @@ class RolloutEvaluation(Evaluation):
             return None, results
 
         _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-        return jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+        out = jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+        logger.debug(
+            "EVAL | {} | trace _chunk_step out shape={}",
+            self.name,
+            out.shape,
+        )
+        return out
 
     def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
         """Per-sample scores. Default: cast each ``check()`` to float."""
@@ -295,6 +320,24 @@ class RolloutEvaluation(Evaluation):
             )
         total_tokens = inference.block_size
 
+        logger.debug(
+            "EVAL | {} | setup batch_unit={} indices={} prompt_max={} "
+            "total_tokens={} max_new_tokens={} replicas={} local_replicas={} "
+            "pdbs={} block_size={} processes={} pid={}",
+            eval_data.name,
+            batch_unit,
+            len(indices),
+            prompt_max,
+            total_tokens,
+            max_new_tokens,
+            inference.replicas,
+            inference.local_replicas,
+            inference.per_device_batch_size,
+            inference.block_size,
+            jax.process_count(),
+            jax.process_index(),
+        )
+
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
@@ -306,6 +349,16 @@ class RolloutEvaluation(Evaluation):
             encoded = [seq[:prompt_max] for seq in encoded]
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = inference.pad(encoded, pad_to=prompt_max)
+            logger.debug(
+                "EVAL | {} | encoded x.len={} prompt_lengths range=[{},{}] "
+                "xs={} masks={}",
+                eval_data.name,
+                len(x),
+                min(prompt_lengths),
+                max(prompt_lengths),
+                xs.shape,
+                masks.shape,
+            )
         else:
             original_y = None
             prompt_lengths = None
@@ -313,6 +366,13 @@ class RolloutEvaluation(Evaluation):
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
+        logger.debug(
+            "EVAL | {} | post-broadcast pid={} xs={} masks={}",
+            eval_data.name,
+            jax.process_index(),
+            xs.shape,
+            masks.shape,
+        )
 
         # Keep a global view of the prompt mask for intermediates (every host).
         masks_full = masks
@@ -322,6 +382,13 @@ class RolloutEvaluation(Evaluation):
         pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
+        logger.debug(
+            "EVAL | {} | host-shard pid={} xs={} masks={}",
+            eval_data.name,
+            jax.process_index(),
+            xs.shape,
+            masks.shape,
+        )
 
         # Reshape into (accumulate_steps, per_device_batch_size, T)
         xs = xs.reshape(
@@ -329,6 +396,13 @@ class RolloutEvaluation(Evaluation):
         )
         masks = masks.reshape(
             -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
+        )
+        logger.debug(
+            "EVAL | {} | reshape pid={} xs={} masks={}",
+            eval_data.name,
+            jax.process_index(),
+            xs.shape,
+            masks.shape,
         )
 
         # Create global arrays
@@ -338,6 +412,15 @@ class RolloutEvaluation(Evaluation):
         )
         masks = multihost_utils.host_local_array_to_global_array(
             masks, inference.mesh, data_pspec
+        )
+        logger.debug(
+            "EVAL | {} | global xs={} sharding={} masks={} sharding={} mesh={}",
+            eval_data.name,
+            xs.shape,
+            xs.sharding,
+            masks.shape,
+            masks.sharding,
+            inference.mesh,
         )
 
         # Create subkey
@@ -350,6 +433,13 @@ class RolloutEvaluation(Evaluation):
         if self._chunk_jit is None:
             self._evaluator_ref = inference
             data_sharding = NamedSharding(inference.mesh, data_pspec)
+            logger.debug(
+                "EVAL | {} | building chunk JIT state_sharding={} "
+                "data_sharding={} static_argnums=(4,5,6)",
+                eval_data.name,
+                inference.state_sharding,
+                data_sharding,
+            )
             # static_argnums (not argnames): pjit forbids kwargs when
             # in_shardings is set, so the static args must travel
             # positionally. Indexes 4/5/6 correspond to
@@ -384,6 +474,15 @@ class RolloutEvaluation(Evaluation):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
+            logger.debug(
+                "EVAL | {} | chunk[{}:{}] xs_chunk={} masks_chunk={} key={}",
+                eval_data.name,
+                chunk_start,
+                chunk_end,
+                xs_chunk.shape,
+                masks_chunk.shape,
+                key.shape,
+            )
 
             if chunk_start == 0:
                 logger.debug(
@@ -406,6 +505,14 @@ class RolloutEvaluation(Evaluation):
                 total_tokens,
                 temperature,
                 top_p,
+            )
+            logger.debug(
+                "EVAL | {} | chunk[{}:{}] result={} sharding={}",
+                eval_data.name,
+                chunk_start,
+                chunk_end,
+                chunk_results.shape,
+                chunk_results.sharding,
             )
             all_results.append(chunk_results)
 
