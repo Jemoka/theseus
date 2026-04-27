@@ -82,12 +82,14 @@ class BasicJob(_BaseJob, Generic[C]):
         name: str = "local",
         project: str | None = None,
         group: str | None = None,
+        shard_into: int | None = None,
     ) -> Self:
         spec = ExecutionSpec.local(
             root_dir,
             name=name,
             project=project,
             group=group,
+            shard_into=shard_into,
         )
         return cls(spec)
 

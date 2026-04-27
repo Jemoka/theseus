@@ -425,6 +425,12 @@ def configure(
     "-g", "--group", default=None, help="Group under the project this run belongs to"
 )  # type: ignore[misc]
 @click.option(
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model",
+)  # type: ignore[misc]
+@click.option(
     "-s",
     "--stage",
     "extra_stages",
@@ -451,6 +457,7 @@ def run(
     job: str | None,
     project: str | None,
     group: str | None,
+    n_shards: int | None,
     extra_stages: tuple[str, ...],
     restore_path: str | None,
     preload_modules: tuple[str, ...],
@@ -506,6 +513,10 @@ def run(
         for override in overrides:
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
+
+    request_n_shards = n_shards
+    if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
+        request_n_shards = cfg.request.n_shards
 
     # Load extra stage configs (for multi-stage pipelines)
     extra_cfgs: List[Any] = []
@@ -574,7 +585,11 @@ def run(
         if restore_path:
             RestoreableJob = _restoreable_job()
             spec = ExecutionSpec.local(
-                out_path, name=stage_name, project=project, group=group
+                out_path,
+                name=stage_name,
+                project=project,
+                group=group,
+                shard_into=request_n_shards,
             )
             job_instance, restored_cfg = RestoreableJob.from_checkpoint_path(
                 restore_path, spec, runtime_cfg=stage_cfg
@@ -586,7 +601,11 @@ def run(
         else:
             with configuration(stage_cfg):
                 job_instance = stage_job_obj.local(
-                    out_path, name=stage_name, project=project, group=group
+                    out_path,
+                    name=stage_name,
+                    project=project,
+                    group=group,
+                    shard_into=request_n_shards,
                 )
                 job_instance()
         # Finalize wandb run between stages (if active) so the next stage
