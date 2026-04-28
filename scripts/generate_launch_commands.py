@@ -137,7 +137,7 @@ def main() -> None:
                 rest_part = f" {rest_flags}" if rest_flags else ""
                 env_part = f" {ENV_FLAGS}" if ENV_FLAGS else ""
                 lines.append(
-                    f"uv run theseus submit {name}-p1-v-houjunliu {first}{rest_part}"
+                    f"uv run theseus submit {name}-p1 {first}{rest_part}"
                     f"{env_part} --cluster {CLUSTER} --chip {CHIP} "
                     f"-n {N_CHIPS} --n_shards {N_SHARDS} "
                     f"--cpu 32 --mem 256G "
