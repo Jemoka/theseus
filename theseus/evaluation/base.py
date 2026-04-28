@@ -482,6 +482,7 @@ class RolloutEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
+            logger.info("EVAL | BEFORE CHUNK")
             chunk_results = self._chunk_jit(
                 inference.state,
                 xs_chunk,
@@ -491,6 +492,7 @@ class RolloutEvaluation(Evaluation):
                 temperature,
                 top_p,
             )
+            logger.info("EVAL | AFTER CHUNK")
             logger.debug(
                 "EVAL | {} | chunk[{}:{}] result={}",
                 eval_data.name,
