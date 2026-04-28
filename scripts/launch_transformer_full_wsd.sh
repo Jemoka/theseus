@@ -39,7 +39,7 @@ run_cmd() {
 # =============================================================
 
 # cg_cfq: compositional generalization (CFQ)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/cfq_sparql_2048.yaml \
     -s configs/data/cl100k/cfq_text_2048.yaml \
     -s configs/data/cl100k/cfq_2048.yaml \
@@ -47,14 +47,14 @@ run_cmd uv run theseus submit transformer_full_wsd-p1 \
     $COMMON -g cg_cfq_1b $EXTRA
 
 # cg_grammar: compositional generalization (grammar)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mtob_grammar_2048.yaml \
     -s configs/data/cl100k/mtob_enkgv_2048.yaml \
     -s configs/continual/cg_grammar/1b/transformer_full_wsd.yaml \
     $COMMON -g cg_grammar_1b $EXTRA
 
 # cg_safety: safety (harmfulqa + mmlu + squad)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/harmfulqa_red_2048.yaml \
     -s configs/data/cl100k/mmlu_2048.yaml \
     -s configs/data/cl100k/harmfulqa_blue_2048.yaml \
@@ -63,17 +63,17 @@ run_cmd uv run theseus submit transformer_full_wsd-p1 \
     $COMMON -g cg_safety_1b $EXTRA
 
 # ds_domain: domain shift (self-contained config)
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/continual/ds_domain/1b/transformer_full_wsd.yaml \
     $COMMON -g ds_domain_1b $EXTRA
 
 # ds_multilingual: multilingual domain shift
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/continual/ds_multilingual/1b/transformer_full_wsd.yaml \
     $COMMON -g ds_multilingual_1b $EXTRA
 
 # ds_nlu: NLU domain shift
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mnli_2048.yaml \
     -s configs/data/cl100k/qqp_2048.yaml \
     -s configs/data/cl100k/sst2_2048.yaml \
@@ -82,17 +82,17 @@ run_cmd uv run theseus submit transformer_full_wsd-p1 \
     $COMMON -g ds_nlu_1b $EXTRA
 
 # ic_injected: in-context injected
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/continual/ic_injected/1b/transformer_full_wsd.yaml \
     $COMMON -g ic_injected_1b $EXTRA
 
 # ic_lengthgen: in-context length generalization
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/continual/ic_lengthgen/1b/transformer_full_wsd.yaml \
     $COMMON -g ic_lengthgen_1b $EXTRA
 
 # ic_longqa: in-context long QA
-run_cmd uv run theseus submit transformer_full_wsd-p1 \
+run_cmd uv run theseus submit transformer_full_wsd-p1-v-houjunliu \
     configs/continual/ic_longqa/1b/transformer_full_wsd.yaml \
     $COMMON -g ic_longqa_1b $EXTRA
 
@@ -101,7 +101,7 @@ run_cmd uv run theseus submit transformer_full_wsd-p1 \
 # =============================================================
 
 # cg_cfq
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/cfq_sparql_2048.yaml \
     -s configs/data/cl100k/cfq_text_2048.yaml \
     -s configs/data/cl100k/cfq_2048.yaml \
@@ -109,14 +109,14 @@ run_cmd uv run theseus submit moe_full_wsd-p1 \
     $COMMON -g cg_cfq_1b $EXTRA
 
 # cg_grammar
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mtob_grammar_2048.yaml \
     -s configs/data/cl100k/mtob_enkgv_2048.yaml \
     -s configs/continual/cg_grammar/1b/moe_full_wsd.yaml \
     $COMMON -g cg_grammar_1b $EXTRA
 
 # cg_safety
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/harmfulqa_red_2048.yaml \
     -s configs/data/cl100k/mmlu_2048.yaml \
     -s configs/data/cl100k/harmfulqa_blue_2048.yaml \
@@ -125,17 +125,17 @@ run_cmd uv run theseus submit moe_full_wsd-p1 \
     $COMMON -g cg_safety_1b $EXTRA
 
 # ds_domain
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/continual/ds_domain/1b/moe_full_wsd.yaml \
     $COMMON -g ds_domain_1b $EXTRA
 
 # ds_multilingual
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/continual/ds_multilingual/1b/moe_full_wsd.yaml \
     $COMMON -g ds_multilingual_1b $EXTRA
 
 # ds_nlu
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mnli_2048.yaml \
     -s configs/data/cl100k/qqp_2048.yaml \
     -s configs/data/cl100k/sst2_2048.yaml \
@@ -144,17 +144,17 @@ run_cmd uv run theseus submit moe_full_wsd-p1 \
     $COMMON -g ds_nlu_1b $EXTRA
 
 # ic_injected
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/continual/ic_injected/1b/moe_full_wsd.yaml \
     $COMMON -g ic_injected_1b $EXTRA
 
 # ic_lengthgen
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/continual/ic_lengthgen/1b/moe_full_wsd.yaml \
     $COMMON -g ic_lengthgen_1b $EXTRA
 
 # ic_longqa
-run_cmd uv run theseus submit moe_full_wsd-p1 \
+run_cmd uv run theseus submit moe_full_wsd-p1-v-houjunliu \
     configs/continual/ic_longqa/1b/moe_full_wsd.yaml \
     $COMMON -g ic_longqa_1b $EXTRA
 
@@ -163,7 +163,7 @@ run_cmd uv run theseus submit moe_full_wsd-p1 \
 # =============================================================
 
 # cg_cfq
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/cfq_sparql_2048.yaml \
     -s configs/data/cl100k/cfq_text_2048.yaml \
     -s configs/data/cl100k/cfq_2048.yaml \
@@ -171,14 +171,14 @@ run_cmd uv run theseus submit mamba_full_wsd-p1 \
     $COMMON -g cg_cfq_1b $EXTRA
 
 # cg_grammar
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mtob_grammar_2048.yaml \
     -s configs/data/cl100k/mtob_enkgv_2048.yaml \
     -s configs/continual/cg_grammar/1b/mamba_full_wsd.yaml \
     $COMMON -g cg_grammar_1b $EXTRA
 
 # cg_safety
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/harmfulqa_red_2048.yaml \
     -s configs/data/cl100k/mmlu_2048.yaml \
     -s configs/data/cl100k/harmfulqa_blue_2048.yaml \
@@ -187,17 +187,17 @@ run_cmd uv run theseus submit mamba_full_wsd-p1 \
     $COMMON -g cg_safety_1b $EXTRA
 
 # ds_domain
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/continual/ds_domain/1b/mamba_full_wsd.yaml \
     $COMMON -g ds_domain_1b $EXTRA
 
 # ds_multilingual
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/continual/ds_multilingual/1b/mamba_full_wsd.yaml \
     $COMMON -g ds_multilingual_1b $EXTRA
 
 # ds_nlu
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/data/cl100k/mnli_2048.yaml \
     -s configs/data/cl100k/qqp_2048.yaml \
     -s configs/data/cl100k/sst2_2048.yaml \
@@ -206,17 +206,17 @@ run_cmd uv run theseus submit mamba_full_wsd-p1 \
     $COMMON -g ds_nlu_1b $EXTRA
 
 # ic_injected
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/continual/ic_injected/1b/mamba_full_wsd.yaml \
     $COMMON -g ic_injected_1b $EXTRA
 
 # ic_lengthgen
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/continual/ic_lengthgen/1b/mamba_full_wsd.yaml \
     $COMMON -g ic_lengthgen_1b $EXTRA
 
 # ic_longqa
-run_cmd uv run theseus submit mamba_full_wsd-p1 \
+run_cmd uv run theseus submit mamba_full_wsd-p1-v-houjunliu \
     configs/continual/ic_longqa/1b/mamba_full_wsd.yaml \
     $COMMON -g ic_longqa_1b $EXTRA
 
