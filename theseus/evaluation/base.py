@@ -482,7 +482,6 @@ class RolloutEvaluation(Evaluation):
                     (chunk_end / num_batches) * 100,
                 )
 
-            logger.debug("EVAL | BEFORE CHUNK")
             chunk_results = self._chunk_jit(
                 inference.state,
                 xs_chunk,
@@ -492,7 +491,6 @@ class RolloutEvaluation(Evaluation):
                 temperature,
                 top_p,
             )
-            logger.debug("EVAL | AFTER CHUNK")
             logger.debug(
                 "EVAL | {} | chunk[{}:{}] result={}",
                 eval_data.name,
@@ -505,15 +503,19 @@ class RolloutEvaluation(Evaluation):
         # Concatenate all chunk results
         results = jnp.concatenate(all_results, axis=0)
 
+        logger.debug("Before broadcast.")
         results = multihost_utils.global_array_to_host_local_array(
             results, inference.mesh, data_pspec
         )
+        logger.debug("After broadcast.")
 
         # Collect across hosts
         if jax.process_count() > 1:
+            logger.debug("Before gather.")
             multihost_utils.sync_global_devices("eval_gather_all:pre")
             results = multihost_utils.process_allgather(results, tiled=True)
             multihost_utils.sync_global_devices("eval_gather_all:post")
+            logger.debug("After gather.")
 
         # Flatten on host after resolving the sharded batch axis.
         results_np = np.asarray(results).reshape(-1, results.shape[-1])
