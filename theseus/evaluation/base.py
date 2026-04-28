@@ -500,28 +500,16 @@ class RolloutEvaluation(Evaluation):
             )
             all_results.append(chunk_results)
 
-        # Concatenate all chunk results
+        # Concatenate all chunk results — sharded global jax array.
         results = jnp.concatenate(all_results, axis=0)
 
-        logger.debug("Before broadcast.")
-        results = multihost_utils.global_array_to_host_local_array(
-            results, inference.mesh, data_pspec
-        )
-        logger.debug("After broadcast.")
+        # One allgather is enough: every host ends up with the full result.
+        multihost_utils.sync_global_devices("eval_gather_all:pre")
+        results = multihost_utils.process_allgather(results, tiled=True)
+        multihost_utils.sync_global_devices("eval_gather_all:post")
 
-        # Collect across hosts
-        if jax.process_count() > 1:
-            logger.debug("Before gather.")
-            multihost_utils.sync_global_devices("eval_gather_all:pre")
-            results = multihost_utils.process_allgather(results, tiled=True)
-            multihost_utils.sync_global_devices("eval_gather_all:post")
-            logger.debug("After gather.")
-
-        logger.debug("Bump.")
-        # Flatten on host after resolving the sharded batch axis.
         results_np = np.asarray(results).reshape(-1, results.shape[-1])
         results_list = results_np.tolist()
-        logger.debug("Bump.")
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
@@ -533,7 +521,6 @@ class RolloutEvaluation(Evaluation):
         else:
             stripped = results_list[:original_size]
         decoded_results = encoding.decode_batch(stripped)
-        logger.debug("Bump.")
 
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
@@ -547,15 +534,12 @@ class RolloutEvaluation(Evaluation):
             score = (
                 np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
             )
-        logger.debug("Bump.")
         score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
         score = np.asarray(score) if reduce == "none" else float(score)
 
-        logger.debug("Bump.")
         if not return_intermediates:
             return score
 
-        logger.debug("Bump.")
         # Per-sample (x, action_mask, padding_mask) on every host. The eval
         # already knows where the prompt ended and where generation began, so
         # it returns both masks rather than making the consumer re-derive.
@@ -565,7 +549,6 @@ class RolloutEvaluation(Evaluation):
         T_in_max = int(masks_full.shape[-1])
         T_total = int(results_np.shape[-1])
         gen_len = max(T_total - T_in_max, 0)
-        logger.debug("Bump.")
         action_mask = jnp.concatenate(
             [
                 jnp.zeros_like(masks_full, dtype=jnp.bool_),
@@ -582,12 +565,10 @@ class RolloutEvaluation(Evaluation):
         )
         action_mask_np = np.asarray(action_mask)
         padding_mask_np = np.asarray(padding_mask)
-        logger.debug("Bump.")
         intermediates = [
             (results_np[i], action_mask_np[i], padding_mask_np[i])
             for i in range(original_size)
         ]
-        logger.debug("Bump.")
         return score, intermediates
 
 
