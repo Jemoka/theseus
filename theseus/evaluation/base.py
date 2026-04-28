@@ -168,60 +168,6 @@ class RolloutEvaluation(Evaluation):
     _chunk_jit: Optional[Any] = None
     _evaluator_ref: Optional[Any] = None
 
-    def _chunk_step(
-        self,
-        state: Any,
-        xs_chunk: Any,
-        masks_chunk: Any,
-        key: Any,
-        total_tokens: int,
-        temperature: float,
-        top_p: float,
-    ) -> Any:
-        """Scan ``_autoregress`` over a chunk of (xs, masks). Bound method so
-        its Python identity is stable across calls — the jit wrapper cached
-        on ``self._chunk_jit`` then hits its compilation cache on every refill
-        instead of compiling from scratch."""
-        inference = self._evaluator_ref
-        assert inference is not None, (
-            "_chunk_step called before __call__ set _evaluator_ref"
-        )
-        # .shape is concrete on tracers, so this fires once at trace time
-        # and tells us exactly what HLO is about to be built.
-        logger.debug(
-            "EVAL | {} | trace chunk xs={} masks={} key={} T={} top_p={} total={}",
-            self.name,
-            xs_chunk.shape,
-            masks_chunk.shape,
-            key.shape,
-            temperature,
-            top_p,
-            total_tokens,
-        )
-
-        def reduce(_: Any, batch: Any) -> Any:
-            x_batch, mask_batch = batch
-            logger.debug(
-                "EVAL | {} | trace scan x={} mask={}",
-                self.name,
-                x_batch.shape,
-                mask_batch.shape,
-            )
-            results = inference._autoregress(
-                state,
-                key,
-                x_batch,
-                mask_batch,
-                total_tokens,
-                temperature,
-                top_p,
-            )
-            return None, results
-
-        _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-        logger.debug("EVAL | {} | trace chunk out={}", self.name, rollouts.shape)
-        return rollouts
-
     def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
         """Per-sample scores. Default: cast each ``check()`` to float."""
         return [float(self.check(y, y_hat)) for y, y_hat in zip(ys, y_hats)]
@@ -419,18 +365,72 @@ class RolloutEvaluation(Evaluation):
         # across PPO refills — the underlying jax.jit cache hits its compiled
         # HLO instead of re-tracing.
         if self._chunk_jit is None:
-            self._evaluator_ref = inference
             data_sharding = NamedSharding(inference.mesh, data_pspec)
             logger.debug(
                 "EVAL | {} | building chunk JIT static_argnums=(4,5,6)",
                 eval_data.name,
             )
+
+            _name = self.name
+
+            def _chunk_step(
+                state: Any,
+                xs_chunk: Any,
+                masks_chunk: Any,
+                key: Any,
+                total_tokens: int,
+                temperature: float,
+                top_p: float,
+            ) -> Any:
+                """Scan ``_autoregress`` over a chunk of (xs, masks). Bound method so
+                its Python identity is stable across calls — the jit wrapper cached
+                on ``self._chunk_jit`` then hits its compilation cache on every refill
+                instead of compiling from scratch."""
+                assert inference is not None, (
+                    "_chunk_step called before __call__ set _evaluator_ref"
+                )
+                # .shape is concrete on tracers, so this fires once at trace time
+                # and tells us exactly what HLO is about to be built.
+                logger.debug(
+                    "EVAL | {} | trace chunk xs={} masks={} key={} T={} top_p={} total={}",
+                    _name,
+                    xs_chunk.shape,
+                    masks_chunk.shape,
+                    key.shape,
+                    temperature,
+                    top_p,
+                    total_tokens,
+                )
+
+                def reduce(_: Any, batch: Any) -> Any:
+                    x_batch, mask_batch = batch
+                    logger.debug(
+                        "EVAL | {} | trace scan x={} mask={}",
+                        _name,
+                        x_batch.shape,
+                        mask_batch.shape,
+                    )
+                    results = inference._autoregress(
+                        state,
+                        key,
+                        x_batch,
+                        mask_batch,
+                        total_tokens,
+                        temperature,
+                        top_p,
+                    )
+                    return None, results
+
+                _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+                logger.debug("EVAL | {} | trace chunk out={}", _name, rollouts.shape)
+                return rollouts
+
             # static_argnums (not argnames): pjit forbids kwargs when
             # in_shardings is set, so the static args must travel
             # positionally. Indexes 4/5/6 correspond to
             # (total_tokens, temperature, top_p) on the bound method.
             self._chunk_jit = jax.jit(
-                self._chunk_step,
+                _chunk_step,
                 static_argnums=(4, 5, 6),
                 in_shardings=(
                     inference.state_sharding,
@@ -492,7 +492,7 @@ class RolloutEvaluation(Evaluation):
                 temperature,
                 top_p,
             )
-            logger.info("EVAL | AFTER CHUNK")
+            logger.info("EVAL | BEFORE CHUNK")
             logger.debug(
                 "EVAL | {} | chunk[{}:{}] result={}",
                 eval_data.name,
