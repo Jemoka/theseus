@@ -352,7 +352,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         forward_fn = self.forward
         cache_kv_sharding = NamedSharding(
             self.mesh,
-            P(Axis.BATCH, None, None, None),  # type: ignore[no-untyped-call]
+            # K/V projections are partitioned on N_ATTN -> Axis.SHARD. Cache
+            # shape is (B, cache_len, heads, head_dim), so keep the head axis
+            # tensor-sharded to avoid all-gathering KV inside decode.
+            P(Axis.BATCH, None, Axis.SHARD, None),  # type: ignore[no-untyped-call]
         )
         cache_pad_sharding = NamedSharding(
             self.mesh,
