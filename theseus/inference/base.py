@@ -395,7 +395,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                         n_gen,
                         offset,
                         token_input.shape,
-                        ordered=True,
                     )
 
                 jax.lax.cond(step % 16 == 0, log_decode_step, lambda _: None, None)
@@ -423,7 +422,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             jax.debug.print(
                 "INFERENCE | decode scan done final_out={}",
                 final_out.shape,
-                ordered=True,
             )
             return final_out
 
