@@ -107,7 +107,10 @@ class Qwen(Module):
         cache_max_len: Optional[int] = None,
     ) -> jax.Array:
         b, t, _ = x.shape
-        positions = jnp.arange(t)
+        if padding_mask is None:
+            positions = jnp.arange(t)
+        else:
+            positions = jnp.maximum(jnp.cumsum(padding_mask, axis=-1) - 1, 0)
         for i, block in enumerate(self.blocks):
             sliding = self.layer_types[i] == "sliding"
             mask = None

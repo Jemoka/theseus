@@ -173,7 +173,13 @@ class GroupedSelfAttention(SelfAttention):
         # For decode steps with cache, inject correct RoPE positions.
         if self.has_variable("cache", "cache_index"):
             ci: Any = self.get_variable("cache", "cache_index")
-            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+            positions = jnp.arange(T) + ci
+            if self.has_variable("cache", "cached_padding_mask"):
+                pad: jax.Array = self.get_variable("cache", "cached_padding_mask")
+                cached = jnp.arange(pad.shape[-1]) < ci
+                n_pad = jnp.sum(cached & ~pad, axis=-1)
+                positions = positions[None, :] - n_pad[:, None]
+            kwargs = {**kwargs, "positions": positions}
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
 
