@@ -734,13 +734,13 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 return None, results
 
             _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            return jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
+            return rollouts
 
         data_sharding = NamedSharding(self.mesh, data_pspec)
         jitted_chunk = jax.jit(
             evaluate_chunk,
             in_shardings=(self.state_sharding, data_sharding, data_sharding, None),
-            out_shardings=None,
+            out_shardings=data_sharding,
         )
 
         num_batches = xs.shape[0]
