@@ -350,25 +350,45 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         B, T_in = input.shape
         forward_fn = self.forward
+        cache_kv_sharding = NamedSharding(
+            self.mesh,
+            P(Axis.BATCH, None, None, None),  # type: ignore[no-untyped-call]
+        )
+        cache_pad_sharding = NamedSharding(
+            self.mesh,
+            P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+        )
+        replicated_sharding = NamedSharding(
+            self.mesh,
+            P(),  # type: ignore[no-untyped-call]
+        )
+        token_sharding = NamedSharding(
+            self.mesh,
+            P(Axis.BATCH),  # type: ignore[no-untyped-call]
+        )
+        out_sharding = NamedSharding(
+            self.mesh,
+            P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+        )
 
         def constrain_cache(cache: Any) -> Any:
             def constrain_leaf(x: Any) -> Any:
                 if not isinstance(x, jax.Array):
                     return x
                 if x.ndim == 4:
-                    return jax.lax.with_sharding_constraint(
+                    return jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
                         x,
-                        P(Axis.BATCH, None, Axis.SHARD, None),  # type: ignore[no-untyped-call]
+                        cache_kv_sharding,
                     )
                 if x.ndim == 2:
-                    return jax.lax.with_sharding_constraint(
+                    return jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
                         x,
-                        P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+                        cache_pad_sharding,
                     )
                 if x.ndim == 0:
-                    return jax.lax.with_sharding_constraint(
+                    return jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
                         x,
-                        P(),  # type: ignore[no-untyped-call]
+                        replicated_sharding,
                     )
                 return x
 
@@ -438,17 +458,17 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         # Keep batch-shaped scan carry values batch-sharded. Replicating these
         # inside the decode scan can force cross-device traffic every step.
-        first_token = jax.lax.with_sharding_constraint(
+        first_token = jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
             first_token,
-            P(Axis.BATCH),  # type: ignore[no-untyped-call]
+            token_sharding,
         )
-        out_buf = jax.lax.with_sharding_constraint(
+        out_buf = jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
             out_buf,
-            P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+            out_sharding,
         )
-        key = jax.lax.with_sharding_constraint(
+        key = jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
             key,
-            P(),  # type: ignore[no-untyped-call]
+            replicated_sharding,
         )
 
         return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
