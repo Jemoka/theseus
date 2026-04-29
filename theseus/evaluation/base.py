@@ -508,8 +508,10 @@ class RolloutEvaluation(Evaluation):
         results = multihost_utils.process_allgather(results, tiled=True)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
+        logger.debug("HHIIIII Im about to device_get")
         results_np = np.asarray(results).reshape(-1, results.shape[-1])
         results_list = results_np.tolist()
+        logger.debug("HHIIIII Im done to device_getting")
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
