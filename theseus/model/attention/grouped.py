@@ -142,13 +142,12 @@ class GroupedSelfAttention(SelfAttention):
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
 
-        # Cache compact GQA KV heads, then repeat only for attention. Caching
-        # repeated heads makes the decode scan carry n_rep times larger.
+        # Cache compact GQA KV heads. Attention handles grouped query heads
+        # directly so we do not materialize repeated K/V or reshape a sharded
+        # KV-head axis together with an unsharded repeat axis.
         k, v, cache_idx = self._cached_kv(
             k, v, padding_mask=padding_mask, cache_max_len=cache_max_len
         )
-        k = self._repeat_kv(k)
-        v = self._repeat_kv(v)
 
         T_kv = k.shape[1]
         mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
@@ -199,22 +198,25 @@ class GroupedSelfAttention(SelfAttention):
         b = q.shape[0]
         t_q = q.shape[1]
         t_kv = k.shape[1]
-        qh = q.transpose(0, 2, 1, 3).astype(self._activation_dtype)
+        kvh = k.shape[2]
+        qh = q.reshape(b, t_q, kvh, self.n_rep, self.head_dim)
+        qh = qh.transpose(0, 2, 3, 1, 4).astype(self._activation_dtype)
         kh = k.transpose(0, 2, 1, 3).astype(self._activation_dtype)
         vh = v.transpose(0, 2, 1, 3).astype(self._activation_dtype)
 
-        scores = jnp.einsum("bhtd,bhTd->bhtT", qh, kh)
+        scores = jnp.einsum("bkntd,bkTd->bkntT", qh, kh)
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)
 
         if mask is not None:
             bias = jnp.where(
-                jnp.broadcast_to(mask, (b, 1, t_q, t_kv)), 0.0, -1e9
+                jnp.broadcast_to(mask, (b, 1, 1, t_q, t_kv)), 0.0, -1e9
             ).astype(jnp.float32)
             scores = scores + bias
 
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
-        y = jnp.einsum("bhtT,bhTd->bhtd", attn_w, vh.astype(attn_w.dtype))
-        return y.transpose(0, 2, 1, 3)  # back to (B, T_q, H, D)
+        y = jnp.einsum("bkntT,bkTd->bkntd", attn_w, vh.astype(attn_w.dtype))
+        y = y.transpose(0, 3, 1, 2, 4)
+        return y.reshape(b, t_q, kvh * self.n_rep, self.head_dim)
 
     def postprocess_attn(
         self,
