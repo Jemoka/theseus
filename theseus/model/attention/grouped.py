@@ -230,7 +230,6 @@ class GroupedSelfAttention(SelfAttention):
     ) -> jax.Array:
         b = q.shape[0]
         t_q = q.shape[1]
-        t_kv = k.shape[1]
         kvh = k.shape[2]
         qh = q.reshape(b, t_q, kvh, self.n_rep, self.head_dim)
         qh = qh.transpose(0, 2, 3, 1, 4).astype(self._activation_dtype)
@@ -241,9 +240,15 @@ class GroupedSelfAttention(SelfAttention):
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)
 
         if mask is not None:
-            bias = jnp.where(
-                jnp.broadcast_to(mask, (b, 1, 1, t_q, t_kv)), 0.0, -1e9
-            ).astype(jnp.float32)
+            if mask.ndim == 4:
+                mask = mask[:, :, None, :, :]
+            elif mask.ndim == 3:
+                mask = mask[:, None, None, :, :]
+            elif mask.ndim == 2:
+                mask = mask[:, None, None, None, :]
+            bias = jnp.where(jnp.broadcast_to(mask, scores.shape), 0.0, -1e9).astype(
+                jnp.float32
+            )
             scores = scores + bias
 
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
