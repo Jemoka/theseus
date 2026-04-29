@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, List
 
-import jax
 from loguru import logger
 
 from theseus.config import field
@@ -30,7 +29,6 @@ class Chat(InferenceJob[ChatConfig, GPT]):
 
     def run(self) -> None:
         tok = get_tokenizer()
-        key = jax.random.PRNGKey(42)
 
         max_new = self.args.max_new_tokens
         temp = self.args.temperature
@@ -44,6 +42,8 @@ class Chat(InferenceJob[ChatConfig, GPT]):
         )
         print("\n--- scratchbubbles chat (ctrl-c to quit) ---\n")
 
+        eot = tok.eot_token
+
         while True:
             try:
                 prompt = input("> ")
@@ -54,25 +54,15 @@ class Chat(InferenceJob[ChatConfig, GPT]):
             if not prompt.strip():
                 continue
 
-            ids = tok.encode(prompt)
-            xs, masks = self.pad([ids])
-            prompt_len = xs.shape[-1]
-            total_tokens = min(prompt_len + max_new, self.block_size)
-
-            key, subkey = jax.random.split(key)
-            result = self._autoregress(
-                self.state,
-                subkey,
-                xs,
-                masks,
-                total_tokens,
-                temp,
-                top_p,
+            [gen_ids] = self.rollout(
+                [prompt],
+                tok,
+                max_new_tokens=max_new,
+                temperature=temp,
+                top_p=top_p,
+                return_type="output_indices",
             )
 
-            gen_ids = result[0, prompt_len:].tolist()
-            # strip trailing eot
-            eot = tok.eot_token
             if eot in gen_ids:
                 gen_ids = gen_ids[: gen_ids.index(eot)]
 

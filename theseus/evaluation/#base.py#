@@ -17,7 +17,7 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Tuple, List, Optional, Union, Generic, Literal, TYPE_CHECKING
+from typing import Any, Tuple, List, Optional, Union, Generic, TYPE_CHECKING
 
 import numpy as np
 
@@ -292,7 +292,7 @@ class RolloutEvaluation(Evaluation):
             max_prompt_length=prompt_max,
             temperature=temperature,
             top_p=top_p,
-            chunk_size=chunk_size,
+            chunk_size=chunk_size,lso d
             return_type="raw_indices",
         )
 
@@ -310,9 +310,7 @@ class RolloutEvaluation(Evaluation):
                 reduce=reduce,
             )
         else:
-            score = (
-                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
-            )
+            score = np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
 
         score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
         score = np.asarray(score) if reduce == "none" else float(score)
@@ -1202,30 +1200,20 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate, jax.Array]],
+        inputs: List[Union[str, ChatTemplate]],
         encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
-        max_prompt_length: Optional[int] = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
-        return_type: Literal[
-            "decoded",
-            "indices",
-            "output_decoded",
-            "output_indices",
-            "raw_indices",
-        ] = "decoded",
-    ) -> Union[List[Union[str, ChatTemplate]], List[str], List[List[int]]]:
+    ) -> List[Union[str, ChatTemplate]]:
         return super().rollout(
             inputs,
             encoding if encoding is not None else self.encoding,
             max_new_tokens=max_new_tokens,
-            max_prompt_length=max_prompt_length,
             temperature=temperature,
             top_p=top_p,
             chunk_size=chunk_size,
-            return_type=return_type,
         )
 
     def evaluate(

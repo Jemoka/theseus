@@ -10,11 +10,13 @@ from typing import (
     Any,
     Tuple,
     Generic,
+    Literal,
     TypeVar,
     Optional,
     List,
     Union,
     TYPE_CHECKING,
+    cast,
 )
 from typing_extensions import Self
 
@@ -25,6 +27,7 @@ from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.experimental import multihost_utils
 from flax.training import train_state
 import flax
+from loguru import logger
 
 
 from theseus.model.module import Module
@@ -146,6 +149,9 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         """Return a params pytree (with sharding) for checkpoint restoration."""
         key = jax.random.PRNGKey(0)
         dummy_input = jnp.zeros((1, block_size), dtype=jnp.int32)
+        logger.debug(
+            "INFERENCE | init template params dummy_input={}", dummy_input.shape
+        )
         return model.init(key, dummy_input)["params"]
 
     @classmethod
@@ -169,6 +175,13 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         job.block_size = trainer.args.block_size
         job.model = trainer.model
 
+        logger.debug(
+            "INFERENCE | from_trainer replicas={} local_replicas={} per_device_batch_size={} block_size={}",
+            job.replicas,
+            job.local_replicas,
+            job.per_device_batch_size,
+            job.block_size,
+        )
         return job
 
     def restore_from_path(self, rel_path: str | Path) -> None:
@@ -182,6 +195,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         assert cfg is not None, (
             "restore_from_path must be called within a configuration() context"
         )
+        logger.debug("INFERENCE | restore_from_path path={}", rel_path)
 
         # Initialize model from cls.MODEL (configure hydrates from OmegaConf)
         model = configure(self.MODEL)
@@ -194,6 +208,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         self.mesh = self.spec.topology.mesh
         self.replicas = self.spec.topology.replicas
         self.local_replicas = self.spec.topology.local_replicas
+        logger.debug(
+            "INFERENCE | restore topology replicas={} local_replicas={} block_size={}",
+            self.replicas,
+            self.local_replicas,
+            cfg.architecture.block_size,
+        )
 
         # Build a params-only template for checkpoint restoration.
         # We avoid building a full TrainState because the on-disk checkpoint
@@ -223,6 +243,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         restored, metadata = self.get_tree_and_metadata_from_path(
             rel_path, params_tree, partial=True
         )
+        logger.debug("INFERENCE | restored checkpoint metadata={}", metadata)
 
         # Reconstruct TrainState with restored params
         restored_dict: dict[str, Any] = restored  # type: ignore[assignment]
@@ -231,6 +252,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         self.per_device_batch_size = cfg.training.per_device_batch_size
         self.block_size = cfg.architecture.block_size
+        logger.debug(
+            "INFERENCE | restore done per_device_batch_size={} block_size={}",
+            self.per_device_batch_size,
+            self.block_size,
+        )
 
     @staticmethod
     def pad(
@@ -254,7 +280,16 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         padded_masks = [
             ([False] * (max_len - len(s))) + [True for _ in s] for s in seqs
         ]
-        return jnp.array(padded_seqs), jnp.array(padded_masks)
+        padded = jnp.array(padded_seqs)
+        masks = jnp.array(padded_masks)
+        logger.debug(
+            "INFERENCE | pad seqs={} max_len={} padded={} masks={}",
+            len(seqs),
+            max_len,
+            padded.shape,
+            masks.shape,
+        )
+        return padded, masks
 
     def _autoregress(
         self,
@@ -381,107 +416,230 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         out_buf = jax.device_put(out_buf, replicated)
         key = jax.device_put(key, replicated)
 
-        return jax.jit(  # type: ignore[no-any-return]
-            _run_scan,
-            in_shardings=(
-                self.state_sharding,
-                None,
-                replicated,
-                replicated,
-                replicated,
-            ),
-        )(state, cache, first_token, out_buf, key)
+        return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate]],
-        encoding: Tokenizer,
+        inputs: List[Union[str, ChatTemplate, jax.Array]],
+        encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
+        max_prompt_length: Optional[int] = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
-    ) -> List[Union[str, ChatTemplate]]:
+        return_type: Literal[
+            "decoded",
+            "indices",
+            "output_decoded",
+            "output_indices",
+            "raw_indices",
+        ] = "decoded",
+    ) -> Union[List[Union[str, ChatTemplate]], List[str], List[List[int]]]:
         """Autoregressive rollout of the language model.
 
+
         Args:
-            inputs: List of raw strings or ChatTemplates to complete.
-            encoding: Tokenizer for encoding/decoding.
-            max_new_tokens: Maximum number of new tokens to generate. Defaults to block_size.
+            inputs: List of raw strings, ChatTemplates, or pre-tokenized 1D
+                jax arrays of token ids.
+            encoding: Tokenizer for encoding/decoding. Required when any input
+                is a string/ChatTemplate or when ``return_type`` is one of the
+                decoded variants. May be omitted when all inputs are
+                pre-tokenized arrays AND ``return_type`` is an indices variant.
+            max_new_tokens: Maximum number of new tokens to generate. Defaults
+                to ``block_size - max_prompt_length`` (or ``block_size // 2``
+                if ``max_prompt_length`` is also unset).
+            max_prompt_length: Length to which prompts are padded. Defaults to
+                ``block_size - max_new_tokens``. Inputs longer than this raise.
+                Holding this fixed across calls keeps the JIT trace stable —
+                varying it triggers recompiles.
             temperature: Sampling temperature (0.0 for greedy).
             top_p: Nucleus sampling threshold.
             chunk_size: Number of batches per JIT chunk.
 
-        Returns:
-            List of completed strings or ChatTemplates matching input types.
-        """
-        if max_new_tokens is None:
-            max_new_tokens = self.block_size
 
-        # Track which inputs are ChatTemplates for decoding back
+        return_type:
+            - "decoded": full prompt + generated tokens, decoded, with left-pad stripped.
+            - "indices": full prompt + generated tokens as ids, with left-pad stripped.
+            - "output_decoded": generated portion only, decoded.
+            - "output_indices": generated portion only as ids.
+            - "raw_indices": full fixed-shape rows, left padding preserved.
+            Shape is logically (N, max_prompt_length + max_new_tokens).
+        """
+        logger.debug(
+            "INFERENCE | rollout start inputs={} max_new_tokens={} max_prompt_length={} temperature={} top_p={} chunk_size={} return_type={}",
+            len(inputs),
+            max_new_tokens,
+            max_prompt_length,
+            temperature,
+            top_p,
+            chunk_size,
+            return_type,
+        )
+        valid_modes = (
+            "decoded",
+            "indices",
+            "output_decoded",
+            "output_indices",
+            "raw_indices",
+        )
+        if return_type not in valid_modes:
+            raise ValueError(
+                f"return_type must be one of {valid_modes}, got {return_type!r}"
+            )
+
+        needs_decoding = return_type in ("decoded", "output_decoded")
+        has_text_input = any(not isinstance(inp, jax.Array) for inp in inputs)
+        if encoding is None and (needs_decoding or has_text_input):
+            raise ValueError(
+                "encoding is required when return_type is a decoded variant "
+                "or any input is a string/ChatTemplate"
+            )
+
+        if not inputs:
+            logger.debug("INFERENCE | rollout empty inputs")
+            return []
+
+        # Resolve static length budget.
+        if max_new_tokens is None and max_prompt_length is None:
+            max_new_tokens = self.block_size // 2
+            max_prompt_length = self.block_size - max_new_tokens
+        elif max_new_tokens is None:
+            assert max_prompt_length is not None
+            max_new_tokens = self.block_size - max_prompt_length
+        elif max_prompt_length is None:
+            max_prompt_length = self.block_size - max_new_tokens
+
+        if max_new_tokens <= 0 or max_prompt_length <= 0:
+            raise ValueError(
+                f"max_new_tokens ({max_new_tokens}) and max_prompt_length "
+                f"({max_prompt_length}) must both be positive"
+            )
+        if max_new_tokens + max_prompt_length > self.block_size:
+            raise ValueError(
+                f"max_new_tokens ({max_new_tokens}) + max_prompt_length "
+                f"({max_prompt_length}) exceeds block_size ({self.block_size})"
+            )
+        logger.debug(
+            "INFERENCE | rollout lengths max_prompt_length={} max_new_tokens={} block_size={}",
+            max_prompt_length,
+            max_new_tokens,
+            self.block_size,
+        )
+
         is_chat = [isinstance(inp, list) for inp in inputs]
 
-        # Encode all inputs to strings first
-        text_inputs: List[str] = []
-        for inp in inputs:
-            if isinstance(inp, list):
-                # ChatTemplate: format with generation prompt, get text back
-                text_inputs.append(
-                    encode_chat_template(inp, encoding, prompt=True, tokenize=False)
-                )
-            else:
-                text_inputs.append(inp)
-
-        N = len(text_inputs)
+        N = len(inputs)
         batch_unit = self.replicas * self.per_device_batch_size
 
-        # Pad count up to a multiple of batch_unit so nothing is dropped
         padded_N = ((N + batch_unit - 1) // batch_unit) * batch_unit
         n_pad = padded_N - N
         if n_pad > 0:
-            text_inputs = text_inputs + [text_inputs[-1]] * n_pad
+            inputs = inputs + [inputs[-1]] * n_pad
+        logger.debug(
+            "INFERENCE | rollout batch N={} padded_N={} n_pad={} batch_unit={}",
+            N,
+            padded_N,
+            n_pad,
+            batch_unit,
+        )
 
-        # Tokenize, left-pad, and build masks
+        # Tokenize, left-pad, and build masks.
         multihost_utils.sync_global_devices("rollout:pre")
         if jax.process_index() == 0:
-            encoded = encoding.encode_batch(text_inputs, allowed_special="all")
-            # Remember per-sequence token lengths for stripping left-pad later
+            encoded: List[List[int]] = [[] for _ in inputs]
+            str_buf: List[str] = []
+            str_idx: List[int] = []
+
+            for i, inp in enumerate(inputs):
+                if isinstance(inp, jax.Array):
+                    encoded[i] = [int(x) for x in inp.tolist()]
+                elif isinstance(inp, list):
+                    assert encoding is not None
+                    str_buf.append(
+                        encode_chat_template(inp, encoding, prompt=True, tokenize=False)
+                    )
+                    str_idx.append(i)
+                else:
+                    str_buf.append(inp)
+                    str_idx.append(i)
+
+            if str_buf:
+                assert encoding is not None
+                batch_encoded = encoding.encode_batch(str_buf, allowed_special="all")
+                for i, ids in zip(str_idx, batch_encoded):
+                    encoded[i] = ids
+
+            longest = max(len(seq) for seq in encoded)
+            if longest > max_prompt_length:
+                raise ValueError(
+                    f"input length {longest} exceeds max_prompt_length="
+                    f"{max_prompt_length}; truncate prompts before calling rollout"
+                )
+
             prompt_lengths = [len(seq) for seq in encoded]
-            xs, masks = self.pad(encoded)
+            xs, masks = self.pad(encoded, pad_to=max_prompt_length)
+            logger.debug(
+                "INFERENCE | rollout encoded longest={} xs={} masks={}",
+                longest,
+                xs.shape,
+                masks.shape,
+            )
         else:
             prompt_lengths = None
             xs, masks = None, None
+
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("rollout:post_broadcast")
+        logger.debug(
+            "INFERENCE | rollout broadcast xs={} masks={}",
+            xs.shape,
+            masks.shape,
+        )
 
-        # Distribute across processes
+        # Distribute across processes.
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
         pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
+        logger.debug(
+            "INFERENCE | rollout local split process={}/{} xs={} masks={}",
+            jax.process_index(),
+            jax.process_count(),
+            xs.shape,
+            masks.shape,
+        )
 
-        # Reshape into (accumulate_steps, local_batch, T)
         local_batch = self.local_replicas * self.per_device_batch_size
         xs = xs.reshape(-1, local_batch, xs.shape[-1])
         masks = masks.reshape(-1, local_batch, masks.shape[-1])
+        logger.debug(
+            "INFERENCE | rollout reshaped xs={} masks={} local_batch={}",
+            xs.shape,
+            masks.shape,
+            local_batch,
+        )
 
-        # Create global arrays with sharding
         data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
         xs = multihost_utils.host_local_array_to_global_array(xs, self.mesh, data_pspec)
         masks = multihost_utils.host_local_array_to_global_array(
             masks, self.mesh, data_pspec
         )
+        logger.debug(
+            "INFERENCE | rollout global xs={} masks={}",
+            xs.shape,
+            masks.shape,
+        )
 
-        # PRNG key
         self.key, key = jax.random.split(self.key)
+        total_tokens = max_prompt_length + max_new_tokens
+        logger.debug("INFERENCE | rollout total_tokens={}", total_tokens)
 
-        # Compute total tokens: prompt length + new tokens, capped by block_size
-        max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
-        total_tokens = min(max_prompt_length + max_new_tokens, self.block_size)
-
-        # Chunked autoregressive generation (same pattern as RolloutEvaluation)
         def evaluate_chunk(
-            state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
+            state: Any,
+            xs_chunk: Any,
+            masks_chunk: Any,
+            key: Any,
         ) -> Any:
             def reduce(_: Any, batch: Any) -> Any:
                 x_batch, mask_batch = batch
@@ -508,43 +666,79 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         num_batches = xs.shape[0]
         all_results = []
+
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
+            logger.debug(
+                "INFERENCE | rollout chunk {}:{} xs_chunk={} masks_chunk={}",
+                chunk_start,
+                chunk_end,
+                xs[chunk_start:chunk_end].shape,
+                masks[chunk_start:chunk_end].shape,
+            )
             chunk_results = jitted_chunk(
                 self.state,
                 xs[chunk_start:chunk_end],
                 masks[chunk_start:chunk_end],
                 key,
             )
+            logger.debug(
+                "INFERENCE | rollout chunk results={}",
+                chunk_results.shape,
+            )
             all_results.append(chunk_results)
 
         results = jnp.concatenate(all_results, axis=0)
+        logger.debug("INFERENCE | rollout concat results={}", results.shape)
 
-        # Gather across hosts
         multihost_utils.sync_global_devices("rollout:pre_gather")
         results = multihost_utils.process_allgather(results)
         multihost_utils.sync_global_devices("rollout:post_gather")
+        logger.debug("INFERENCE | rollout gathered results={}", results.shape)
 
-        # Flatten and strip left-pad tokens before decoding
         results = jnp.reshape(results, (-1, results.shape[-1]))
         results_list = results.tolist()
+        logger.debug(
+            "INFERENCE | rollout flattened results={} rows={}",
+            results.shape,
+            len(results_list),
+        )
+
+        # Keep fixed-shape rows and preserve left-padding. This is what eval wants
+        # for action_mask / padding_mask construction.
+        if return_type == "raw_indices":
+            logger.debug("INFERENCE | rollout return raw_indices rows={}", N)
+            return results_list[:N]
+
+        output_only = return_type in ("output_decoded", "output_indices")
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
-            # Input was left-padded to max_prompt_length; each row starts with
-            # (max_prompt_length - prompt_len_i) pad tokens followed by prompt
-            # and generated tokens.
-            max_prompt_len = max(prompt_lengths)
-            stripped = [
-                row[max_prompt_len - prompt_lengths[i] :]
-                for i, row in enumerate(results_list[:N])
-            ]
+
+            if output_only:
+                out_rows = [row[max_prompt_length:] for row in results_list[:N]]
+            else:
+                out_rows = [
+                    row[max_prompt_length - prompt_lengths[i] :]
+                    for i, row in enumerate(results_list[:N])
+                ]
         else:
-            stripped = [row for row in results_list[:N]]
+            out_rows = [row for row in results_list[:N]]
 
-        decoded = encoding.decode_batch(stripped)
+        if return_type in ("indices", "output_indices"):
+            logger.debug("INFERENCE | rollout return indices rows={}", len(out_rows))
+            return out_rows
 
-        # Convert back to original types
+        assert encoding is not None
+        decoded = encoding.decode_batch(out_rows)
+        logger.debug("INFERENCE | rollout decoded rows={}", len(decoded))
+
+        if return_type == "output_decoded":
+            logger.debug(
+                "INFERENCE | rollout return output_decoded rows={}", len(decoded)
+            )
+            return decoded
+
         outputs: List[Union[str, ChatTemplate]] = []
         for i, text in enumerate(decoded):
             if is_chat[i]:
@@ -552,4 +746,5 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             else:
                 outputs.append(text)
 
+        logger.debug("INFERENCE | rollout return decoded rows={}", len(outputs))
         return outputs
