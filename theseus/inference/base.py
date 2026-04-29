@@ -79,6 +79,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
     per_device_batch_size: int
     block_size: int
     model: M
+    _rollout_batch_jit: Any
+    _rollout_batch_jit_key: tuple[int, float, float] | None
 
     @property
     def done(self) -> bool:
@@ -476,6 +478,50 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
 
+    def _get_rollout_batch_jit(
+        self,
+        total_tokens: int,
+        temperature: float,
+        top_p: float,
+        batch_sharding: NamedSharding,
+    ) -> Any:
+        """Return a stable jitted rollout callable for this static decode shape."""
+        cache_key = (int(total_tokens), float(temperature), float(top_p))
+        if getattr(self, "_rollout_batch_jit_key", None) == cache_key:
+            return self._rollout_batch_jit
+
+        def evaluate_batch(
+            state: Any,
+            x_batch: Any,
+            mask_batch: Any,
+            key: Any,
+        ) -> Any:
+            return self._autoregress(
+                state,
+                key,
+                x_batch,
+                mask_batch,
+                total_tokens,
+                temperature,
+                top_p,
+            )
+
+        logger.debug(
+            "INFERENCE | rollout creating batch jit total_tokens={} temperature={} top_p={} batch_sharding={}",
+            total_tokens,
+            temperature,
+            top_p,
+            batch_sharding,
+        )
+        jitted_batch = jax.jit(
+            evaluate_batch,
+            in_shardings=(self.state_sharding, batch_sharding, batch_sharding, None),
+            out_shardings=batch_sharding,
+        )
+        self._rollout_batch_jit = jitted_batch
+        self._rollout_batch_jit_key = cache_key
+        return jitted_batch
+
     def rollout(
         self,
         inputs: List[Union[str, ChatTemplate, jax.Array, List[int]]],
@@ -717,28 +763,13 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         total_tokens = max_prompt_length + max_new_tokens
         logger.debug("INFERENCE | rollout total_tokens={}", total_tokens)
 
-        def evaluate_batch(
-            state: Any,
-            x_batch: Any,
-            mask_batch: Any,
-            key: Any,
-        ) -> Any:
-            return self._autoregress(
-                state,
-                key,
-                x_batch,
-                mask_batch,
-                total_tokens,
-                temperature,
-                top_p,
-            )
-
         batch_pspec = P(Axis.BATCH, None)  # type: ignore[no-untyped-call]
         batch_sharding = NamedSharding(self.mesh, batch_pspec)
-        jitted_batch = jax.jit(
-            evaluate_batch,
-            in_shardings=(self.state_sharding, batch_sharding, batch_sharding, None),
-            out_shardings=batch_sharding,
+        jitted_batch = self._get_rollout_batch_jit(
+            total_tokens,
+            temperature,
+            top_p,
+            batch_sharding,
         )
 
         num_batches = xs.shape[0]
