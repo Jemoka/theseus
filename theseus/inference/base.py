@@ -79,8 +79,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
     per_device_batch_size: int
     block_size: int
     model: M
-    _rollout_batch_jit: Any
-    _rollout_batch_jit_key: tuple[int, float, float] | None
+    _rollout_chunk_jit: Any
+    _rollout_chunk_jit_key: tuple[int, float, float] | None
 
     @property
     def done(self) -> bool:
@@ -285,13 +285,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         ]
         padded = jnp.array(padded_seqs)
         masks = jnp.array(padded_masks)
-        logger.debug(
-            "INFERENCE | pad seqs={} max_len={} padded={} masks={}",
-            len(seqs),
-            max_len,
-            padded.shape,
-            masks.shape,
-        )
         return padded, masks
 
     def _autoregress(
@@ -478,49 +471,56 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
 
-    def _get_rollout_batch_jit(
+    def _get_rollout_chunk_jit(
         self,
         total_tokens: int,
         temperature: float,
         top_p: float,
-        batch_sharding: NamedSharding,
+        chunk_sharding: NamedSharding,
     ) -> Any:
         """Return a stable jitted rollout callable for this static decode shape."""
         cache_key = (int(total_tokens), float(temperature), float(top_p))
-        if getattr(self, "_rollout_batch_jit_key", None) == cache_key:
-            return self._rollout_batch_jit
+        if getattr(self, "_rollout_chunk_jit_key", None) == cache_key:
+            return self._rollout_chunk_jit
 
-        def evaluate_batch(
+        def evaluate_chunk(
             state: Any,
-            x_batch: Any,
-            mask_batch: Any,
+            xs_chunk: Any,
+            masks_chunk: Any,
             key: Any,
         ) -> Any:
-            return self._autoregress(
-                state,
-                key,
-                x_batch,
-                mask_batch,
-                total_tokens,
-                temperature,
-                top_p,
-            )
+            def generate_one(carry: Any, batch: Any) -> tuple[Any, Any]:
+                x_batch, mask_batch = batch
+                carry, batch_key = jax.random.split(carry)
+                results = self._autoregress(
+                    state,
+                    batch_key,
+                    x_batch,
+                    mask_batch,
+                    total_tokens,
+                    temperature,
+                    top_p,
+                )
+                return carry, results
+
+            _, rollouts = jax.lax.scan(generate_one, key, (xs_chunk, masks_chunk))
+            return rollouts
 
         logger.debug(
-            "INFERENCE | rollout creating batch jit total_tokens={} temperature={} top_p={} batch_sharding={}",
+            "INFERENCE | rollout creating chunk jit total_tokens={} temperature={} top_p={} chunk_sharding={}",
             total_tokens,
             temperature,
             top_p,
-            batch_sharding,
+            chunk_sharding,
         )
-        jitted_batch = jax.jit(
-            evaluate_batch,
-            in_shardings=(self.state_sharding, batch_sharding, batch_sharding, None),
-            out_shardings=batch_sharding,
+        jitted_chunk = jax.jit(
+            evaluate_chunk,
+            in_shardings=(self.state_sharding, chunk_sharding, chunk_sharding, None),
+            out_shardings=chunk_sharding,
         )
-        self._rollout_batch_jit = jitted_batch
-        self._rollout_batch_jit_key = cache_key
-        return jitted_batch
+        self._rollout_chunk_jit = jitted_chunk
+        self._rollout_chunk_jit_key = cache_key
+        return jitted_chunk
 
     def rollout(
         self,
@@ -630,13 +630,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 f"max_new_tokens ({max_new_tokens}) + max_prompt_length "
                 f"({max_prompt_length}) exceeds block_size ({self.block_size})"
             )
-        logger.debug(
-            "INFERENCE | rollout lengths max_prompt_length={} max_new_tokens={} block_size={}",
-            max_prompt_length,
-            max_new_tokens,
-            self.block_size,
-        )
-
         is_chat = [
             isinstance(inp, list) and all(isinstance(turn, ChatTurn) for turn in inp)
             for inp in inputs
@@ -649,14 +642,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         n_pad = padded_N - N
         if n_pad > 0:
             inputs = inputs + [inputs[-1]] * n_pad
-        logger.debug(
-            "INFERENCE | rollout batch N={} padded_N={} n_pad={} batch_unit={}",
-            N,
-            padded_N,
-            n_pad,
-            batch_unit,
-        )
-
         # Tokenize, left-pad, and build masks.
         multihost_utils.sync_global_devices("rollout:pre")
         if jax.process_index() == 0:
@@ -704,72 +689,51 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
             prompt_lengths = [len(seq) for seq in encoded]
             xs, masks = self.pad(encoded, pad_to=max_prompt_length)
-            logger.debug(
-                "INFERENCE | rollout encoded longest={} xs={} masks={}",
-                longest,
-                xs.shape,
-                masks.shape,
-            )
         else:
+            longest = 0
             prompt_lengths = None
             xs, masks = None, None
 
         xs = multihost_utils.broadcast_one_to_all(xs)
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("rollout:post_broadcast")
-        logger.debug(
-            "INFERENCE | rollout broadcast xs={} masks={}",
-            xs.shape,
-            masks.shape,
-        )
 
         # Distribute across processes.
         pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
         pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
-        logger.debug(
-            "INFERENCE | rollout local split process={}/{} xs={} masks={}",
-            jax.process_index(),
-            jax.process_count(),
-            xs.shape,
-            masks.shape,
-        )
 
         local_batch = self.local_replicas * self.per_device_batch_size
         xs = xs.reshape(-1, local_batch, xs.shape[-1])
         masks = masks.reshape(-1, local_batch, masks.shape[-1])
-        logger.debug(
-            "INFERENCE | rollout reshaped xs={} masks={} local_batch={}",
-            xs.shape,
-            masks.shape,
-            local_batch,
-        )
 
         data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
         xs = multihost_utils.host_local_array_to_global_array(xs, self.mesh, data_pspec)
         masks = multihost_utils.host_local_array_to_global_array(
             masks, self.mesh, data_pspec
         )
-        logger.debug(
-            "INFERENCE | rollout global xs={} masks={} xs_sharding={} masks_sharding={}",
-            xs.shape,
-            masks.shape,
-            xs.sharding,
-            masks.sharding,
-        )
 
         self.key, key = jax.random.split(self.key)
         total_tokens = max_prompt_length + max_new_tokens
-        logger.debug("INFERENCE | rollout total_tokens={}", total_tokens)
+        logger.debug(
+            "INFERENCE | rollout prepared N={} padded_N={} longest={} input={} global={} total_tokens={} sharding={}",
+            N,
+            padded_N,
+            longest,
+            (padded_N, max_prompt_length),
+            xs.shape,
+            total_tokens,
+            xs.sharding,
+        )
 
-        batch_pspec = P(Axis.BATCH, None)  # type: ignore[no-untyped-call]
-        batch_sharding = NamedSharding(self.mesh, batch_pspec)
-        jitted_batch = self._get_rollout_batch_jit(
+        chunk_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
+        chunk_sharding = NamedSharding(self.mesh, chunk_pspec)
+        jitted_chunk = self._get_rollout_chunk_jit(
             total_tokens,
             temperature,
             top_p,
-            batch_sharding,
+            chunk_sharding,
         )
 
         num_batches = xs.shape[0]
@@ -778,45 +742,21 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             logger.debug(
-                "INFERENCE | rollout chunk {}:{} xs_chunk={} masks_chunk={}",
+                "INFERENCE | rollout chunk {}:{} shape={}",
                 chunk_start,
                 chunk_end,
                 xs[chunk_start:chunk_end].shape,
-                masks[chunk_start:chunk_end].shape,
             )
             chunk_t0 = time.perf_counter()
-            chunk_results_list = []
-            for batch_idx in range(chunk_start, chunk_end):
-                logger.debug(
-                    "INFERENCE | rollout batch {} x={} mask={}",
-                    batch_idx,
-                    xs[batch_idx].shape,
-                    masks[batch_idx].shape,
-                )
-                batch_results = jitted_batch(
-                    self.state,
-                    xs[batch_idx],
-                    masks[batch_idx],
-                    key,
-                )
-                logger.debug(
-                    "INFERENCE | rollout batch dispatched {} results={}",
-                    batch_idx,
-                    batch_results.shape,
-                )
-                chunk_results_list.append(batch_results[None, ...])
-            chunk_results = jnp.concatenate(chunk_results_list, axis=0)
-            logger.debug(
-                "INFERENCE | rollout chunk dispatched {}:{} results={} dispatch_s={:.3f}",
-                chunk_start,
-                chunk_end,
-                chunk_results.shape,
-                time.perf_counter() - chunk_t0,
+            chunk_results = jitted_chunk(
+                self.state,
+                xs[chunk_start:chunk_end],
+                masks[chunk_start:chunk_end],
+                key,
             )
-            logger.debug("INFERENCE | rollout chunk block_until_ready start")
             chunk_results = jax.block_until_ready(chunk_results)  # type: ignore[no-untyped-call]
             logger.debug(
-                "INFERENCE | rollout chunk ready {}:{} results={} total_s={:.3f}",
+                "INFERENCE | rollout chunk {}:{} ready results={} s={:.3f}",
                 chunk_start,
                 chunk_end,
                 chunk_results.shape,
@@ -826,57 +766,31 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
         concat_t0 = time.perf_counter()
         results = jnp.concatenate(all_results, axis=0)
-        logger.debug(
-            "INFERENCE | rollout concat dispatched results={} dispatch_s={:.3f}",
-            results.shape,
-            time.perf_counter() - concat_t0,
-        )
-        logger.debug("INFERENCE | rollout concat block_until_ready start")
         results = jax.block_until_ready(results)  # type: ignore[no-untyped-call]
         logger.debug(
-            "INFERENCE | rollout concat ready results={} total_s={:.3f}",
+            "INFERENCE | rollout concat ready results={} s={:.3f}",
             results.shape,
             time.perf_counter() - concat_t0,
         )
 
         sync_t0 = time.perf_counter()
-        logger.debug("INFERENCE | rollout pre_gather sync start")
         multihost_utils.sync_global_devices("rollout:pre_gather")
-        logger.debug(
-            "INFERENCE | rollout pre_gather sync done s={:.3f}",
-            time.perf_counter() - sync_t0,
-        )
         gather_t0 = time.perf_counter()
-        logger.debug(
-            "INFERENCE | rollout process_allgather start results={}", results.shape
-        )
         results = multihost_utils.process_allgather(results)
-        logger.debug(
-            "INFERENCE | rollout process_allgather done results={} s={:.3f}",
-            results.shape,
-            time.perf_counter() - gather_t0,
-        )
-        sync_t0 = time.perf_counter()
-        logger.debug("INFERENCE | rollout post_gather sync start")
         multihost_utils.sync_global_devices("rollout:post_gather")
         logger.debug(
-            "INFERENCE | rollout post_gather sync done gathered={} s={:.3f}",
+            "INFERENCE | rollout gather ready results={} sync_s={:.3f} gather_s={:.3f}",
             results.shape,
             time.perf_counter() - sync_t0,
+            time.perf_counter() - gather_t0,
         )
 
         results = jnp.reshape(results, (-1, results.shape[-1]))
         results_list = results.tolist()
-        logger.debug(
-            "INFERENCE | rollout flattened results={} rows={}",
-            results.shape,
-            len(results_list),
-        )
 
         # Keep fixed-shape rows and preserve left-padding. This is what eval wants
         # for action_mask / padding_mask construction.
         if return_type == "raw_indices":
-            logger.debug("INFERENCE | rollout return raw_indices rows={}", N)
             return results_list[:N]
 
         output_only = return_type in ("output_decoded", "output_indices")
@@ -895,17 +809,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             out_rows = [row for row in results_list[:N]]
 
         if return_type in ("indices", "output_indices"):
-            logger.debug("INFERENCE | rollout return indices rows={}", len(out_rows))
             return out_rows
 
         assert encoding is not None
         decoded = encoding.decode_batch(out_rows)
-        logger.debug("INFERENCE | rollout decoded rows={}", len(decoded))
 
         if return_type == "output_decoded":
-            logger.debug(
-                "INFERENCE | rollout return output_decoded rows={}", len(decoded)
-            )
             return decoded
 
         outputs: List[Union[str, ChatTemplate]] = []
@@ -915,5 +824,4 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             else:
                 outputs.append(text)
 
-        logger.debug("INFERENCE | rollout return decoded rows={}", len(outputs))
         return outputs
