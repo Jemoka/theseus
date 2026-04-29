@@ -6,6 +6,7 @@ or loaded from a checkpoint.
 """
 
 from pathlib import Path
+import time
 from typing import (
     Any,
     Tuple,
@@ -648,9 +649,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             masks, self.mesh, data_pspec
         )
         logger.debug(
-            "INFERENCE | rollout global xs={} masks={}",
+            "INFERENCE | rollout global xs={} masks={} xs_sharding={} masks_sharding={}",
             xs.shape,
             masks.shape,
+            xs.sharding,
+            masks.sharding,
         )
 
         self.key, key = jax.random.split(self.key)
@@ -698,6 +701,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 xs[chunk_start:chunk_end].shape,
                 masks[chunk_start:chunk_end].shape,
             )
+            chunk_t0 = time.perf_counter()
             chunk_results = jitted_chunk(
                 self.state,
                 xs[chunk_start:chunk_end],
@@ -705,18 +709,63 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 key,
             )
             logger.debug(
-                "INFERENCE | rollout chunk results={}",
+                "INFERENCE | rollout chunk dispatched {}:{} results={} dispatch_s={:.3f}",
+                chunk_start,
+                chunk_end,
                 chunk_results.shape,
+                time.perf_counter() - chunk_t0,
+            )
+            logger.debug("INFERENCE | rollout chunk block_until_ready start")
+            chunk_results = jax.block_until_ready(chunk_results)  # type: ignore[no-untyped-call]
+            logger.debug(
+                "INFERENCE | rollout chunk ready {}:{} results={} total_s={:.3f}",
+                chunk_start,
+                chunk_end,
+                chunk_results.shape,
+                time.perf_counter() - chunk_t0,
             )
             all_results.append(chunk_results)
 
+        concat_t0 = time.perf_counter()
         results = jnp.concatenate(all_results, axis=0)
-        logger.debug("INFERENCE | rollout concat results={}", results.shape)
+        logger.debug(
+            "INFERENCE | rollout concat dispatched results={} dispatch_s={:.3f}",
+            results.shape,
+            time.perf_counter() - concat_t0,
+        )
+        logger.debug("INFERENCE | rollout concat block_until_ready start")
+        results = jax.block_until_ready(results)  # type: ignore[no-untyped-call]
+        logger.debug(
+            "INFERENCE | rollout concat ready results={} total_s={:.3f}",
+            results.shape,
+            time.perf_counter() - concat_t0,
+        )
 
+        sync_t0 = time.perf_counter()
+        logger.debug("INFERENCE | rollout pre_gather sync start")
         multihost_utils.sync_global_devices("rollout:pre_gather")
+        logger.debug(
+            "INFERENCE | rollout pre_gather sync done s={:.3f}",
+            time.perf_counter() - sync_t0,
+        )
+        gather_t0 = time.perf_counter()
+        logger.debug(
+            "INFERENCE | rollout process_allgather start results={}", results.shape
+        )
         results = multihost_utils.process_allgather(results)
+        logger.debug(
+            "INFERENCE | rollout process_allgather done results={} s={:.3f}",
+            results.shape,
+            time.perf_counter() - gather_t0,
+        )
+        sync_t0 = time.perf_counter()
+        logger.debug("INFERENCE | rollout post_gather sync start")
         multihost_utils.sync_global_devices("rollout:post_gather")
-        logger.debug("INFERENCE | rollout gathered results={}", results.shape)
+        logger.debug(
+            "INFERENCE | rollout post_gather sync done gathered={} s={:.3f}",
+            results.shape,
+            time.perf_counter() - sync_t0,
+        )
 
         results = jnp.reshape(results, (-1, results.shape[-1]))
         results_list = results.tolist()
