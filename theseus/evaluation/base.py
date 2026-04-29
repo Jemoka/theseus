@@ -476,6 +476,8 @@ class RolloutEvaluation(Evaluation):
         logger.debug("HHIIIII Im about to concat")
         results = jnp.concatenate(all_results, axis=0)
 
+        results.block_until_ready()
+
         logger.debug("HHIIIII Im about to all_gather")
         # One allgather is enough: every host ends up with the full result.
         multihost_utils.sync_global_devices("eval_gather_all:pre")
