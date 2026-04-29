@@ -91,7 +91,10 @@ class Llama(Module):
         deterministic: bool = False,
     ) -> jax.Array:
         b, t, _ = x.shape
-        positions = jnp.arange(t)
+        if padding_mask is None:
+            positions = jnp.arange(t)
+        else:
+            positions = jnp.maximum(jnp.cumsum(padding_mask, axis=-1) - 1, 0)
         for block in self.blocks:
             x = block(
                 x,

@@ -178,6 +178,22 @@ class SelfAttention(Module):
     # Attention hooks
     # ------------------------------------------------------------------
 
+    def _positions_from_padding(
+        self, length: int, padding_mask: Optional[jax.Array]
+    ) -> jax.Array:
+        if padding_mask is None:
+            return jnp.arange(length)
+        return jnp.maximum(jnp.cumsum(padding_mask, axis=-1) - 1, 0)
+
+    def _cached_positions(self, length: int, cache_index: jax.Array) -> jax.Array:
+        positions = jnp.arange(length) + cache_index
+        if self.has_variable("cache", "cached_padding_mask"):
+            pad: jax.Array = self.get_variable("cache", "cached_padding_mask")
+            cached = jnp.arange(pad.shape[-1]) < cache_index
+            n_pad = jnp.sum(cached & ~pad, axis=-1)
+            positions = positions[None, :] - n_pad[:, None]
+        return positions
+
     def preprocess_qkv(
         self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
@@ -272,7 +288,12 @@ class SelfAttention(Module):
         # For decode steps with cache, inject correct RoPE positions
         if self.has_variable("cache", "cache_index"):
             ci: Any = self.get_variable("cache", "cache_index")
-            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+            kwargs = {**kwargs, "positions": self._cached_positions(T, ci)}
+        elif "positions" not in kwargs:
+            kwargs = {
+                **kwargs,
+                "positions": self._positions_from_padding(T, padding_mask),
+            }
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
         k, v, cache_idx = self._cached_kv(
