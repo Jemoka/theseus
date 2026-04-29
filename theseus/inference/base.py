@@ -315,21 +315,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         B, T_in = input.shape
         forward_fn = self.forward
 
-        # Jit forward so XLA/GSPMD distributes sharded params across devices
-        # rather than all-gathering them onto a single device (which OOMs for
-        # large vocab/embedding matrices). cache_max_len is static — it
-        # determines KV-cache shape allocation inside attention.
-        prefill_fn = jax.jit(
-            forward_fn,
-            static_argnames=("deterministic", "mutable", "cache_max_len"),
-        )
-
         # Step 1: Prefill — initialize cache with full prompt. The cache is
         # sized to ``num_tokens`` (prompt + generated) so attention layers
         # don't allocate the full ``block_size`` they would otherwise reach
         # for; ``cache_max_len`` flows through Module.__call__ → block →
         # attention → _cached_kv. Models without that parameter get None.
-        (prefill_logits, _, _), cache = prefill_fn(
+        (prefill_logits, _, _), cache = forward_fn(
             state,
             state.params,
             (input, None, input_mask),
