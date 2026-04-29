@@ -22,6 +22,41 @@ from theseus.model.masks import (
 )
 
 
+class GroupedOutputProjection(nn.Module):
+    n_embd: int
+    n_kv_head: int
+    n_rep: int
+    head_dim: int
+    use_bias: bool
+    kernel_init: nn.initializers.Initializer
+    param_dtype: Any
+    dtype: Any
+
+    @nn.compact
+    def __call__(self, y: jax.Array) -> jax.Array:
+        kernel_param = self.param(
+            "kernel",
+            nn.with_partitioning(
+                self.kernel_init,
+                (Axes.N_ATTN.value, Axes.N_EMBD.value),
+            ),
+            (self.n_kv_head * self.n_rep * self.head_dim, self.n_embd),
+            self.param_dtype,
+        )
+        kernel = jnp.asarray(kernel_param, self.dtype)
+        kernel = kernel.reshape(self.n_kv_head, self.n_rep, self.head_dim, self.n_embd)
+        out = jnp.einsum("btknd,kndo->bto", y.astype(self.dtype), kernel)
+        if self.use_bias:
+            bias = self.param(
+                "bias",
+                nn.initializers.zeros,
+                (self.n_embd,),
+                self.param_dtype,
+            )
+            out = out + jnp.asarray(bias, self.dtype)
+        return out
+
+
 class GroupedSelfAttention(SelfAttention):
     n_embd: int = field("architecture/n_embd", default=4096)
     n_layers: int = field("architecture/n_layers", default=32)
@@ -83,13 +118,13 @@ class GroupedSelfAttention(SelfAttention):
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
-        self.o_proj = nn.Dense(
-            self.n_embd,
+        self.o_proj = GroupedOutputProjection(
+            n_embd=self.n_embd,
+            n_kv_head=n_kv_head,
+            n_rep=n_rep,
+            head_dim=head_dim,
             use_bias=self.attn_bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=proj_init_std),
-                (Axes.N_ATTN.value, Axes.N_EMBD.value),
-            ),
+            kernel_init=jax.nn.initializers.normal(stddev=proj_init_std),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
@@ -153,8 +188,6 @@ class GroupedSelfAttention(SelfAttention):
         mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
         y = self.attn(q, k, v, mask, **kwargs)
         y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
-
-        y = y.reshape(B, T, C)
         y = self.output_proj(y)
 
         if not deterministic and self.dropout > 0:
@@ -215,8 +248,7 @@ class GroupedSelfAttention(SelfAttention):
 
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
         y = jnp.einsum("bkntT,bkTd->bkntd", attn_w, vh.astype(attn_w.dtype))
-        y = y.transpose(0, 3, 1, 2, 4)
-        return y.reshape(b, t_q, kvh * self.n_rep, self.head_dim)
+        return y.transpose(0, 3, 1, 2, 4)
 
     def postprocess_attn(
         self,
