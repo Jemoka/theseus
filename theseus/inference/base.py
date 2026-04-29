@@ -351,6 +351,29 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         B, T_in = input.shape
         forward_fn = self.forward
 
+        def constrain_cache(cache: Any) -> Any:
+            def constrain_leaf(x: Any) -> Any:
+                if not isinstance(x, jax.Array):
+                    return x
+                if x.ndim == 4:
+                    return jax.lax.with_sharding_constraint(
+                        x,
+                        P(Axis.BATCH, None, Axis.SHARD, None),  # type: ignore[no-untyped-call]
+                    )
+                if x.ndim == 2:
+                    return jax.lax.with_sharding_constraint(
+                        x,
+                        P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+                    )
+                if x.ndim == 0:
+                    return jax.lax.with_sharding_constraint(
+                        x,
+                        P(),  # type: ignore[no-untyped-call]
+                    )
+                return x
+
+            return jax.tree_util.tree_map(constrain_leaf, cache)
+
         # Step 1: Prefill — initialize cache with full prompt. The cache is
         # sized to ``num_tokens`` (prompt + generated) so attention layers
         # don't allocate the full ``block_size`` they would otherwise reach
@@ -364,6 +387,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             mutable=("cache",),
             cache_max_len=num_tokens,
         )
+        cache = constrain_cache(cache)
 
         # Sample the first generated token from the last prompt position
         last_logits = prefill_logits[:, -1, :]
@@ -398,6 +422,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                     extra_variables=cache_state,
                     cache_max_len=num_tokens,
                 )
+                new_cache = constrain_cache(new_cache)
 
                 next_logits = logits[:, -1, :]
                 next_token, key = sample_token(next_logits, key)
@@ -411,12 +436,20 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             )
             return final_out
 
-        # Put non-sharded carry elements onto the mesh (replicated) so jit
-        # can reconcile shardings with the cache that came out of prefill_fn.
-        replicated = NamedSharding(self.mesh, P())  # type: ignore[no-untyped-call]
-        first_token = jax.device_put(first_token, replicated)
-        out_buf = jax.device_put(out_buf, replicated)
-        key = jax.device_put(key, replicated)
+        # Keep batch-shaped scan carry values batch-sharded. Replicating these
+        # inside the decode scan can force cross-device traffic every step.
+        first_token = jax.lax.with_sharding_constraint(
+            first_token,
+            P(Axis.BATCH),  # type: ignore[no-untyped-call]
+        )
+        out_buf = jax.lax.with_sharding_constraint(
+            out_buf,
+            P(Axis.BATCH, None),  # type: ignore[no-untyped-call]
+        )
+        key = jax.lax.with_sharding_constraint(
+            key,
+            P(),  # type: ignore[no-untyped-call]
+        )
 
         return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
 
