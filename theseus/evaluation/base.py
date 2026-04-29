@@ -501,12 +501,15 @@ class RolloutEvaluation(Evaluation):
             all_results.append(chunk_results)
 
         # Concatenate all chunk results — sharded global jax array.
+        logger.debug("HHIIIII Im about to concat")
         results = jnp.concatenate(all_results, axis=0)
 
+        logger.debug("HHIIIII Im about to all_gather")
         # One allgather is enough: every host ends up with the full result.
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         results = multihost_utils.process_allgather(results, tiled=True)
         multihost_utils.sync_global_devices("eval_gather_all:post")
+        logger.debug("HHIIIII Im done to all_gather")
 
         logger.debug("HHIIIII Im about to device_get")
         results_np = np.asarray(results).reshape(-1, results.shape[-1])
