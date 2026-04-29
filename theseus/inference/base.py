@@ -717,33 +717,28 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         total_tokens = max_prompt_length + max_new_tokens
         logger.debug("INFERENCE | rollout total_tokens={}", total_tokens)
 
-        def evaluate_chunk(
+        def evaluate_batch(
             state: Any,
-            xs_chunk: Any,
-            masks_chunk: Any,
+            x_batch: Any,
+            mask_batch: Any,
             key: Any,
         ) -> Any:
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-                results = self._autoregress(
-                    state,
-                    key,
-                    x_batch,
-                    mask_batch,
-                    total_tokens,
-                    temperature,
-                    top_p,
-                )
-                return None, results
+            return self._autoregress(
+                state,
+                key,
+                x_batch,
+                mask_batch,
+                total_tokens,
+                temperature,
+                top_p,
+            )
 
-            _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            return rollouts
-
-        data_sharding = NamedSharding(self.mesh, data_pspec)
-        jitted_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(self.state_sharding, data_sharding, data_sharding, None),
-            out_shardings=data_sharding,
+        batch_pspec = P(Axis.BATCH, None)  # type: ignore[no-untyped-call]
+        batch_sharding = NamedSharding(self.mesh, batch_pspec)
+        jitted_batch = jax.jit(
+            evaluate_batch,
+            in_shardings=(self.state_sharding, batch_sharding, batch_sharding, None),
+            out_shardings=batch_sharding,
         )
 
         num_batches = xs.shape[0]
@@ -759,12 +754,27 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 masks[chunk_start:chunk_end].shape,
             )
             chunk_t0 = time.perf_counter()
-            chunk_results = jitted_chunk(
-                self.state,
-                xs[chunk_start:chunk_end],
-                masks[chunk_start:chunk_end],
-                key,
-            )
+            chunk_results_list = []
+            for batch_idx in range(chunk_start, chunk_end):
+                logger.debug(
+                    "INFERENCE | rollout batch {} x={} mask={}",
+                    batch_idx,
+                    xs[batch_idx].shape,
+                    masks[batch_idx].shape,
+                )
+                batch_results = jitted_batch(
+                    self.state,
+                    xs[batch_idx],
+                    masks[batch_idx],
+                    key,
+                )
+                logger.debug(
+                    "INFERENCE | rollout batch dispatched {} results={}",
+                    batch_idx,
+                    batch_results.shape,
+                )
+                chunk_results_list.append(batch_results[None, ...])
+            chunk_results = jnp.concatenate(chunk_results_list, axis=0)
             logger.debug(
                 "INFERENCE | rollout chunk dispatched {}:{} results={} dispatch_s={:.3f}",
                 chunk_start,
