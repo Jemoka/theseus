@@ -1202,7 +1202,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate, jax.Array]],
+        inputs: List[Union[str, ChatTemplate, jax.Array, List[int]]],
         encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
         max_prompt_length: Optional[int] = None,

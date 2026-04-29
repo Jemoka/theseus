@@ -34,7 +34,7 @@ from theseus.model.module import Module
 from theseus.job import RestoreableJob
 from theseus.base import Axis
 from theseus.config import configure, current_config
-from theseus.data.datasets.dataset import ChatTemplate
+from theseus.data.datasets.dataset import ChatTemplate, ChatTurn
 from theseus.data.tokenizer import Tokenizer, encode_chat_template, decode_chat_template
 
 if TYPE_CHECKING:
@@ -420,7 +420,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate, jax.Array]],
+        inputs: List[Union[str, ChatTemplate, jax.Array, List[int]]],
         encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
         max_prompt_length: Optional[int] = None,
@@ -488,7 +488,14 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             )
 
         needs_decoding = return_type in ("decoded", "output_decoded")
-        has_text_input = any(not isinstance(inp, jax.Array) for inp in inputs)
+        has_text_input = any(
+            isinstance(inp, str)
+            or (
+                isinstance(inp, list)
+                and all(isinstance(turn, ChatTurn) for turn in inp)
+            )
+            for inp in inputs
+        )
         if encoding is None and (needs_decoding or has_text_input):
             raise ValueError(
                 "encoding is required when return_type is a decoded variant "
@@ -526,7 +533,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             self.block_size,
         )
 
-        is_chat = [isinstance(inp, list) for inp in inputs]
+        is_chat = [
+            isinstance(inp, list) and all(isinstance(turn, ChatTurn) for turn in inp)
+            for inp in inputs
+        ]
 
         N = len(inputs)
         batch_unit = self.replicas * self.per_device_batch_size
@@ -553,15 +563,27 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             for i, inp in enumerate(inputs):
                 if isinstance(inp, jax.Array):
                     encoded[i] = [int(x) for x in inp.tolist()]
-                elif isinstance(inp, list):
-                    assert encoding is not None
-                    str_buf.append(
-                        encode_chat_template(inp, encoding, prompt=True, tokenize=False)
-                    )
-                    str_idx.append(i)
-                else:
+                elif isinstance(inp, str):
                     str_buf.append(inp)
                     str_idx.append(i)
+                elif isinstance(inp, list) and all(
+                    isinstance(turn, ChatTurn) for turn in inp
+                ):
+                    assert encoding is not None
+                    chat_inp = cast(ChatTemplate, inp)
+                    str_buf.append(
+                        encode_chat_template(
+                            chat_inp, encoding, prompt=True, tokenize=False
+                        )
+                    )
+                    str_idx.append(i)
+                elif isinstance(inp, list):
+                    token_inp = cast(List[int], inp)
+                    encoded[i] = [int(x) for x in token_inp]
+                elif hasattr(inp, "tolist"):
+                    encoded[i] = [int(x) for x in inp.tolist()]
+                else:
+                    raise TypeError(f"unsupported rollout input type: {type(inp)!r}")
 
             if str_buf:
                 assert encoding is not None
