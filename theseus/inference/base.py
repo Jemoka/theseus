@@ -395,6 +395,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                         n_gen,
                         offset,
                         token_input.shape,
+                        ordered=True,
                     )
 
                 jax.lax.cond(step % 16 == 0, log_decode_step, lambda _: None, None)
@@ -418,6 +419,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             carry = (cache, first_token, out_buf, T_in + 1, key)
             (_, _, final_out, _, _), _ = jax.lax.scan(
                 decode_step, carry, jnp.arange(n_gen)
+            )
+            jax.debug.print(
+                "INFERENCE | decode scan done final_out={}",
+                final_out.shape,
+                ordered=True,
             )
             return final_out
 
@@ -725,6 +731,13 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 chunk_end,
                 chunk_results.shape,
                 time.perf_counter() - chunk_t0,
+            )
+            effects_t0 = time.perf_counter()
+            logger.debug("INFERENCE | rollout effects_barrier start")
+            jax.effects_barrier()  # type: ignore[no-untyped-call]
+            logger.debug(
+                "INFERENCE | rollout effects_barrier done s={:.3f}",
+                time.perf_counter() - effects_t0,
             )
             logger.debug("INFERENCE | rollout chunk block_until_ready start")
             chunk_results = jax.block_until_ready(chunk_results)  # type: ignore[no-untyped-call]
