@@ -384,9 +384,20 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         def _run_scan(
             state: Any, cache: Any, first_token: Any, out_buf: Any, key: Any
         ) -> Any:
-            def decode_step(carry: Any, _step: Any) -> tuple[Any, None]:
+            def decode_step(carry: Any, step: Any) -> tuple[Any, None]:
                 cache_state, last_tok, out, offset, key = carry
                 token_input = last_tok[:, None]  # (B, 1)
+
+                def log_decode_step(_: Any) -> None:
+                    jax.debug.print(
+                        "INFERENCE | decode step {}/{} offset={} token_input={}",
+                        step,
+                        n_gen,
+                        offset,
+                        token_input.shape,
+                    )
+
+                jax.lax.cond(step % 16 == 0, log_decode_step, lambda _: None, None)
 
                 (logits, _, _), new_cache = forward_fn(
                     state,
