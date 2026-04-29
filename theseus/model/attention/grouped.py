@@ -120,9 +120,48 @@ class GroupedSelfAttention(SelfAttention):
         self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
         q, k = self.rope(q, k, t=kwargs.get("positions"))
+        return q, k, v
+
+    @nn.compact
+    def __call__(
+        self,
+        x: jax.Array,
+        padding_mask: Optional[jax.Array] = None,
+        deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
+        **kwargs: Any,
+    ) -> jax.Array:
+        B, T, C = x.shape
+
+        q, k, v = self.project(x)
+
+        # For decode steps with cache, inject correct RoPE positions.
+        if self.has_variable("cache", "cache_index"):
+            ci: Any = self.get_variable("cache", "cache_index")
+            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+
+        q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
+
+        # Cache compact GQA KV heads, then repeat only for attention. Caching
+        # repeated heads makes the decode scan carry n_rep times larger.
+        k, v, cache_idx = self._cached_kv(
+            k, v, padding_mask=padding_mask, cache_max_len=cache_max_len
+        )
         k = self._repeat_kv(k)
         v = self._repeat_kv(v)
-        return q, k, v
+
+        T_kv = k.shape[1]
+        mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
+        y = self.attn(q, k, v, mask, **kwargs)
+        y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
+
+        y = y.reshape(B, T, C)
+        y = self.output_proj(y)
+
+        if not deterministic and self.dropout > 0:
+            y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
+
+        return y
 
     def build_mask(
         self,
