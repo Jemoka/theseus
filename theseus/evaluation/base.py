@@ -463,6 +463,7 @@ class RolloutEvaluation(Evaluation):
                 temperature,
                 top_p,
             )
+            chunk_results.block_until_ready()
             logger.debug(
                 "EVAL | {} | chunk[{}:{}] result={}",
                 eval_data.name,
