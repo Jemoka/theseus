@@ -80,7 +80,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
     block_size: int
     model: M
     _rollout_chunk_jit: Any
-    _rollout_chunk_jit_key: tuple[int, float, float, int] | None
+    _rollout_chunk_jit_key: tuple[int, float, float] | None
 
     @property
     def done(self) -> bool:
@@ -316,6 +316,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         Returns:
             Generated sequences (B, num_tokens) containing prompt + generated ids
         """
+        del eos_token
 
         def top_p_filter_logits(logits: jnp.ndarray, top_p: float) -> jnp.ndarray:
             if top_p >= 1.0:
@@ -416,10 +417,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         out_buf = jnp.zeros((B, num_tokens), dtype=jnp.int32)
         out_buf = out_buf.at[:, :T_in].set(input.astype(jnp.int32))
         out_buf = out_buf.at[:, T_in].set(first_token)
-        done = jnp.zeros((B,), dtype=jnp.bool_)
-        if eos_token is not None:
-            eos = jnp.asarray(eos_token, dtype=jnp.int32)
-            done = first_token == eos
 
         n_gen = num_tokens - T_in - 1  # remaining tokens after the first generated one
         if n_gen <= 0:
@@ -432,12 +429,11 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             state: Any,
             cache: Any,
             first_token: Any,
-            done: Any,
             out_buf: Any,
             key: Any,
         ) -> Any:
             def decode_step(carry: Any, step: Any) -> tuple[Any, None]:
-                cache_state, last_tok, done, out, offset, key = carry
+                cache_state, last_tok, out, offset, key = carry
                 token_input = last_tok[:, None]  # (B, 1)
                 del step
 
@@ -454,16 +450,12 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
 
                 next_logits = logits[:, -1, :]
                 next_token, key = sample_token(next_logits, key)
-                if eos_token is not None:
-                    eos = jnp.asarray(eos_token, dtype=jnp.int32)
-                    next_token = jnp.where(done, eos, next_token)
-                    done = done | (next_token == eos)
 
                 out = out.at[:, offset].set(next_token)
-                return (new_cache, next_token, done, out, offset + 1, key), None
+                return (new_cache, next_token, out, offset + 1, key), None
 
-            carry = (cache, first_token, done, out_buf, T_in + 1, key)
-            (_, _, _, final_out, _, _), _ = jax.lax.scan(
+            carry = (cache, first_token, out_buf, T_in + 1, key)
+            (_, _, final_out, _, _), _ = jax.lax.scan(
                 decode_step, carry, jnp.arange(n_gen)
             )
             return final_out
@@ -478,23 +470,18 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             out_buf,
             out_sharding,
         )
-        done = jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
-            done,
-            token_sharding,
-        )
         key = jax.lax.with_sharding_constraint(  # type: ignore[no-untyped-call]
             key,
             replicated_sharding,
         )
 
-        return cast(jax.Array, _run_scan(state, cache, first_token, done, out_buf, key))
+        return cast(jax.Array, _run_scan(state, cache, first_token, out_buf, key))
 
     def _get_rollout_chunk_jit(
         self,
         total_tokens: int,
         temperature: float,
         top_p: float,
-        eos_token: Optional[int],
         chunk_sharding: NamedSharding,
     ) -> Any:
         """Return a stable jitted rollout callable for this static decode shape."""
@@ -502,7 +489,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             int(total_tokens),
             float(temperature),
             float(top_p),
-            -1 if eos_token is None else int(eos_token),
         )
         if getattr(self, "_rollout_chunk_jit_key", None) == cache_key:
             return self._rollout_chunk_jit
@@ -524,7 +510,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                     total_tokens,
                     temperature,
                     top_p,
-                    eos_token,
                 )
                 return carry, results
 
@@ -758,7 +743,6 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             total_tokens,
             temperature,
             top_p,
-            None if encoding is None else int(encoding.eot_token),
             chunk_sharding,
         )
 

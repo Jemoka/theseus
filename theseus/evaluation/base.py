@@ -244,27 +244,26 @@ class RolloutEvaluation(Evaluation):
         Returns:
             Evaluation score, or (score, intermediates) when return_intermediates.
         """
-        eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = _select_indices(inference, len(eval_data))
+        indices = _select_indices(inference, len(self))
         original_size = len(indices)
 
         # Pin prompt + total lengths so the JIT shapes are constant across
         # refills (varying-length prompts otherwise force XLA recompiles).
-        max_new_tokens = eval_data.max_new_tokens(inference)
+        max_new_tokens = self.max_new_tokens(inference)
         prompt_max = inference.block_size - max_new_tokens
         if prompt_max <= 0:
             raise ValueError(
-                f"{eval_data.name}: max_new_tokens={max_new_tokens} leaves no "
+                f"{self.name}: max_new_tokens={max_new_tokens} leaves no "
                 f"room under inference.block_size={inference.block_size}."
             )
 
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = _select_indices(inference, len(eval_data))
+        indices = _select_indices(inference, len(self))
         original_size = len(indices)
 
         if jax.process_index() == 0:
-            x_raw, y_raw = zip(*[eval_data.get(i) for i in indices])
+            x_raw, y_raw = zip(*[self.get(i) for i in indices])
             x = list(x_raw)
             original_y = list(y_raw)
 
@@ -310,9 +309,9 @@ class RolloutEvaluation(Evaluation):
 
         if jax.process_index() == 0:
             assert original_y is not None
-            score = eval_data._score(
+            score = self._score(
                 original_y[:original_size],
-                [eval_data.clean(i) for i in decoded_results],
+                [self.clean(i) for i in decoded_results],
                 reduce=reduce,
             )
         else:
