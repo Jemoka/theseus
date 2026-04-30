@@ -87,7 +87,9 @@ def mok_reward(
     w_hat = np.concatenate([weights - eps / len(weights), [eps]])
 
     # compute KL divergence
-    kl_div = np.sum(r_w_hat * (np.log(r_w_hat + 1e-10) - np.log(w_hat + 1e-10)), axis=0)
+    kl_div = np.sum(
+        r_w_hat * (np.log(r_w_hat + 1e-10) - np.log(w_hat[:, None] + 1e-10)), axis=0
+    )
     # reward is negative KL divergence (we want to minimize divergence between r_w_hat and w_hat)
     reward = -kl_div
 

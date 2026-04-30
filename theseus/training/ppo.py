@@ -67,9 +67,11 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         """Aggregate per-rollout scores from each RL component into a single
         per-rollout reward.
 
-        ``evals`` is ``{evaluation_name: (N,)}`` — every component is
-        expected to produce a per-rollout score array of the same length
-        ``N`` (the rollout batch size). The return is shape ``(N,)``.
+        ``evals`` is ``{evaluation_name: (N,)}`` - every component is expected
+        to produce a per-rollout-slot score array of the same length ``N``.
+        The return is shape ``(N,)`` and is the only reward signal used by the
+        PPO/GRPO objective. The original component arrays are preserved only for
+        logging.
 
         Default: element-wise sum across components. Subclasses override to
         combine however they like (weighted sum, gating, etc.). Called from
@@ -159,8 +161,8 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # `old_log_probs` is captured at rollout time under the rollout-generating
         # policy (= π_θ_old in standard PPO notation), so the importance ratio in
         # the surrogate is exactly π_θ_new / π_θ_old. `component_rewards` is the
-        # per-rollout score from each RL component, kept around so we can surface
-        # the un-aggregated signals as metrics.
+        # per-rollout-slot score from each RL component, kept only so we can
+        # surface the un-aggregated signals as metrics.
         self._rollout_buffer: List[
             Tuple[
                 np.ndarray,
@@ -212,42 +214,64 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         )
         logger.debug("PPO | rollouts done; computing rewards")
 
-        # Reward contract: reward(evals) → (B_global,) — one reward per rollout
-        # in the order rollouts_per_eval is flattened.
+        # Reward contract: reward(evals) -> (N,), one scalarized reward per
+        # rollout slot. Each RL component contributes a score array of shape
+        # (N,) for those same slots; reward() combines those channels into one
+        # scalar per slot.
         rewards = np.asarray(self.reward(evals_dict), dtype=np.float32)
-        # Keep the un-aggregated per-component scores around so we can pipe them
-        # through batch() and report them as metrics alongside the merged reward.
+        # Keep the un-aggregated per-component scores around so we can report
+        # their means as metrics alongside the merged reward. These do not feed
+        # the PPO objective.
         component_rewards_arr: Dict[str, np.ndarray] = {
             name: np.asarray(arr, dtype=np.float32) for name, arr in evals_dict.items()
         }
 
-        # Flatten rollouts across components into a single (B_global, T) batch.
-        flat_rollouts: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = [
-            r for rollouts in rollouts_per_eval for r in rollouts
-        ]
-        if not flat_rollouts:
+        if not rollouts_per_eval or not rollouts_per_eval[0]:
             raise RuntimeError(
                 "PPO | RL evaluator produced no rollouts. Make sure "
                 "training/rl/components is non-empty."
             )
 
-        # Within a single evaluation, the rollout length T is uniform (the
-        # eval pads to one ``total_tokens``). Across components, T can differ
-        # — np.stack would error cryptically. Catch it with a clear message;
-        # multi-component support would need padding to max(T_i) first.
-        ts = {r[0].shape[-1] for r in flat_rollouts}
+        per_eval_counts = [len(rollouts) for rollouts in rollouts_per_eval]
+        if len(set(per_eval_counts)) != 1:
+            raise NotImplementedError(
+                f"PPO | RL components produced different rollout counts "
+                f"{per_eval_counts}; scalar reward contract requires equal counts."
+            )
+        rollout_count = per_eval_counts[0]
+        if rewards.shape != (rollout_count,):
+            raise ValueError(
+                f"PPO | reward returned shape {rewards.shape}, expected "
+                f"({rollout_count},) - one scalar reward per rollout slot."
+            )
+
+        for name, arr in component_rewards_arr.items():
+            if arr.shape != (rollout_count,):
+                raise ValueError(
+                    f"PPO | component reward '{name}' has shape {arr.shape}, "
+                    f"expected ({rollout_count},)."
+                )
+
+        # The scalarized reward has one row per rollout slot. Additional RL
+        # components are reward channels for those slots; they are not appended
+        # as extra training rows.
+        rollouts = rollouts_per_eval[0]
+
+        # The selected rollout source should have uniform sequence length T
+        # because the eval pads to one ``total_tokens``. Catch violations with a
+        # clear message instead of letting np.stack fail cryptically.
+        ts = {r[0].shape[-1] for r in rollouts}
         if len(ts) > 1:
             raise NotImplementedError(
-                f"PPO | RL components produced rollouts with mixed sequence "
-                f"lengths {sorted(ts)}; multi-component support requires "
-                "padding to a common T (TODO)."
+                f"PPO | selected rollout source produced mixed sequence "
+                f"lengths {sorted(ts)}; expected one padded T."
             )
 
         # Cache log π_θ_old(y_t | x_<=t) NOW, under the rollout-generating
         # policy. Bound to π_θ_old by construction — the PPO contract.
-        x_arr = np.stack([r[0] for r in flat_rollouts]).astype(np.int32)
-        am_arr = np.stack([r[1] for r in flat_rollouts]).astype(bool)
-        pm_arr = np.stack([r[2] for r in flat_rollouts]).astype(np.int32)
+        x_arr = np.stack([r[0] for r in rollouts]).astype(np.int32)
+        am_arr = np.stack([r[1] for r in rollouts]).astype(bool)
+        pm_arr = np.stack([r[2] for r in rollouts]).astype(np.int32)
         y_arr = np.roll(x_arr, -1, axis=-1)
         y_arr[:, -1] = 0
         y_safe = np.where(am_arr, y_arr, 0).astype(np.int32)
@@ -263,7 +287,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # back into the global batch. Split here so each host's buffer holds
         # only its slice.
         n_hosts, host_idx = jax.process_count(), jax.process_index()
-        my_indices = np.array_split(np.arange(len(flat_rollouts)), n_hosts)[host_idx]
+        my_indices = np.array_split(np.arange(len(rollouts)), n_hosts)[host_idx]
 
         new_entries: List[
             Tuple[
@@ -276,9 +300,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             ]
         ] = [
             (
-                flat_rollouts[i][0],
-                flat_rollouts[i][2].astype(bool),  # padding_mask
-                flat_rollouts[i][1].astype(bool),  # action_mask
+                rollouts[i][0],
+                rollouts[i][2].astype(bool),  # padding_mask
+                rollouts[i][1].astype(bool),  # action_mask
                 old_log_probs[i],
                 float(rewards[i]),
                 {name: float(arr[i]) for name, arr in component_rewards_arr.items()},
@@ -288,7 +312,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self._rollout_buffer.extend(new_entries)
         logger.debug(
             "PPO | refill: B_global={} → host {}/{} got {} (T={}, action_tokens/sample={:.1f})",
-            len(flat_rollouts),
+            len(rollouts),
             host_idx,
             n_hosts,
             len(new_entries),
@@ -394,18 +418,21 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             self.mesh,
             P(None, Axis.BATCH, None),  # type: ignore[no-untyped-call]
         )
-        log_probs_local = jnp.reshape(log_probs_local, (-1, log_probs_local.shape[-1]))
-        # tiled=True: concatenate along axis 0 (so the result is (B_global, T),
-        # not (n_hosts, B_local, T) — the latter is what the default does).
-        gathered = _mh.process_allgather(jnp.asarray(log_probs_local), tiled=True)
+        if n_hosts > 1:
+            # tiled=True: concatenate host-local chunks along the leading
+            # microbatch axis; flattening happens after gather on host.
+            gathered = _mh.process_allgather(log_probs_local, tiled=True)
+        else:
+            gathered = log_probs_local
+        gathered_np = np.asarray(gathered).reshape(-1, gathered.shape[-1])
         logger.debug(
             "PPO | rollout-time log_probs ready (host {}/{}, B_global={} T={})",
             host_idx,
             n_hosts,
-            gathered.shape[0],
-            gathered.shape[-1],
+            gathered_np.shape[0],
+            gathered_np.shape[-1],
         )
-        return np.asarray(gathered)
+        return gathered_np
 
     # -- batch -----------------------------------------------------------------
 
@@ -432,8 +459,8 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         action_mask = np.stack([e[2] for e in entries]).astype(bool)
         old_log_probs = np.stack([e[3] for e in entries]).astype(np.float32)
         rewards = np.array([e[4] for e in entries], dtype=np.float32)  # (B,)
-        # Per-component per-rollout scores. Component name set is fixed at trainer
-        # init time, so the dict keys are stable across calls (JIT-safe).
+        # Per-component per-rollout-slot scores. Component name set is fixed at
+        # trainer init time, so the dict keys are stable across calls (JIT-safe).
         component_names = list(entries[0][5].keys()) if entries else []
         component_rewards_per_rollout: Dict[str, np.ndarray] = {
             name: np.array([e[5][name] for e in entries], dtype=np.float32)
@@ -452,15 +479,12 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         per_token_rewards = self._smear_rewards(
             rewards, action_mask, self.ppo_config.discount
         )
-        # Smear the raw per-component scores too, only so they survive the (S, B,
-        # T) reshape + sharding plumbing that the train batch goes through. With
-        # discount=1 every action token in a rollout gets that rollout's score,
-        # so masked-mean in forward() gives the per-action-token mean. We call
-        # PPOTrainer._smear_rewards explicitly (not self._smear_rewards) to
-        # bypass GRPOTrainer's z-score override — these metrics are *raw*
-        # rewards, not advantages.
+        # Carry raw component scores through the same (S, B, *) sharding plumbing
+        # as logging-only scalar channels. They intentionally do not use
+        # _smear_rewards, because GRPO normalization and action-token weighting
+        # are objective concerns, not component metric concerns.
         component_rewards: Dict[str, np.ndarray] = {
-            name: PPOTrainer._smear_rewards(self, arr, action_mask, 1.0)
+            name: arr[:, None].astype(np.float32)
             for name, arr in component_rewards_per_rollout.items()
         }
 
@@ -604,12 +628,12 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             / n_actions,
             "ppo/n_actions": n_actions,
         }
-        # Per-component raw reward means — uses the same masked-mean denominator
-        # as ppo/reward_mean so the two are directly comparable.
+        # Per-component raw reward means. These are logging-only rollout means;
+        # they do not feed the objective and are not action-token weighted.
         for name, ctr in component_rewards.items():
-            metrics[f"ppo/component/{name}/reward_mean"] = (
-                ctr * action_mask_f
-            ).sum() / n_actions
+            metrics[f"ppo/component/{name}/reward_mean"] = jnp.mean(
+                ctr.astype(jnp.float32)
+            )
 
         return policy_logits, loss, metrics
 

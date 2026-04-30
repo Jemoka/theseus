@@ -17,7 +17,7 @@ from pathlib import Path
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Tuple, List, Optional, Union, Generic, Literal, TYPE_CHECKING
+from typing import Any, Tuple, List, Optional, Union, Generic, TYPE_CHECKING
 
 import numpy as np
 
@@ -244,26 +244,27 @@ class RolloutEvaluation(Evaluation):
         Returns:
             Evaluation score, or (score, intermediates) when return_intermediates.
         """
+        eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = _select_indices(inference, len(self))
+        indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
         # Pin prompt + total lengths so the JIT shapes are constant across
         # refills (varying-length prompts otherwise force XLA recompiles).
-        max_new_tokens = self.max_new_tokens(inference)
+        max_new_tokens = eval_data.max_new_tokens(inference)
         prompt_max = inference.block_size - max_new_tokens
         if prompt_max <= 0:
             raise ValueError(
-                f"{self.name}: max_new_tokens={max_new_tokens} leaves no "
+                f"{eval_data.name}: max_new_tokens={max_new_tokens} leaves no "
                 f"room under inference.block_size={inference.block_size}."
             )
 
         batch_unit = inference.replicas * inference.per_device_batch_size
-        indices = _select_indices(inference, len(self))
+        indices = _select_indices(inference, len(eval_data))
         original_size = len(indices)
 
         if jax.process_index() == 0:
-            x_raw, y_raw = zip(*[self.get(i) for i in indices])
+            x_raw, y_raw = zip(*[eval_data.get(i) for i in indices])
             x = list(x_raw)
             original_y = list(y_raw)
 
@@ -291,7 +292,7 @@ class RolloutEvaluation(Evaluation):
             max_prompt_length=prompt_max,
             temperature=temperature,
             top_p=top_p,
-            chunk_size=chunk_size,
+            chunk_size=chunk_size,lso d
             return_type="raw_indices",
         )
 
@@ -299,25 +300,17 @@ class RolloutEvaluation(Evaluation):
 
         # Score generated text only.
         generated_rows = raw_rollouts_np[:original_size, prompt_max:].tolist()
-        eot_token = getattr(encoding, "eot_token", None)
-        if eot_token is not None:
-            generated_rows = [
-                row[: row.index(eot_token) + 1] if eot_token in row else row
-                for row in generated_rows
-            ]
         decoded_results = encoding.decode_batch(generated_rows)
 
         if jax.process_index() == 0:
             assert original_y is not None
-            score = self._score(
+            score = eval_data._score(
                 original_y[:original_size],
-                [self.clean(i) for i in decoded_results],
+                [eval_data.clean(i) for i in decoded_results],
                 reduce=reduce,
             )
         else:
-            score = (
-                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
-            )
+            score = np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
 
         score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
         score = np.asarray(score) if reduce == "none" else float(score)
@@ -451,8 +444,8 @@ class EncodingEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -680,8 +673,8 @@ class PerplexityEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -910,12 +903,10 @@ class PerplexityComparisonEvaluation(Evaluation):
             )
             encoded_inputs = [seq[: inference.block_size] for seq in encoded_inputs]
             xs, masks = inference.pad(encoded_inputs)
-            prefix_lengths_array = np.asarray(prefix_lengths, dtype=np.int32)
-            metadata_array = np.asarray(metadata, dtype=np.int32)
-            correct_indices_array = np.asarray(
-                [d[2] for d in all_data], dtype=np.int32
-            )
-            original_flat_size_array = np.asarray(original_flat_size, dtype=np.int32)
+            prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
+            metadata_array = jnp.array(metadata, dtype=jnp.int32)
+            correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
+            original_flat_size_array = jnp.array(original_flat_size, dtype=jnp.int32)
         else:
             xs, masks = None, None
             (
@@ -949,12 +940,12 @@ class PerplexityComparisonEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
-        pieces_prefix_lens = np.array_split(
+        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_prefix_lens = jnp.array_split(
             prefix_lengths_array, jax.process_count(), axis=0
         )
-        pieces_metadata = np.array_split(metadata_array, jax.process_count(), axis=0)
+        pieces_metadata = jnp.array_split(metadata_array, jax.process_count(), axis=0)
 
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
@@ -1209,30 +1200,20 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate, jax.Array, List[int]]],
+        inputs: List[Union[str, ChatTemplate]],
         encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
-        max_prompt_length: Optional[int] = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
-        return_type: Literal[
-            "decoded",
-            "indices",
-            "output_decoded",
-            "output_indices",
-            "raw_indices",
-        ] = "decoded",
-    ) -> Union[List[Union[str, ChatTemplate]], List[str], List[List[int]]]:
+    ) -> List[Union[str, ChatTemplate]]:
         return super().rollout(
             inputs,
             encoding if encoding is not None else self.encoding,
             max_new_tokens=max_new_tokens,
-            max_prompt_length=max_prompt_length,
             temperature=temperature,
             top_p=top_p,
             chunk_size=chunk_size,
-            return_type=return_type,
         )
 
     def evaluate(

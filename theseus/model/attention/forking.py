@@ -177,7 +177,12 @@ class ForkingAttention(RopeAttention):
         # For decode steps with cache, inject correct RoPE positions
         if self.has_variable("cache", "cache_index"):
             ci: Any = self.get_variable("cache", "cache_index")
-            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+            kwargs = {**kwargs, "positions": self._cached_positions(T, ci)}
+        elif "positions" not in kwargs:
+            kwargs = {
+                **kwargs,
+                "positions": self._positions_from_padding(T, padding_mask),
+            }
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
 

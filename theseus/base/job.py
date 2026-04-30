@@ -83,12 +83,13 @@ class ExecutionSpec(JobSpec):
         name: str = "local",
         project: str | None = None,
         group: str | None = None,
+        shard_into: int | None = None,
     ) -> "ExecutionSpec":
         hardware = local(root_dir, "-")
         if hardware.chip is None:
             topology = None
         else:
-            topology = Topology.new(hardware.chip, shard_into=None)
+            topology = Topology.new(hardware.chip, shard_into=shard_into)
         spec = cls(
             name=name,
             project=project,
