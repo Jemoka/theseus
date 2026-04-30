@@ -451,8 +451,8 @@ class EncodingEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -680,8 +680,8 @@ class PerplexityEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -910,10 +910,12 @@ class PerplexityComparisonEvaluation(Evaluation):
             )
             encoded_inputs = [seq[: inference.block_size] for seq in encoded_inputs]
             xs, masks = inference.pad(encoded_inputs)
-            prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
-            metadata_array = jnp.array(metadata, dtype=jnp.int32)
-            correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
-            original_flat_size_array = jnp.array(original_flat_size, dtype=jnp.int32)
+            prefix_lengths_array = np.asarray(prefix_lengths, dtype=np.int32)
+            metadata_array = np.asarray(metadata, dtype=np.int32)
+            correct_indices_array = np.asarray(
+                [d[2] for d in all_data], dtype=np.int32
+            )
+            original_flat_size_array = np.asarray(original_flat_size, dtype=np.int32)
         else:
             xs, masks = None, None
             (
@@ -947,12 +949,12 @@ class PerplexityComparisonEvaluation(Evaluation):
         masks_full = masks
 
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
-        pieces_prefix_lens = jnp.array_split(
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
+        pieces_prefix_lens = np.array_split(
             prefix_lengths_array, jax.process_count(), axis=0
         )
-        pieces_metadata = jnp.array_split(metadata_array, jax.process_count(), axis=0)
+        pieces_metadata = np.array_split(metadata_array, jax.process_count(), axis=0)
 
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]

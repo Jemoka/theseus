@@ -222,16 +222,21 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def _cast_params(self, params: PyTree[jax.Array]) -> PyTree[jax.Array]:
         """Cast all params to the model's configured param dtype.
 
-        Uses jax.jit so the cast preserves each array's sharding; an eager
-        tree_map(astype) can silently move arrays to a single device.
+        Keep host-loaded parameters on host until ``_init_state`` applies the
+        intended mesh sharding. For already-sharded JAX arrays, preserve their
+        current sharding through the cast.
         """
-        target = jnp.dtype(self.model.param_dtype)
+        target = np.dtype(self.model.param_dtype)
 
-        @jax.jit
-        def _cast(p: PyTree[jax.Array]) -> PyTree[jax.Array]:
-            return jax.tree_util.tree_map(lambda x: x.astype(target), p)  # type: ignore[no-any-return]
+        def cast_leaf(x: Any) -> Any:
+            if isinstance(x, np.ndarray):
+                return x.astype(target, copy=False)
+            if isinstance(x, jax.Array):
+                y = x.astype(jnp.dtype(target))
+                return jax.device_put(y, x.sharding)
+            return x
 
-        return _cast(params)  # type: ignore[no-any-return]
+        return jax.tree_util.tree_map(cast_leaf, params)  # type: ignore[no-any-return]
 
     def _init_model(self) -> PyTree[jax.Array]:
         """Initialize model and random keys, return initial sharded params."""

@@ -23,6 +23,7 @@ from typing_extensions import Self
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import random as jax_random
 from jax.sharding import NamedSharding, PartitionSpec as P
 from jax.experimental import multihost_utils
@@ -269,7 +270,7 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
     @staticmethod
     def pad(
         seqs: List[List[int]], pad_token: int = 0, pad_to: Optional[int] = None
-    ) -> Tuple[jax.Array, jax.Array]:
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """Left-pad sequences to uniform length.
 
         Args:
@@ -278,8 +279,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
             pad_to: Minimum length to pad to (default None, uses max seq length)
 
         Returns:
-            padded: (batch_size, max_len) jnp array
-            mask: (batch_size, max_len) jnp bool array, True for real tokens
+            padded: (batch_size, max_len) host int32 array
+            mask: (batch_size, max_len) host bool array, True for real tokens
         """
         max_len = max(len(s) for s in seqs)
         if pad_to is not None:
@@ -288,8 +289,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         padded_masks = [
             ([False] * (max_len - len(s))) + [True for _ in s] for s in seqs
         ]
-        padded = jnp.array(padded_seqs)
-        masks = jnp.array(padded_masks)
+        padded = np.asarray(padded_seqs, dtype=np.int32)
+        masks = np.asarray(padded_masks, dtype=np.bool_)
         return padded, masks
 
     def _autoregress(
@@ -722,8 +723,8 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         multihost_utils.sync_global_devices("rollout:post_broadcast")
 
         # Distribute across processes.
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
