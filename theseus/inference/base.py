@@ -36,7 +36,12 @@ from theseus.job import RestoreableJob
 from theseus.base import Axis
 from theseus.config import configure, current_config
 from theseus.data.datasets.dataset import ChatTemplate, ChatTurn
-from theseus.data.tokenizer import Tokenizer, encode_chat_template, decode_chat_template
+from theseus.data.tokenizer import (
+    HuggingFaceTokenizer,
+    Tokenizer,
+    encode_chat_template,
+    decode_chat_template,
+)
 
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
@@ -670,12 +675,20 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
                 ):
                     assert encoding is not None
                     chat_inp = cast(ChatTemplate, inp)
-                    str_buf.append(
-                        encode_chat_template(
-                            chat_inp, encoding, prompt=True, tokenize=False
+                    if isinstance(encoding, HuggingFaceTokenizer):
+                        # For HF chat models, tokenize via apply_chat_template
+                        # directly. Rendering to text and then re-tokenizing can
+                        # lose model-specific chat formatting.
+                        encoded[i] = encode_chat_template(
+                            chat_inp, encoding, prompt=True, tokenize=True
                         )
-                    )
-                    str_idx.append(i)
+                    else:
+                        str_buf.append(
+                            encode_chat_template(
+                                chat_inp, encoding, prompt=True, tokenize=False
+                            )
+                        )
+                        str_idx.append(i)
                 elif isinstance(inp, list):
                     token_inp = cast(List[int], inp)
                     encoded[i] = [int(x) for x in token_inp]

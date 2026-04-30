@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator, TYPE_CHECKING
+from typing import Any, Generator, TYPE_CHECKING, Optional
 
 from omegaconf import OmegaConf
 
@@ -93,7 +93,7 @@ class QuickJob:
             _current_config.reset(self._config_token)
             self._config_token = None
 
-    def create(self) -> Any:
+    def create(self, shard_into: Optional[int] = None) -> Any:
         """Create and return the job instance without running it."""
         if self._instance is None:
             out_path = self._out_path or os.environ.get("THESEUS_ROOT", ".")
@@ -102,6 +102,7 @@ class QuickJob:
                 name=self._name,
                 project=self._project,
                 group=self._group,
+                shard_into=shard_into,
             )
         return self._instance
 
