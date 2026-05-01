@@ -84,7 +84,7 @@ def mok_reward(
     # compute r_w and w_hat
     r_w = np.array(list(evals.values())) * weights[:, None]
     r_w_hat = np.concatenate([r_w, 1 - r_w.sum(axis=0, keepdims=True)], axis=0)
-    w_hat = np.concatenate([weights - eps / len(weights), [eps]])
+    w_hat = np.concatenate([weights * (1 - eps), [eps]])
 
     # compute KL divergence
     kl_div = np.sum(
