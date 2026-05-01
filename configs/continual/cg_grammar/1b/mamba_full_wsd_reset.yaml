@@ -1,0 +1,64 @@
+architecture:
+  dtype:
+    param: float32
+    activation: bfloat16
+  vocab_size: 100288
+  dropout: 0.0
+  block_size: 2048
+  n_layers: 32
+  n_embd: 2048
+  d_state: 128
+  d_conv: 4
+  expand: 2
+  n_groups: 1
+  n_heads: -1
+optimization:
+  lr: 0.0003
+  weight_decay: 0.1
+  warmup_pct: 0.01
+  decay_pct: 0.01
+  constant_pct: 0.02
+  schedule: wsd_reset
+  reset_optimizer: true
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens:
+  - 10000000000
+  - 9800000000
+  - 200000000
+  dataset:
+  - - name: fineweb
+      rate: 1.0
+      style: PMD
+  - - name: mtob
+      rate: 1.0
+      style: PADDED
+      suffix: grammar_2048
+  - - name: mtob
+      rate: 1.0
+      style: PADDED
+      suffix: enkgv_2048
+  validation: false
+  evaluate: true
+  validation_steps: 2048
+  skip_first_dataset_validation: true
+  fade:
+    overlap: 0.0
+    curve: linear
+eval:
+  evaluations:
+  - fineweb_ppl
+  - mtob
+logging:
+  report_interval: 32
+  checkpoint_interval: 3814
+  validation_interval: 38
+  wandb: true
+  plots:
+    save: true
+job: continual/train/benchmark_mamba
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1

@@ -23,6 +23,7 @@ class JuiceFSMount:
     mount_point: str
     cache_size: str | None = None
     cache_dir: str | None = None
+    all_squash: str | None = None  # passthrough for juicefs `--all-squash UID:GID`
 
 
 @dataclass
@@ -32,12 +33,19 @@ class ClusterConfig:
     root: str  # root directory for checkpoints, data, etc.
     work: str  # work/scratch directory
     log: str | None = None  # log directory (defaults to {work}/logs)
+    data: str | None = None  # data directory (defaults to {root}/data)
+    checkpoints: str | None = (
+        None  # checkpoints directory (defaults to {root}/checkpoints)
+    )
+    results: str | None = None  # results directory (defaults to {root}/results)
+    status: str | None = None  # status directory (defaults to {root}/status)
     share: str | None = (
         None  # shared temp dir visible to all nodes (defaults to {work}/.dispatch)
     )
     mount: str | None = None  # Redis connection string for JuiceFS mount at root
     cache_size: str | None = None  # JuiceFS --cache-size (e.g., "100G")
     cache_dir: str | None = None  # JuiceFS --cache-dir path
+    all_squash: str | None = None  # JuiceFS --all-squash UID:GID (e.g., "1000:1000")
     uv_dir: str | None = None  # UV_CACHE_DIR override for uv
     wandb: str | None = None  # W&B API key → exported as WANDB_API_KEY
     wandb_entity: str | None = None  # W&B entity → exported as WANDB_ENTITY
@@ -63,6 +71,7 @@ class PlainHostConfig:
     type: Literal["plain"] = "plain"
     chips: dict[str, int] = field(default_factory=dict)  # chip_name -> count
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -85,6 +94,7 @@ class SlurmHostConfig:
         default_factory=list
     )  # optional CPU-only partition preference order
     annotations: dict[str, str] = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -109,6 +119,7 @@ class TPUHostConfig:
     internal_ip: bool = False  # use internal IP for SSH/SCP
     metadata: dict[str, str] = field(default_factory=dict)  # instance metadata
     uv_groups: list[str] = field(default_factory=list)  # uv sync --group flags
+    env: dict[str, str] = field(default_factory=dict)  # host-level env vars
 
 
 @dataclass
@@ -199,10 +210,15 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
             root=cluster_cfg.root,
             work=cluster_cfg.work,
             log=cluster_cfg.get("log"),
+            data=cluster_cfg.get("data"),
+            checkpoints=cluster_cfg.get("checkpoints"),
+            results=cluster_cfg.get("results"),
+            status=cluster_cfg.get("status"),
             share=cluster_cfg.get("share"),
             mount=cluster_cfg.get("mount"),
             cache_size=cluster_cfg.get("cache_size"),
             cache_dir=cluster_cfg.get("cache_dir"),
+            all_squash=cluster_cfg.get("all_squash"),
             uv_dir=cluster_cfg.get("uv_dir"),
             wandb=cluster_cfg.get("wandb"),
             wandb_entity=cluster_cfg.get("wandb_entity"),
@@ -227,6 +243,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 type="plain",
                 chips=chips,
                 uv_groups=uv_groups,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "slurm":
             partitions = []
@@ -260,6 +277,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 chips=chips,
                 cpu_partitions=cpu_partitions,
                 annotations=annotations,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "tpu":
             metadata = dict(host_cfg.get("metadata", {}))
@@ -278,6 +296,7 @@ def parse_dispatch_config(cfg: DictConfig) -> DispatchConfig:
                 internal_ip=host_cfg.get("internal_ip", False),
                 metadata=metadata,
                 uv_groups=uv_groups,
+                env=dict(host_cfg.get("env", {})),
             )
         elif host_type == "volcano":
             chips = dict(host_cfg.get("chips", {}))
@@ -375,6 +394,10 @@ class RemoteInventory:
                 root=cfg.root,
                 work=cfg.work,
                 log=cfg.log,
+                data=cfg.data,
+                checkpoints=cfg.checkpoints,
+                results=cfg.results,
+                status=cfg.status,
             )
         return self._clusters[name]
 
@@ -497,6 +520,8 @@ def _match_gpu_to_chip(gpu_name: str, mem_mb: int) -> str | None:
         return "l40"
     if "drive-pg199" in gpu_lower:
         return "drive-pg199"
+    if "5090" in gpu_lower:
+        return "rtx5090"
 
     return None
 

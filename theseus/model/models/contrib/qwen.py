@@ -104,9 +104,13 @@ class Qwen(Module):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
     ) -> jax.Array:
         b, t, _ = x.shape
-        positions = jnp.arange(t)
+        if padding_mask is None:
+            positions = jnp.arange(t)
+        else:
+            positions = jnp.maximum(jnp.cumsum(padding_mask, axis=-1) - 1, 0)
         for i, block in enumerate(self.blocks):
             sliding = self.layer_types[i] == "sliding"
             mask = None
@@ -118,6 +122,7 @@ class Qwen(Module):
                 deterministic=deterministic,
                 sliding=sliding,
                 positions=positions,
+                cache_max_len=cache_max_len,
             )
         return x
 
@@ -147,6 +152,7 @@ class Qwen(Module):
         targets: Optional[jax.Array] = None,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
     ) -> Tuple[Any, Optional[Any]]:
         b, t = idx.shape
         assert t <= self.block_size, (
@@ -154,7 +160,12 @@ class Qwen(Module):
         )
 
         x = self.embed(idx, deterministic)
-        x = self.decode(x, padding_mask=padding_mask, deterministic=deterministic)
+        x = self.decode(
+            x,
+            padding_mask=padding_mask,
+            deterministic=deterministic,
+            cache_max_len=cache_max_len,
+        )
         logits = self.unembed(x)
         loss_val = self.loss(logits, targets) if targets is not None else None
         return logits, loss_val

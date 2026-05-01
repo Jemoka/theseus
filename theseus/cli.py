@@ -33,6 +33,33 @@ np.random.seed(0)
 load_dotenv()
 
 
+def _has_dotted_path(cfg: Any, dotted: str) -> bool:
+    """True iff every segment of `dotted` resolves inside `cfg`."""
+    cur = cfg
+    for part in dotted.split("."):
+        if not OmegaConf.is_config(cur) or part not in cur:
+            return False
+        cur = cur[part]
+    return True
+
+
+def _apply_overrides(cfg: Any, raw_overrides: tuple[str, ...] | list[str]) -> Any:
+    """Merge `key=value` overrides whose full dotted path exists in `cfg`.
+
+    Multi-stage pipelines pass the same override list to every stage. An
+    override like `training.per_device_batch_size=1` only belongs to stages
+    whose schema actually owns that path; applying it to a tokenize stage
+    would trip struct validation (`ConfigKeyError: Key '…' is not in struct`).
+
+    Stages where the path doesn't fully resolve silently drop the override.
+    Stages that own it merge it as usual.
+    """
+    keep = [kv for kv in raw_overrides if _has_dotted_path(cfg, kv.split("=", 1)[0])]
+    if not keep:
+        return cfg
+    return OmegaConf.merge(cfg, OmegaConf.from_dotlist(keep))
+
+
 def setup_logging(verbose: bool) -> None:
     """Configure loguru with appropriate log level."""
     logger.remove()
@@ -105,6 +132,57 @@ def _restoreable_job() -> Any:
     return RestoreableJob
 
 
+def _load_modules(modules: tuple[str, ...] | list[str]) -> None:
+    """Import modules for local CLI commands.
+
+    Explicit file paths are loaded directly. Everything else is treated as a
+    normal Python module import and any import failure is surfaced as-is.
+    Remote bootstrap/submit paths use ``_validate_remote_modules`` separately.
+    """
+    import importlib
+
+    cwd = str(Path.cwd())
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    for m in modules:
+        if "/" in m or m.endswith(".py"):
+            _load_module_from_file(m)
+            continue
+        importlib.import_module(m)
+
+
+def _load_module_from_file(path: str) -> None:
+    """Load a single Python file as a module."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(Path(path).stem, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module from path: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+
+def _validate_remote_modules(modules: tuple[str, ...]) -> list[str]:
+    """Validate and normalize module names for remote bootstrap (submit/bootstrap).
+
+    File paths don't work remotely — the module must be importable from the
+    packed repo.  As a courtesy, ``anyways.py`` is normalized to ``anyways``.
+    """
+    result = []
+    for m in modules:
+        if m.endswith(".py"):
+            m = m[:-3]
+        if not m.replace(".", "").replace("_", "").isalnum():
+            console.print(
+                f"\n[red]Error: --load '{m}' is not a valid module name. "
+                f"For submit/bootstrap, use a dotted module name importable from the repo.[/red]\n"
+            )
+            sys.exit(1)
+        result.append(m)
+    return result
+
+
 @click.group()  # type: ignore[misc]
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")  # type: ignore[misc]
 def theseus(verbose: bool) -> None:
@@ -113,8 +191,15 @@ def theseus(verbose: bool) -> None:
 
 
 @theseus.command()  # type: ignore[misc]
-def jobs() -> None:
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before listing jobs; can repeat.",
+)  # type: ignore[misc]
+def jobs(preload_modules: tuple[str, ...]) -> None:
     """List all available jobs in the registry."""
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
     if not jobs:
         console.print("\n[yellow]No jobs registered[/yellow]\n")
@@ -162,9 +247,15 @@ def jobs() -> None:
 @click.option(  # type: ignore[misc]
     "--n_shards",
     type=int,
-    default=None,
+    default=1,
     help="Number of tensor parallel shards for the model",
 )
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus; can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def configure(
     job: str,
@@ -173,6 +264,7 @@ def configure(
     chip: str | None,
     n_chips: int | None,
     n_shards: int | None,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Generate a configuration YAML for a job.
@@ -181,6 +273,8 @@ def configure(
     OUT_YAML: Output path for the generated YAML config
     OVERRIDES: Optional config overrides in key=value format
     """
+    _load_modules(preload_modules)
+
     jobs = _jobs_registry()
     build, _ = _build_and_configuration()
 
@@ -266,8 +360,7 @@ def configure(
 
     # Apply CLI overrides
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        config = OmegaConf.merge(config, cfg_cli)
+        config = _apply_overrides(config, overrides)
 
     # Add job name to config
     OmegaConf.set_struct(config, False)
@@ -332,11 +425,29 @@ def configure(
     "-g", "--group", default=None, help="Group under the project this run belongs to"
 )  # type: ignore[misc]
 @click.option(
+    "--n_shards",
+    type=int,
+    default=None,
+    help="Number of tensor parallel shards for the model",
+)  # type: ignore[misc]
+@click.option(
     "-s",
     "--stage",
     "extra_stages",
     multiple=True,
     help="Additional YAML config(s) for sequential stages.",
+)  # type: ignore[misc]
+@click.option(
+    "--restore",
+    "restore_path",
+    default=None,
+    help="Restore from checkpoint at this rel_path (under checkpoints_dir) instead of starting fresh.",
+)  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus; can repeat.",
 )  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def run(
@@ -346,7 +457,10 @@ def run(
     job: str | None,
     project: str | None,
     group: str | None,
+    n_shards: int | None,
     extra_stages: tuple[str, ...],
+    restore_path: str | None,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Run a job with a configuration file.
@@ -356,6 +470,8 @@ def run(
     OUT_PATH: Output path for job results
     OVERRIDES: Optional config overrides in key=value format
     """
+    _load_modules(preload_modules)
+
     jobs = _jobs_registry()
     _, configuration = _build_and_configuration()
 
@@ -389,16 +505,18 @@ def run(
         sys.exit(1)
 
     # Apply CLI overrides
-    cfg_cli = None
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")
         for override in overrides:
             console.print(f"[yellow]  • {override}[/yellow]")
         console.print()
+
+    request_n_shards = n_shards
+    if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
+        request_n_shards = cfg.request.n_shards
 
     # Load extra stage configs (for multi-stage pipelines)
     extra_cfgs: List[Any] = []
@@ -423,8 +541,8 @@ def run(
                 f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
             )
             sys.exit(1)
-        if cfg_cli is not None:
-            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+        if overrides:
+            stage_cfg = _apply_overrides(stage_cfg, overrides)
         extra_cfgs.append(stage_cfg)
 
     # Build list of all stages: [(cfg, stage_name, job_key)]
@@ -450,6 +568,8 @@ def run(
             Syntax(OmegaConf.to_yaml(cfg), "yaml", background_color="default")
         )
     console.print(f"[blue]Output path:[/blue] {out_path}")
+    if restore_path:
+        console.print(f"[blue]Restoring from:[/blue] {restore_path}")
     console.print()
 
     # Run each stage sequentially within its configuration context
@@ -462,11 +582,32 @@ def run(
             random.seed(0)
             np.random.seed(0)
         stage_job_obj = jobs[stage_job]
-        with configuration(stage_cfg):
-            job_instance = stage_job_obj.local(
-                out_path, name=stage_name, project=project, group=group
+        if restore_path:
+            RestoreableJob = _restoreable_job()
+            spec = ExecutionSpec.local(
+                out_path,
+                name=stage_name,
+                project=project,
+                group=group,
+                shard_into=request_n_shards,
             )
-            job_instance()
+            job_instance, restored_cfg = RestoreableJob.from_checkpoint_path(
+                restore_path, spec, runtime_cfg=stage_cfg
+            )
+            with configuration(restored_cfg):
+                job_instance()
+            # Only restore on the first stage
+            restore_path = None
+        else:
+            with configuration(stage_cfg):
+                job_instance = stage_job_obj.local(
+                    out_path,
+                    name=stage_name,
+                    project=project,
+                    group=group,
+                    shard_into=request_n_shards,
+                )
+                job_instance()
         # Finalize wandb run between stages (if active) so the next stage
         # gets a fresh wandb.init() rather than resuming the previous one
         if n_stages > 1:
@@ -511,6 +652,7 @@ def run(
     help="Number of tensor parallel shards for the model",
 )  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option("--cpu", default=None, help="CPU per job (e.g., '32', '54')")  # type: ignore[misc]
 @click.option(
     "--cluster", default=None, help="Only use these clusters (comma-separated)"
 )  # type: ignore[misc]
@@ -560,6 +702,25 @@ def run(
     default=None,
     help="Override Volcano job namespace",
 )  # type: ignore[misc]
+@click.option(
+    "--restore",
+    "restore_path",
+    default=None,
+    help="Restore from checkpoint at this rel_path (under checkpoints_dir) instead of starting fresh.",
+)  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus in the bootstrap script; can repeat.",
+)  # type: ignore[misc]
+@click.option(
+    "--env",
+    "env_overrides",
+    multiple=True,
+    help="Override/inject env vars on the remote (KEY=VALUE). Highest precedence: "
+    "wins over cluster-level and host-level env. Can repeat.",
+)  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def submit(
     name: str,
@@ -572,6 +733,7 @@ def submit(
     n_chips: int | None,
     n_shards: int | None,
     mem: str | None,
+    cpu: str | None,
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
@@ -582,6 +744,9 @@ def submit(
     tpu_preemptible: bool | None,
     volcano_image: str | None,
     volcano_namespace: str | None,
+    restore_path: str | None,
+    preload_modules: tuple[str, ...],
+    env_overrides: tuple[str, ...],
     overrides: tuple[str, ...],
 ) -> None:
     """Submit a job to remote infrastructure via dispatch.
@@ -592,6 +757,7 @@ def submit(
     """
     from theseus.dispatch import dispatch, load_dispatch_config
 
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
 
     # Load config file
@@ -652,17 +818,29 @@ def submit(
     if request_n_shards is None and "request" in cfg and "n_shards" in cfg.request:
         request_n_shards = cfg.request.n_shards
 
-    if request_n_shards is not None:
-        OmegaConf.set_struct(cfg, False)
-        if "request" not in cfg:
-            cfg.request = OmegaConf.create({})
-        cfg.request.n_shards = request_n_shards
-        OmegaConf.set_struct(cfg, True)
+    def _apply_n_shards(c: Any) -> None:
+        """Write the resolved n_shards onto the config's request block in place.
+
+        Bootstrap reads `cfg.request.n_shards` per-stage (see
+        theseus/dispatch/bootstrap.py:430) to size the JAX mesh. Without this,
+        only the primary stage would honor `--n_shards`; tokenize stages and
+        the actual training stage (passed via `-s`) would each fall back to
+        whatever their YAML happened to bake in (commonly `1`), so the
+        topology would silently shard incorrectly.
+        """
+        if request_n_shards is None:
+            return
+        OmegaConf.set_struct(c, False)
+        if "request" not in c:
+            c.request = OmegaConf.create({})
+        c.request.n_shards = request_n_shards
+        OmegaConf.set_struct(c, True)
+
+    _apply_n_shards(cfg)
 
     # Apply CLI overrides to primary config
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")
@@ -694,9 +872,14 @@ def submit(
                 f"[yellow]Available jobs: {', '.join(jobs.keys())}[/yellow]\n"
             )
             sys.exit(1)
-        # Apply same CLI overrides to all stages
+        # CLI --n_shards must propagate to every stage; bootstrap reads each
+        # stage's own request.n_shards.
+        _apply_n_shards(stage_cfg)
+        # Apply same CLI overrides to all stages; per-path filter drops keys
+        # this stage doesn't own (so e.g. `training.x=y` on a tokenize stage
+        # is silently skipped instead of tripping struct validation).
         if overrides:
-            stage_cfg = OmegaConf.merge(stage_cfg, cfg_cli)
+            stage_cfg = _apply_overrides(stage_cfg, overrides)
         extra_cfgs.append(stage_cfg)
 
     # Parse cluster filters
@@ -764,6 +947,27 @@ def submit(
         console.print(f"[blue]Volcano image override:[/blue] {volcano_image}")
     if volcano_namespace:
         console.print(f"[blue]Volcano namespace override:[/blue] {volcano_namespace}")
+    if restore_path:
+        console.print(f"[blue]Restoring from:[/blue] {restore_path}")
+
+    # Parse --env KEY=VALUE overrides
+    env_dict: dict[str, str] = {}
+    for item in env_overrides:
+        if "=" not in item:
+            console.print(
+                f"\n[red]Error: --env '{item}' must be in KEY=VALUE form[/red]\n"
+            )
+            sys.exit(1)
+        k, v = item.split("=", 1)
+        k = k.strip()
+        if not k:
+            console.print(f"\n[red]Error: --env '{item}' has empty key[/red]\n")
+            sys.exit(1)
+        env_dict[k] = v
+    if env_dict:
+        console.print("[blue]Env overrides:[/blue]")
+        for k, v in env_dict.items():
+            console.print(f"  [blue]•[/blue] {k}={v}")
 
     # Dispatch the job
     result = dispatch(
@@ -773,6 +977,7 @@ def submit(
         dispatch_config=dispatch_cfg,
         dirty=dirty,
         mem=mem,
+        cpu=cpu,
         extra_uv_groups=list(uv_targets) if uv_targets else None,
         extra_cfgs=extra_cfgs if extra_cfgs else None,
         tpu_version_override=tpu_version,
@@ -780,6 +985,9 @@ def submit(
         tpu_preemptible_override=tpu_preemptible,
         volcano_image_override=volcano_image,
         volcano_namespace_override=volcano_namespace,
+        preload_modules=_validate_remote_modules(preload_modules) or None,
+        restore_path=restore_path,
+        env_overrides=env_dict or None,
     )
 
     if not result.ok:
@@ -818,6 +1026,7 @@ def submit(
     help="Number of tensor parallel shards for the model (accepted for parity)",
 )  # type: ignore[misc]
 @click.option("--mem", default=None, help="Memory per job (e.g., '64G', '128G')")  # type: ignore[misc]
+@click.option("--cpu", default=None, help="CPU per job (e.g., '32', '54')")  # type: ignore[misc]
 @click.option(
     "--cluster", default=None, help="Only use these clusters (comma-separated)"
 )  # type: ignore[misc]
@@ -886,6 +1095,7 @@ def repl(
     n_chips: int | None,
     n_shards: int | None,
     mem: str | None,
+    cpu: str | None,
     cluster: str | None,
     exclude_cluster: str | None,
     dirty: bool,
@@ -1001,8 +1211,16 @@ def repl(
             sys.exit(1)
         if proxy is None:
             assert local_mount is not None
+            # Reuse the cluster-level all_squash (if any) for the local mount.
+            all_squash_for_backend: str | None = None
+            for _cluster_cfg in dispatch_cfg.clusters.values():
+                if _cluster_cfg.mount == backend:
+                    all_squash_for_backend = _cluster_cfg.all_squash
+                    break
             try:
-                ensure_local_mount(local_mount, backend)
+                ensure_local_mount(
+                    local_mount, backend, all_squash=all_squash_for_backend
+                )
             except RuntimeError as exc:
                 console.print(f"\n[red]Error: {exc}[/red]\n")
                 sys.exit(1)
@@ -1086,6 +1304,7 @@ def repl(
         local_port=port,
         dirty=dirty,
         mem=mem,
+        cpu=cpu,
         startup_timeout=startup_timeout,
         slurm_wait_timeout=slurm_wait_timeout,
         sync_enabled=sync_mode,
@@ -1288,9 +1507,21 @@ def repl(
 @click.option("--cache-size", default=None, help="JuiceFS cache size")  # type: ignore[misc]
 @click.option("--cache-dir", default=None, help="JuiceFS cache directory")  # type: ignore[misc]
 @click.option(
+    "--all-squash",
+    "all_squash",
+    default=None,
+    help="JuiceFS --all-squash UID:GID passthrough (e.g. '1000:1000')",
+)  # type: ignore[misc]
+@click.option(
     "--dirty/--clean",
     default=True,
     help="Include uncommitted changes (default: --dirty)",
+)  # type: ignore[misc]
+@click.option(
+    "--load",
+    "preload_modules",
+    multiple=True,
+    help="Module(s) to import before theseus in the bootstrap script; can repeat.",
 )  # type: ignore[misc]
 @click.argument("overrides", nargs=-1)  # type: ignore[misc]
 def bootstrap(
@@ -1309,7 +1540,9 @@ def bootstrap(
     mount: str | None,
     cache_size: str | None,
     cache_dir: str | None,
+    all_squash: str | None,
     dirty: bool,
+    preload_modules: tuple[str, ...],
     overrides: tuple[str, ...],
     uv_targets: tuple[str, ...],
 ) -> None:
@@ -1328,6 +1561,7 @@ def bootstrap(
     from theseus.dispatch.slurm import SlurmJob
     from theseus.dispatch.sync import snapshot
 
+    _load_modules(preload_modules)
     jobs = _jobs_registry()
 
     custom_header = """#
@@ -1428,8 +1662,7 @@ def bootstrap(
         OmegaConf.set_struct(cfg, True)
 
     if overrides:
-        cfg_cli = OmegaConf.from_dotlist(list(overrides))
-        cfg = OmegaConf.merge(cfg, cfg_cli)
+        cfg = _apply_overrides(cfg, overrides)
 
         console.print()
         console.print("[yellow]Config Overrides:[/yellow]")
@@ -1470,7 +1703,12 @@ def bootstrap(
     )
 
     spec = JobSpec(name=name, project=project, group=group)
-    bootstrap_py_content = _generate_bootstrap(cfg, hardware, spec)
+    bootstrap_py_content = _generate_bootstrap(
+        cfg,
+        hardware,
+        spec,
+        preload_modules=list(preload_modules) if preload_modules else None,
+    )
 
     juicefs_mount = (
         JuiceFSMount(
@@ -1478,6 +1716,7 @@ def bootstrap(
             mount_point=root_path,
             cache_size=cache_size,
             cache_dir=cache_dir,
+            all_squash=all_squash,
         )
         if mount
         else None

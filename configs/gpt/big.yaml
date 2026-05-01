@@ -28,8 +28,8 @@ optimization:
   decay_pct: 0.01
 training:
   batch_size: 512
-  per_device_batch_size: 8
-  tokens: 40000000000
+  per_device_batch_size: -1
+  tokens: 36000000000
   warmup_pct: 0.01
   decay_pct: 0.1
   validation: true

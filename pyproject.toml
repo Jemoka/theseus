@@ -1,6 +1,6 @@
 [project]
 name = "libthx"
-version = "0.1.8"
+version = "0.2.0"
 description = "Architecture experimentation and training infrastructure."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -229,7 +229,7 @@ plugins = ['pydantic.mypy']
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-exclude = ["tests", "examples"]
+exclude = ["tests", "examples", "theseus/dispatch/bootstrap.py"]
 
 [[tool.mypy.overrides]]
 module = "huggingface_hub.*"

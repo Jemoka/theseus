@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 
 from theseus.config import field
+from theseus.model.axes import Axes
 from theseus.model.attention.forking import (
     ForkingAttention,
     ATTN_DTYPE,
@@ -19,12 +20,20 @@ class ScratchSparseCrossAttention(ForkingAttention):
         self.q_proj = nn.Dense(
             self.scratch_head_dim,
             use_bias=False,
+            kernel_init=nn.with_partitioning(
+                jax.nn.initializers.normal(stddev=0.02),
+                (Axes.N_EMBD.value, Axes.N_SCRATCH.value),
+            ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
         self.k_proj = nn.Dense(
             self.scratch_head_dim,
             use_bias=False,
+            kernel_init=nn.with_partitioning(
+                jax.nn.initializers.normal(stddev=0.02),
+                (Axes.N_EMBD.value, Axes.N_SCRATCH.value),
+            ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
@@ -107,6 +116,7 @@ class ScratchSparseCrossAttention(ForkingAttention):
             attn_weights,
             jnp.array(-1e9, dtype=ATTN_DTYPE),
         )
+        self.sow("plots", "scratching_attn_weights", attn_weights)
         attn_weights = jax.nn.softmax(attn_weights, axis=-1)
         y = jnp.einsum("bhqk,bkhd->bqhd", attn_weights, v)
         return y
@@ -130,7 +140,7 @@ class ScratchSparseCrossAttention(ForkingAttention):
         # Fork channel weighting (identical to ForkingAttention.preprocess_qkv)
         if self.use_fork_channel:
             q = q.at[:, :, -1].set(jnp.ones_like(q[:, :, -1]))
-            k = k.at[:, :, -1].set(jnp.exp(cumulative_scores))
+            k = k.at[:, :, -1].set(cumulative_scores)
 
         # each of these should be a single "head"
         y = self.attn(

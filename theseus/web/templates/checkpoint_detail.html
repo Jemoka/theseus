@@ -28,56 +28,36 @@
     </div>
 
     <!-- Info Grid -->
-    <div class="grid grid-4 gap-3 mb-4">
+    {% set rel_path = checkpoint.project ~ "/" ~ checkpoint.group ~ "/" ~ checkpoint.job_name ~ "/" ~ checkpoint.suffix %}
+    <div style="display: flex; gap: var(--spacing-md); margin-bottom: var(--spacing-md);">
         <!-- Created -->
-        <div class="stat-card">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Created</div>
             </div>
             <div class="stat-card-body">
-                <div class="text-xs">{{ checkpoint.created | format_timestamp }}</div>
+                <div class="text-xs" style="padding-right: var(--spacing-lg);">{{ checkpoint.created | format_timestamp }}</div>
             </div>
         </div>
 
         <!-- Size -->
-        <div class="stat-card">
+        <div class="stat-card" style="flex-shrink: 0;">
             <div class="stat-card-header">
                 <div class="stat-label">Size</div>
             </div>
             <div class="stat-card-body">
-                <div class="text-xs font-mono">{{ checkpoint.size_bytes | format_size }}</div>
+                <div class="text-xs font-mono" style="padding-right: var(--spacing-lg);">{{ checkpoint.size_bytes | format_size }}</div>
             </div>
         </div>
 
-        <!-- Has Config -->
-        <div class="stat-card">
+        <!-- Rel Path (click to copy) -->
+        <div class="stat-card ckpt-relpath" style="flex: 1; min-width: 0; cursor: pointer; transition: background 0.15s ease;"
+             onclick="navigator.clipboard.writeText('{{ rel_path }}').then(() => { this.style.background = 'rgba(38, 166, 113, 0.15)'; setTimeout(() => this.style.background = '', 300); })">
             <div class="stat-card-header">
-                <div class="stat-label">Config</div>
+                <div class="stat-label">Path</div>
             </div>
             <div class="stat-card-body">
-                <div class="text-xs">
-                    {% if checkpoint.has_config %}
-                    <span style="color: var(--green);">✓ Available</span>
-                    {% else %}
-                    <span class="text-gray-400">Not found</span>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <!-- Has Job Spec -->
-        <div class="stat-card">
-            <div class="stat-card-header">
-                <div class="stat-label">Job Spec</div>
-            </div>
-            <div class="stat-card-body">
-                <div class="text-xs">
-                    {% if checkpoint.has_job_spec %}
-                    <span style="color: var(--green);">✓ Available</span>
-                    {% else %}
-                    <span class="text-gray-400">Not found</span>
-                    {% endif %}
-                </div>
+                <code class="text-2xs font-mono" style="color: var(--blue); white-space: nowrap;">{{ rel_path }}</code>
             </div>
         </div>
     </div>

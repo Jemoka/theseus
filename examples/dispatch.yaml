@@ -21,6 +21,10 @@ clusters:
     root: /data/theseus
     work: /tmp/theseus
     log: /var/log/theseus  # optional, defaults to {work}/logs
+    # data: /data/theseus/data            # optional, defaults to {root}/data
+    # checkpoints: /data/theseus/ckpts    # optional, defaults to {root}/checkpoints
+    # results: /data/theseus/results      # optional, defaults to {root}/results
+    # status: /data/theseus/status        # optional, defaults to {root}/status
     wandb: your-wandb-api-key       # optional, exported as WANDB_API_KEY on remote
     wandb_entity: your-wandb-entity  # optional, exported as WANDB_ENTITY on remote
     wandb_project: your-wandb-project  # optional, exported as WANDB_PROJECT on remote
@@ -44,6 +48,7 @@ clusters:
     mount: redis://:password@redis.example.com:6379/0  # JuiceFS redis connection
     cache_size: 100G  # JuiceFS --cache-size
     cache_dir: /scratch/juicefs-cache  # JuiceFS --cache-dir
+    all_squash: "1000:1000"  # JuiceFS --all-squash UID:GID (map all accesses to this UID:GID)
     uv_dir: /scratch/uv-cache  # UV_CACHE_DIR override for uv
 
 hosts:
@@ -55,6 +60,9 @@ hosts:
     chips:
       h100: 4
     uv_groups: [cuda12]         # uv sync --group cuda12
+    env:                        # host-level env vars (override cluster-level on collision)
+      CUDA_VISIBLE_DEVICES: "0,1,2,3"   # pin to specific device indices
+      NCCL_DEBUG: WARN
 
   devbox:
     ssh: devbox
@@ -97,6 +105,9 @@ hosts:
     mem: 64G                     # default memory per job (default: 64G if not set)
     exclude: [node001, node002]  # nodes to exclude (--exclude)
     uv_groups: [cuda12]
+    env:                         # host-level env vars (injected into SLURM job env)
+      NCCL_IB_HCA: mlx5_0,mlx5_1
+      NCCL_SOCKET_IFNAME: ib0
 
   # SLURM cluster with explicit chip allocation limits
   hpc-limited:
@@ -135,6 +146,9 @@ hosts:
     # metadata:                 # instance metadata key-value pairs (optional)
     #   startup-script: "echo hello"
     uv_groups: [tpu]            # uv sync --group tpu
+    env:                        # host-level env vars exported on every TPU worker
+      JAX_PLATFORMS: tpu
+      LIBTPU_INIT_ARGS: "--xla_tpu_spmd_rng_bit_generator_unsafe=true"
 
   # Kubernetes Volcano batch scheduler - gang-scheduled distributed training
   # Requires: Volcano installed on the K8s cluster, a PVC for code/data,
@@ -148,9 +162,9 @@ hosts:
     pvc_name: training-data       # PVC for code + data
     pvc_mount_path: /workspace    # mount point inside pods
     num_nodes: 4
-    gpus_per_node: 8
+    # gpus_per_node: 8              # (legacy fallback) GPU count is now derived from chips
     chips:
-      h100: 8                     # chip_name -> count per node
+      h100: 8                       # chip_name -> count per node (used for solver AND K8s GPU resource requests)
     gpu_resource_key: nvidia.com/gpu  # K8s resource name for GPUs
     cpu: "32"
     memory: "256Gi"
@@ -170,6 +184,6 @@ hosts:
     #     effect: NoSchedule
     # rdma: false                     # request RDMA devices for high-bandwidth inter-node comms
     # rdma_per_node: 8                # RDMA device count per node (default 8)
-    # env:                           # extra env vars injected into pods
-    #   NCCL_DEBUG: INFO
+    # env:                           # host-level env vars injected into pods
+    #   NCCL_DEBUG: INFO              # (host-level env overrides cluster-level keys)
     uv_groups: [gpu]

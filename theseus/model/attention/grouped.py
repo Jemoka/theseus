@@ -22,6 +22,41 @@ from theseus.model.masks import (
 )
 
 
+class GroupedOutputProjection(nn.Module):
+    n_embd: int
+    n_kv_head: int
+    n_rep: int
+    head_dim: int
+    use_bias: bool
+    kernel_init: nn.initializers.Initializer
+    param_dtype: Any
+    dtype: Any
+
+    @nn.compact
+    def __call__(self, y: jax.Array) -> jax.Array:
+        kernel_param = self.param(
+            "kernel",
+            nn.with_partitioning(
+                self.kernel_init,
+                (Axes.N_ATTN.value, Axes.N_EMBD.value),
+            ),
+            (self.n_kv_head * self.n_rep * self.head_dim, self.n_embd),
+            self.param_dtype,
+        )
+        kernel = jnp.asarray(kernel_param, self.dtype)
+        kernel = kernel.reshape(self.n_kv_head, self.n_rep, self.head_dim, self.n_embd)
+        out = jnp.einsum("btknd,kndo->bto", y.astype(self.dtype), kernel)
+        if self.use_bias:
+            bias = self.param(
+                "bias",
+                nn.initializers.zeros,
+                (self.n_embd,),
+                self.param_dtype,
+            )
+            out = out + jnp.asarray(bias, self.dtype)
+        return out
+
+
 class GroupedSelfAttention(SelfAttention):
     n_embd: int = field("architecture/n_embd", default=4096)
     n_layers: int = field("architecture/n_layers", default=32)
@@ -83,13 +118,13 @@ class GroupedSelfAttention(SelfAttention):
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
-        self.o_proj = nn.Dense(
-            self.n_embd,
+        self.o_proj = GroupedOutputProjection(
+            n_embd=self.n_embd,
+            n_kv_head=n_kv_head,
+            n_rep=n_rep,
+            head_dim=head_dim,
             use_bias=self.attn_bias,
-            kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=proj_init_std),
-                (Axes.N_ATTN.value, Axes.N_EMBD.value),
-            ),
+            kernel_init=jax.nn.initializers.normal(stddev=proj_init_std),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
         )
@@ -120,9 +155,50 @@ class GroupedSelfAttention(SelfAttention):
         self, q: jax.Array, k: jax.Array, v: jax.Array, **kwargs: Any
     ) -> Tuple[jax.Array, jax.Array, jax.Array]:
         q, k = self.rope(q, k, t=kwargs.get("positions"))
-        k = self._repeat_kv(k)
-        v = self._repeat_kv(v)
         return q, k, v
+
+    @nn.compact
+    def __call__(
+        self,
+        x: jax.Array,
+        padding_mask: Optional[jax.Array] = None,
+        deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
+        **kwargs: Any,
+    ) -> jax.Array:
+        B, T, C = x.shape
+
+        q, k, v = self.project(x)
+
+        # For decode steps with cache, inject correct RoPE positions.
+        if self.has_variable("cache", "cache_index"):
+            ci: Any = self.get_variable("cache", "cache_index")
+            kwargs = {**kwargs, "positions": self._cached_positions(T, ci)}
+        elif "positions" not in kwargs:
+            kwargs = {
+                **kwargs,
+                "positions": self._positions_from_padding(T, padding_mask),
+            }
+
+        q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
+
+        # Cache compact GQA KV heads. Attention handles grouped query heads
+        # directly so we do not materialize repeated K/V or reshape a sharded
+        # KV-head axis together with an unsharded repeat axis.
+        k, v, cache_idx = self._cached_kv(
+            k, v, padding_mask=padding_mask, cache_max_len=cache_max_len
+        )
+
+        T_kv = k.shape[1]
+        mask = self.build_mask(T_kv, padding_mask, _cache_index=cache_idx, **kwargs)
+        y = self.attn(q, k, v, mask, **kwargs)
+        y = self.postprocess_attn(y, padding_mask, deterministic, **kwargs)
+        y = self.output_proj(y)
+
+        if not deterministic and self.dropout > 0:
+            y = nn.Dropout(rate=self.dropout)(y, deterministic=False)
+
+        return y
 
     def build_mask(
         self,
@@ -159,23 +235,30 @@ class GroupedSelfAttention(SelfAttention):
     ) -> jax.Array:
         b = q.shape[0]
         t_q = q.shape[1]
-        t_kv = k.shape[1]
-        qh = q.transpose(0, 2, 1, 3).astype(self._activation_dtype)
+        kvh = k.shape[2]
+        qh = q.reshape(b, t_q, kvh, self.n_rep, self.head_dim)
+        qh = qh.transpose(0, 2, 3, 1, 4).astype(self._activation_dtype)
         kh = k.transpose(0, 2, 1, 3).astype(self._activation_dtype)
         vh = v.transpose(0, 2, 1, 3).astype(self._activation_dtype)
 
-        scores = jnp.einsum("bhtd,bhTd->bhtT", qh, kh)
+        scores = jnp.einsum("bkntd,bkTd->bkntT", qh, kh)
         scores = scores / jnp.sqrt(self.head_dim).astype(jnp.float32)
 
         if mask is not None:
-            bias = jnp.where(
-                jnp.broadcast_to(mask, (b, 1, t_q, t_kv)), 0.0, -1e9
-            ).astype(jnp.float32)
+            if mask.ndim == 4:
+                mask = mask[:, :, None, :, :]
+            elif mask.ndim == 3:
+                mask = mask[:, None, None, :, :]
+            elif mask.ndim == 2:
+                mask = mask[:, None, None, None, :]
+            bias = jnp.where(jnp.broadcast_to(mask, scores.shape), 0.0, -1e9).astype(
+                jnp.float32
+            )
             scores = scores + bias
 
         attn_w = jax.nn.softmax(scores, axis=-1).astype(vh.dtype)
-        y = jnp.einsum("bhtT,bhTd->bhtd", attn_w, vh.astype(attn_w.dtype))
-        return y.transpose(0, 2, 1, 3)  # back to (B, T_q, H, D)
+        y = jnp.einsum("bkntT,bkTd->bkntd", attn_w, vh.astype(attn_w.dtype))
+        return y.transpose(0, 3, 1, 2, 4)
 
     def postprocess_attn(
         self,

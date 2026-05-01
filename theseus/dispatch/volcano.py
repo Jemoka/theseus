@@ -337,10 +337,20 @@ def render_volcano_job(
             resource_lines.append(f'cpu: "{host_config.cpu}"')
         if host_config.memory:
             resource_lines.append(f'memory: "{host_config.memory}"')
-        if host_config.gpus_per_node > 0:
-            resource_lines.append(
-                f"{host_config.gpu_resource_key}: {host_config.gpus_per_node}"
-            )
+        # Derive GPU count: for single-node jobs, use exact chip count if
+        # fewer than a full node was requested; for multi-node, use full node.
+        if host_config.chips:
+            chips_per_node = max(host_config.chips.values())
+        else:
+            chips_per_node = host_config.gpus_per_node
+
+        if n_chips is not None and num_replicas == 1 and 0 < n_chips < chips_per_node:
+            effective_gpus = n_chips
+        else:
+            effective_gpus = chips_per_node
+
+        if effective_gpus > 0:
+            resource_lines.append(f"{host_config.gpu_resource_key}: {effective_gpus}")
         if host_config.rdma:
             resource_lines.append(
                 f"rdma/rdma_shared_device_a: {host_config.rdma_per_node}"

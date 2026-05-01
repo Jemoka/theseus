@@ -30,6 +30,7 @@ class QwenDecoderBlock(Module):
         deterministic: bool = False,
         sliding: bool = False,
         positions: Optional[jax.Array] = None,
+        cache_max_len: Optional[int] = None,
     ) -> jax.Array:
         h = self.rms_1(x)
         h = self.attn(
@@ -38,6 +39,7 @@ class QwenDecoderBlock(Module):
             deterministic=deterministic,
             sliding=sliding,
             positions=positions,
+            cache_max_len=cache_max_len,
         )
         x = x + h
 

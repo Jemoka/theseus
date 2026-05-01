@@ -11,7 +11,7 @@ from theseus.evaluation import PerplexityEvaluation
 from theseus.registry import evaluation
 
 
-@evaluation("pes2o")
+@evaluation("pes2o_ppl")
 class Pes2OEval(PerplexityEvaluation):
     """Perplexity evaluation on peS2o scientific papers."""
 
@@ -35,7 +35,7 @@ class Pes2OEval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return "pes2o"
+        return "pes2o_ppl"
 
     def __len__(self) -> int:
         return len(self.items)

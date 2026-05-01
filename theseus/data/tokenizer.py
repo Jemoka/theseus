@@ -124,6 +124,32 @@ class HuggingFaceTokenizer:
         )
 
 
+class TrivialTokenizer:
+    """Minimal tokenizer: space-splits text and casts each piece to int."""
+
+    @property
+    def eot_token(self) -> int:
+        return 0
+
+    def encode(self, text: str, allowed_special: Any = "all") -> list[int]:
+        del allowed_special
+        return [int(x) for x in text.split(" ")]
+
+    def encode_batch(
+        self, texts: Sequence[str], allowed_special: Any = "all"
+    ) -> list[list[int]]:
+        return [self.encode(t) for t in texts]
+
+    def encode_ordinary(self, text: str) -> list[int]:
+        return self.encode(text)
+
+    def decode(self, tokens: Sequence[int]) -> str:
+        return " ".join(str(t) for t in tokens)
+
+    def decode_batch(self, tokens_batch: Sequence[Sequence[int]]) -> list[str]:
+        return [self.decode(tokens) for tokens in tokens_batch]
+
+
 def _resolve_tokenizer_config(
     tokenizer_cfg: Optional[TokenizerConfig],
 ) -> TokenizerConfig:
@@ -157,6 +183,9 @@ def _build_tokenizer_cached(
 ) -> Tokenizer:
     backend_name = backend.lower().strip()
 
+    if backend_name == "trivial":
+        return TrivialTokenizer()
+
     if backend_name == "tiktoken":
         # Always use ChatML formatting for tiktoken backends.
         return TikTokenTokenizer(_build_chatml_tiktoken(name))
@@ -179,7 +208,7 @@ def _build_tokenizer_cached(
 
     raise ValueError(
         f"Unknown tokenizer backend '{backend}'. Supported backends: "
-        "'tiktoken', 'huggingface'."
+        "'tiktoken', 'huggingface', 'trivial'."
     )
 
 

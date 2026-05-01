@@ -11,5 +11,6 @@ Step-by-step guides for common workflows with theseus.
 - [Adding Things](adding.md) — overview of the four extension points.
   - [Adding a Model](adding-model.md) — subclass `Module` or extend an existing architecture.
   - [Adding an Experiment](adding-experiment.md) — register a new training job with `@job`.
+  - [The Job System](adding-analysis-job.md) — the full job hierarchy, checkpoint protocol, restore contract, and how to write analysis jobs or custom restorable jobs.
   - [Adding a Dataset](adding-dataset.md) — register a pretraining or chat dataset with `@dataset`.
   - [Adding an Evaluation](adding-evaluation.md) — register a new evaluation with `@evaluation`.

@@ -110,10 +110,32 @@ class ABCDConfig(BaseTrainerConfig):
 C = TypeVar("C", bound=ABCDConfig)
 
 
+_PPL_SUFFIXES = ("_ppl", "_perplexity")
+
+
+def _metric_group(name: str) -> str:
+    """Bucket a metric by name so unbounded scales don't dominate bar plots.
+
+    ``fineweb_ppl`` blows out the axis when plotted alongside 0-1 accuracy
+    metrics; grouping by suffix keeps each plot readable.
+    """
+    low = name.lower()
+    if low == "ppl" or any(low.endswith(s) for s in _PPL_SUFFIXES):
+        return "ppl"
+    return "score"
+
+
+_GROUP_AXIS_LABEL = {"ppl": "Perplexity", "score": "Score"}
+
+
 def _make_eval_bar_chart(
     eval_metrics: dict[str, float], boundary_label: str
 ) -> Dict[str, Any]:
-    """Create a bar chart of evaluation results at a dataset boundary.
+    """Create bar charts of evaluation results at a dataset boundary.
+
+    Metrics are partitioned by name (currently perplexity vs. everything
+    else) and each group is rendered as its own figure so a high-range
+    metric like ``fineweb_ppl`` doesn't flatten the 0-1 accuracy bars.
 
     Called on the Plotter worker thread where matplotlib is already
     initialized and apply_theme() has been applied.
@@ -121,80 +143,97 @@ def _make_eval_bar_chart(
     import seaborn as sns
     from matplotlib import pyplot as plt
 
-    names = list(eval_metrics.keys())
-    scores = [float(v) for v in eval_metrics.values()]
-    colors = PALETTE[: len(names)]
+    groups: Dict[str, Dict[str, float]] = {}
+    for k, v in eval_metrics.items():
+        groups.setdefault(_metric_group(k), {})[k] = float(v)
 
-    fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
-    sns.barplot(
-        x=names,
-        y=scores,
-        hue=names,
-        palette=colors,
-        width=0.6,
-        ax=ax,
-        dodge=False,
-        legend=False,
-    )
-    # Restore categorical ticks (the MaxNLocator patch in apply_theme
-    # overwrites them with a numeric locator on axes creation).
-    ax.set_xticks(range(len(names)))
-    ax.set_xticklabels(names)
-    ax.set_ylabel("Score")
-    ax.set_title(f"Evaluation at boundary {boundary_label}")
-    ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
+    figures: Dict[str, Any] = {}
+    for group_name, metrics in groups.items():
+        names = list(metrics.keys())
+        scores = [metrics[n] for n in names]
+        colors = PALETTE[: len(names)]
 
-    for bar, score in zip(ax.patches, scores):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.02,
-            f"{score:.3f}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
+        fig, ax = plt.subplots(figsize=(max(4, len(names) * 1.2), 3.5))
+        sns.barplot(
+            x=names,
+            y=scores,
+            hue=names,
+            palette=colors,
+            width=0.6,
+            ax=ax,
+            dodge=False,
+            legend=False,
         )
+        # Restore categorical ticks (the MaxNLocator patch in apply_theme
+        # overwrites them with a numeric locator on axes creation).
+        ax.set_xticks(range(len(names)))
+        ax.set_xticklabels(names)
+        ax.set_ylabel(_GROUP_AXIS_LABEL.get(group_name, "Value"))
+        ax.set_title(f"Evaluation ({group_name}) at boundary {boundary_label}")
+        ax.set_ylim(0, max(max(scores) * 1.15, 0.1) if scores else 1.0)
 
-    fig.tight_layout()
-    return {f"eval/boundary_{boundary_label}": fig}
+        for bar, score in zip(ax.patches, scores):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.02,
+                f"{score:.3f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+        fig.tight_layout()
+        figures[f"eval/boundary_{boundary_label}_{group_name}"] = fig
+    return figures
 
 
 def _make_eval_timeline_chart(
     eval_history: Dict[str, List[Tuple[int, float]]],
     boundary_tokens: List[int],
+    timeline_key: str = "eval/timeline",
 ) -> Dict[str, Any]:
-    """Create a line chart tracking evaluation metrics across boundaries.
+    """Create line charts tracking evaluation metrics across boundaries.
 
-    Each metric is plotted as a separate line; vertical dash-dot lines
-    mark dataset/stage boundaries.
+    Metrics are split into groups by ``_metric_group`` so perplexity and
+    accuracy-style scores don't share a y-axis.  Each group produces its
+    own figure keyed ``{timeline_key}_{group}`` (e.g. ``eval/timeline_ppl``).
+    Vertical dash-dot lines mark dataset/stage boundaries.
     """
     import seaborn as sns
     from matplotlib import pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    grouped: Dict[str, Dict[str, List[Tuple[int, float]]]] = {}
+    for name, points in eval_history.items():
+        grouped.setdefault(_metric_group(name), {})[name] = points
 
-    for i, (name, points) in enumerate(eval_history.items()):
-        tokens = [p[0] for p in points]
-        scores = [p[1] for p in points]
-        color = PALETTE[i % len(PALETTE)]
-        sns.lineplot(
-            x=tokens,
-            y=scores,
-            marker="o",
-            label=name,
-            color=color,
-            ax=ax,
-            errorbar=None,
-        )
+    figures: Dict[str, Any] = {}
+    for group_name, history in grouped.items():
+        fig, ax = plt.subplots(figsize=(7, 4))
 
-    for bt in boundary_tokens:
-        ax.axvline(x=bt, color=SPINE, linestyle="-.", linewidth=0.9, alpha=0.7)
+        for i, (name, points) in enumerate(history.items()):
+            tokens = [p[0] for p in points]
+            scores = [p[1] for p in points]
+            color = PALETTE[i % len(PALETTE)]
+            sns.lineplot(
+                x=tokens,
+                y=scores,
+                marker="o",
+                label=name,
+                color=color,
+                ax=ax,
+                errorbar=None,
+            )
 
-    ax.set_xlabel("Tokens")
-    ax.set_ylabel("Score")
-    ax.set_title("Evaluation over training")
-    ax.legend()
-    fig.tight_layout()
-    return {"eval/timeline": fig}
+        for bt in boundary_tokens:
+            ax.axvline(x=bt, color=SPINE, linestyle="-.", linewidth=0.9, alpha=0.7)
+
+        ax.set_xlabel("Tokens")
+        ax.set_ylabel(_GROUP_AXIS_LABEL.get(group_name, "Value"))
+        ax.set_title(f"Evaluation ({group_name}) over training")
+        ax.legend()
+        fig.tight_layout()
+        figures[f"{timeline_key}_{group_name}"] = fig
+    return figures
 
 
 class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
@@ -433,6 +472,67 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
             self._real_validation_interval = self.args.validation_interval
             self.args.validation_interval = self.total_steps + 1
 
+    def _on_dataset_boundary(
+        self, old_idx: int, new_idx: int, current_ntok: int
+    ) -> None:
+        """Called when the primary dataset changes.
+
+        Runs evaluation, saves a checkpoint, and logs metrics.
+        Subclasses can override to add schedule-specific behaviour
+        (e.g. cosine rewarm or optimizer reset) after calling super().
+        """
+        if old_idx == 0 and self.args.skip_first_dataset_validation:
+            self.args.validation_interval = self._real_validation_interval
+
+        multihost_utils.sync_global_devices("eval_barrier:start")
+        self.inference.state = self.state
+        eval_metrics = self.inference.evaluate()
+        multihost_utils.sync_global_devices("eval_barrier:end")
+
+        if self.main_process():
+            logger.info("EVAL | {}", eval_metrics)
+            step = self.global_step_counter_ // self.accumulate_steps
+            wandb.log(eval_metrics, step=step)
+            self._boundary_tokens.append(current_ntok)
+
+            if len(eval_metrics) > 0:
+                boundary_label = f"{old_idx}_to_{new_idx}"
+                metrics_snapshot = dict(eval_metrics)
+                self.plotter.plot(
+                    lambda m=metrics_snapshot,  # type: ignore[misc]
+                    label=boundary_label: _make_eval_bar_chart(m, label),
+                    step=step,
+                )
+
+                for k, v in metrics_snapshot.items():
+                    self._eval_history.setdefault(k, []).append(
+                        (current_ntok, float(v))
+                    )
+                history_snap = {k: list(v) for k, v in self._eval_history.items()}
+                boundaries_snap = list(self._boundary_tokens)
+                self.plotter.plot(
+                    lambda h=history_snap,  # type: ignore[misc]
+                    b=boundaries_snap: _make_eval_timeline_chart(h, b),
+                    step=step,
+                )
+
+        logger.info(
+            "DATASET | switching primary from {} to {} at {} tokens",
+            old_idx,
+            new_idx,
+            current_ntok,
+        )
+        self.save(Path(f"boundary_{old_idx}_{new_idx}"))
+
+        if self.main_process():
+            wandb.log(
+                {
+                    "dataset/index": new_idx,
+                    "dataset/switch_at_tokens": current_ntok,
+                },
+                step=self.global_step_counter_ // self.accumulate_steps,
+            )
+
     def batch(self, slice: str = "train") -> PyTree[np.ndarray]:
         """Return the next training or validation batch.
 
@@ -456,59 +556,7 @@ class ABCDBaseTrainer(BaseTrainer[C, M], Generic[C, M]):
 
         # ---------- Boundary evaluation when primary dataset changes ----------
         if primary_idx != self._current_dl_idx:
-            # Restore periodic validation when leaving the first dataset
-            if self._current_dl_idx == 0 and self.args.skip_first_dataset_validation:
-                self.args.validation_interval = self._real_validation_interval
-
-            multihost_utils.sync_global_devices("eval_barrier:start")
-            self.inference.state = self.state
-            eval_metrics = self.inference.evaluate()
-            multihost_utils.sync_global_devices("eval_barrier:end")
-
-            if self.main_process():
-                logger.info("EVAL | {}", eval_metrics)
-                step = self.global_step_counter_ // self.accumulate_steps
-                wandb.log(eval_metrics, step=step)
-                self._boundary_tokens.append(current_ntok)
-
-                if len(eval_metrics) > 0:
-                    boundary_label = f"{self._current_dl_idx}_to_{primary_idx}"
-                    metrics_snapshot = dict(eval_metrics)
-                    self.plotter.plot(
-                        lambda m=metrics_snapshot,  # type: ignore[misc]
-                        label=boundary_label: _make_eval_bar_chart(m, label),
-                        step=step,
-                    )
-
-                    for k, v in metrics_snapshot.items():
-                        self._eval_history.setdefault(k, []).append(
-                            (current_ntok, float(v))
-                        )
-                    history_snap = {k: list(v) for k, v in self._eval_history.items()}
-                    boundaries_snap = list(self._boundary_tokens)
-                    self.plotter.plot(
-                        lambda h=history_snap,  # type: ignore[misc]
-                        b=boundaries_snap: _make_eval_timeline_chart(h, b),
-                        step=step,
-                    )
-
-            logger.info(
-                "DATASET | switching primary from {} to {} at {} tokens (weights: {})",
-                self._current_dl_idx,
-                primary_idx,
-                current_ntok,
-                [f"{w:.3f}" for w in weights],
-            )
-            self.save(Path(f"boundary_{self._current_dl_idx}_{primary_idx}"))
-
-            if self.main_process():
-                wandb.log(
-                    {
-                        "dataset/index": primary_idx,
-                        "dataset/switch_at_tokens": current_ntok,
-                    },
-                    step=self.global_step_counter_ // self.accumulate_steps,
-                )
+            self._on_dataset_boundary(self._current_dl_idx, primary_idx, current_ntok)
             self._current_dl_idx = primary_idx
 
         # ---------- Draw and merge batches from active dataloaders ----------

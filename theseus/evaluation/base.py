@@ -4,7 +4,7 @@ Evaluation framework for theseus trainers.
 Provides abstract base classes for different evaluation types:
 - RolloutEvaluation: Autoregressive generation tasks
 - EncodingEvaluation: Next-token prediction accuracy
-- PerplexityEvaluation: Dataset perplexity (returns 1/ppl, higher is better)
+- PerplexityEvaluation: Dataset perplexity (returns ppl, lower is better)
 - PerplexityComparisonEvaluation: Multiple-choice via perplexity comparison
 
 Also provides:
@@ -12,11 +12,14 @@ Also provides:
 """
 
 import json
+import random
 from pathlib import Path
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Tuple, List, Optional, Union, Generic, TYPE_CHECKING
+from typing import Any, Tuple, List, Optional, Union, Generic, Literal, TYPE_CHECKING
+
+import numpy as np
 
 import jax
 import jax.numpy as jnp
@@ -34,6 +37,22 @@ from theseus.data.datasets.dataset import ChatTemplate
 
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
+
+
+def _select_indices(inference: Any, n: int) -> list[int]:
+    """Pick which examples to evaluate from an n-sample dataset.
+
+    Reads ``inference.length`` (set by ``Evaluator``); when 0 < length < n,
+    samples that many indices via the evaluator's per-call-deterministic
+    ``random.Random``. Otherwise returns ``range(n)``. Every host computes
+    the same indices because every Evaluator's RNG is seeded identically.
+    """
+    length = getattr(inference, "length", -1)
+    rng = getattr(inference, "random", None)
+    if rng is None or length <= 0 or length >= n:
+        return list(range(n))
+    sampled: list[int] = rng.sample(range(n), length)
+    return sampled
 
 
 def _pad_eval_inputs(
@@ -79,10 +98,39 @@ class Evaluation(ABC):
 
     @abstractmethod
     def __call__(
-        self, inference: "InferenceJob[Any, M]", encoding: Any, **kwargs: Any
-    ) -> float:
-        """Run the evaluation and return a score."""
+        self,
+        inference: "InferenceJob[Any, M]",
+        encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run the evaluation and return a score (and optionally intermediates).
+
+        When ``return_intermediates=True``, also returns a list of
+        ``(x, padding_mask)`` numpy arrays — one per sample — available on every
+        host so that an RL trainer can use them as a training batch.
+        """
         ...
+
+    def _score(self, *args: Any, reduce: str = "mean") -> Any:
+        """Reduce per-sample scores from ``self.score(...)`` into a final value.
+
+        ``reduce="mean"`` and ``"sum"`` return a Python float;
+        ``reduce="none"`` returns the per-sample np.ndarray.
+        """
+        per_sample = np.asarray(list(self.score(*args)), dtype=np.float32)
+        if reduce == "mean":
+            return float(per_sample.mean()) if per_sample.size > 0 else 0.0
+        if reduce == "sum":
+            return float(per_sample.sum())
+        if reduce == "none":
+            return per_sample
+        raise ValueError(f"unknown reduce mode: {reduce!r}")
+
+    def score(self, *args: Any) -> List[float]:
+        """Return one float per evaluation sample. Subclasses override."""
+        raise NotImplementedError("Override score() to return one float per sample.")
 
     @staticmethod
     def find_accumulation_steps(
@@ -113,18 +161,16 @@ class Evaluation(ABC):
 class RolloutEvaluation(Evaluation):
     """Evaluation using autoregressive generation."""
 
-    def score(self, ys: list[str], y_hats: list[str]) -> float:
-        """Compute score from generated results.
+    # Cached on first __call__ so PPO refills (and other repeated callers)
+    # reuse the compiled chunk function instead of re-tracing every time.
+    # Class-level defaults keep subclasses safe even if they override
+    # __init__ without calling super().
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
 
-        Args:
-            ys: Ground truth strings
-            y_hats: Generated results
-
-        Returns:
-            Score (higher is better)
-        """
-        results = [self.check(y, y_hat) for y, y_hat in zip(ys, y_hats)]
-        return sum(results) / len(results)
+    def score(self, ys: list[str], y_hats: list[str]) -> List[float]:
+        """Per-sample scores. Default: cast each ``check()`` to float."""
+        return [float(self.check(y, y_hat)) for y, y_hat in zip(ys, y_hats)]
 
     def check(self, y: str, y_hat: str) -> bool:
         """Check if y_hat matches y.
@@ -162,190 +208,184 @@ class RolloutEvaluation(Evaluation):
         ...
 
     def max_new_tokens(self, inference: "InferenceJob[Any, M]") -> int:
-        """Maximum tokens to generate. Override in subclasses for shorter rollouts.
+        """Maximum tokens to generate. Subclasses MUST override.
 
-        Default is full block_size, but most evaluations only need ~10-100 tokens.
+        Drives the prompt/generation split (``prompt_max = block_size -
+        max_new_tokens``) so the JIT shapes are constant across refills —
+        defaulting to ``block_size`` would leave zero room for prompts.
         """
-        return inference.block_size
+        raise NotImplementedError(
+            f"{type(self).__name__} must override max_new_tokens()."
+        )
 
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
+    ) -> Any:
         """Run evaluation.
 
         Args:
             inference: InferenceJob instance for running inference
             encoding: Tokenizer with encode_batch/decode_batch methods
+            reduce: how to reduce per-sample scores ("mean" | "sum" | "none")
+            return_intermediates: also return per-sample (rollout, mask) numpy
+                arrays on every host (for RL consumers).
             temperature: Sampling temperature (0.0 for greedy)
             top_p: Nucleus sampling threshold
             chunk_size: Number of batches per JIT chunk (default 200)
 
         Returns:
-            Evaluation score
+            Evaluation score, or (score, intermediates) when return_intermediates.
         """
-        eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        original_size = len(eval_data)
+        indices = _select_indices(inference, len(self))
+        original_size = len(indices)
 
-        # Gather and encode all data on main process
-        multihost_utils.sync_global_devices("eval_gather_all:pre")
+        # Pin prompt + total lengths so the JIT shapes are constant across
+        # refills (varying-length prompts otherwise force XLA recompiles).
+        max_new_tokens = self.max_new_tokens(inference)
+        prompt_max = inference.block_size - max_new_tokens
+        if prompt_max <= 0:
+            raise ValueError(
+                f"{self.name}: max_new_tokens={max_new_tokens} leaves no "
+                f"room under inference.block_size={inference.block_size}."
+            )
+
+        batch_unit = inference.replicas * inference.per_device_batch_size
+        indices = _select_indices(inference, len(self))
+        original_size = len(indices)
+
         if jax.process_index() == 0:
-            x_raw, y_raw = zip(*[eval_data.get(i) for i in range(original_size)])
+            x_raw, y_raw = zip(*[self.get(i) for i in indices])
             x = list(x_raw)
             original_y = list(y_raw)
-            _, (x, _) = _pad_eval_inputs(batch_unit, x, original_y)
+
+            _, (x, original_y) = _pad_eval_inputs(batch_unit, x, original_y)
+
             encoded = encoding.encode_batch(x, allowed_special="all")
-            encoded = [seq[: inference.block_size] for seq in encoded]
+            encoded = [seq[:prompt_max] for seq in encoded]
             prompt_lengths = [len(seq) for seq in encoded]
-            xs, masks = inference.pad(encoded)
+
+            rollout_inputs = [jnp.asarray(seq, dtype=jnp.int32) for seq in encoded]
         else:
             original_y = None
             prompt_lengths = None
-            xs, masks = None, None
-        xs = multihost_utils.broadcast_one_to_all(xs)
-        masks = multihost_utils.broadcast_one_to_all(masks)
-        multihost_utils.sync_global_devices("eval_gather_all:post")
+            rollout_inputs = None
 
-        # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
-        xs = pieces_xs[jax.process_index()]
-        masks = pieces_masks[jax.process_index()]
+        # rollout itself broadcasts from process 0, so all hosts need the same Python
+        # call. Nonzero hosts can pass a dummy list with the right nonempty type;
+        # process 0's broadcasted xs/masks are the real source of data.
+        rollout_inputs = multihost_utils.broadcast_one_to_all(rollout_inputs)
 
-        # Reshape into (accumulate_steps, per_device_batch_size, T)
-        xs = xs.reshape(
-            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
-        )
-        masks = masks.reshape(
-            -1, inference.local_replicas * inference.per_device_batch_size, xs.shape[-1]
-        )
-
-        # Create global arrays
-        data_pspec = P(None, Axis.BATCH, None)  # type: ignore[no-untyped-call]
-        xs = multihost_utils.host_local_array_to_global_array(
-            xs, inference.mesh, data_pspec
-        )
-        masks = multihost_utils.host_local_array_to_global_array(
-            masks, inference.mesh, data_pspec
+        raw_rollouts = inference.rollout(
+            rollout_inputs,
+            encoding=encoding,
+            max_new_tokens=max_new_tokens,
+            max_prompt_length=prompt_max,
+            temperature=temperature,
+            top_p=top_p,
+            chunk_size=chunk_size,
+            return_type="raw_indices",
         )
 
-        # Create subkey
-        inference.key, key = jax.random.split(inference.key)
+        raw_rollouts_np = np.asarray(raw_rollouts, dtype=np.int32)
 
-        # Calculate total tokens needed: max prompt length + max_new_tokens
-        max_new_tokens = eval_data.max_new_tokens(inference)
-        max_prompt_length = int(jnp.max(jnp.sum(masks, axis=-1)))
-        total_tokens = min(max_prompt_length + max_new_tokens, inference.block_size)
+        # Score generated text only.
+        generated_rows = raw_rollouts_np[:original_size, prompt_max:].tolist()
+        eot_token = getattr(encoding, "eot_token", None)
+        if eot_token is not None:
+            generated_rows = [
+                row[: row.index(eot_token) + 1] if eot_token in row else row
+                for row in generated_rows
+            ]
+        decoded_results = encoding.decode_batch(generated_rows)
 
-        def evaluate_chunk(
-            state: Any, xs_chunk: Any, masks_chunk: Any, key: Any
-        ) -> Any:
-            """Evaluate a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-                results = inference._autoregress(
-                    state,
-                    key,
-                    x_batch,
-                    mask_batch,
-                    total_tokens,
-                    temperature,
-                    top_p,
-                    **kwargs,
-                )
-                return None, results
-
-            _, rollouts = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            results = jnp.reshape(rollouts, (-1, rollouts.shape[-1]))
-            return results
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding, None),
-            out_shardings=None,
-        )
-
-        # Process in chunks with progress logging
-        num_batches = xs.shape[0]
-        all_results = []
-
-        for chunk_start in range(0, num_batches, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, num_batches)
-            xs_chunk = xs[chunk_start:chunk_end]
-            masks_chunk = masks[chunk_start:chunk_end]
-
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
-                logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
-                )
-
-            # Run chunk
-            chunk_results = wrapped_evaluate_chunk(
-                inference.state, xs_chunk, masks_chunk, key
+        if jax.process_index() == 0:
+            assert original_y is not None
+            score = self._score(
+                original_y[:original_size],
+                [self.clean(i) for i in decoded_results],
+                reduce=reduce,
             )
-            all_results.append(chunk_results)
+        else:
+            score = (
+                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
+            )
 
-        # Concatenate all chunk results
-        results = jnp.concatenate(all_results, axis=0)
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
 
-        # Collect across hosts
-        multihost_utils.sync_global_devices("eval_gather_all:pre")
-        results = multihost_utils.process_allgather(results)
-        multihost_utils.sync_global_devices("eval_gather_all:post")
-
-        # Flatten and strip left-pad tokens before decoding
-        results = jnp.reshape(results, (-1, results.shape[-1]))
-        results_list = results.tolist()
+        if not return_intermediates:
+            return score
 
         if jax.process_index() == 0:
             assert prompt_lengths is not None
-            max_prompt_len = max(prompt_lengths[:original_size])
-            stripped = [
-                row[max_prompt_len - prompt_lengths[i] :]
-                for i, row in enumerate(results_list[:original_size])
-            ]
-        else:
-            stripped = results_list[:original_size]
-        decoded_results = encoding.decode_batch(stripped)
 
-        # Score on process 0 only, then broadcast
-        if jax.process_index() == 0:
-            assert original_y is not None
-            score = eval_data.score(
-                original_y, [eval_data.clean(i) for i in decoded_results]
-            )
+            T_total = prompt_max + max_new_tokens
+            positions = np.arange(T_total)
+
+            base_action_mask = positions >= prompt_max
+
+            intermediates = []
+            for i in range(original_size):
+                padding_mask = positions >= (prompt_max - prompt_lengths[i])
+                intermediates.append(
+                    (
+                        raw_rollouts_np[i],
+                        base_action_mask.copy(),
+                        padding_mask,
+                    )
+                )
         else:
-            score = None
-        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
-        return float(score)
+            intermediates = []
+
+        intermediates = multihost_utils.broadcast_one_to_all(intermediates)
+        return score, intermediates
 
 
 class EncodingEvaluation(Evaluation):
     """Evaluation using next-token prediction accuracy."""
 
-    def score(self, xs: list[str], y_hats: list[str]) -> float:
-        """Compute score from input and model predictions.
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
 
-        Args:
-            xs: Input strings
-            y_hats: Model predictions (argmax of logits, shifted by 1)
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
 
-        Returns:
-            Score (higher is better)
-        """
-        results = [self.check(x, y_hat) for x, y_hat in zip(xs, y_hats)]
-        return sum(results) / len(results)
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch = batch
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+            predictions = jnp.argmax(logits[:, :-1, :], axis=-1)
+            return None, predictions
+
+        _, results = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+        return jnp.reshape(results, (-1, results.shape[-1]))
+
+    def score(self, xs: list[str], y_hats: list[str]) -> List[float]:
+        """Per-sample scores. Default: cast each ``check()`` to float."""
+        return [float(self.check(x, y_hat)) for x, y_hat in zip(xs, y_hats)]
 
     def check(self, x: str, y_hat: str) -> bool:
         """Check if prediction is correct given input.
@@ -380,27 +420,21 @@ class EncodingEvaluation(Evaluation):
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode_batch/decode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            Evaluation score
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        original_size = len(eval_data)
+        indices = _select_indices(inference, len(eval_data))
+        original_size = len(indices)
 
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            original_x = [eval_data.get(i) for i in range(original_size)]
+            original_x = [eval_data.get(i) for i in indices]
             _, (x,) = _pad_eval_inputs(batch_unit, original_x)
             encoded = encoding.encode_batch(x, allowed_special="all")
             encoded = [seq[: inference.block_size] for seq in encoded]
@@ -412,9 +446,13 @@ class EncodingEvaluation(Evaluation):
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
+        # Keep a global view for intermediates.
+        xs_full = xs
+        masks_full = masks
+
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -435,55 +473,52 @@ class EncodingEvaluation(Evaluation):
             masks, inference.mesh, data_pspec
         )
 
-        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
-            """Evaluate a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-                # Use inference's forward method - returns (logits, loss, meta)
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-                # Take argmax to get predicted tokens
-                predictions = jnp.argmax(logits[:, :-1, :], axis=-1)
-                return None, predictions
-
-            _, results = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            results = jnp.reshape(results, (-1, results.shape[-1]))
-            return results
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
-            out_shardings=None,
-        )
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                ),
+                out_shardings=None,
+            )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
         all_results = []
+
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} seq={} batches={}",
+                eval_data.name,
+                original_size,
+                xs.shape[-1],
+                num_batches,
+            )
 
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            # Run chunk
-            chunk_results = wrapped_evaluate_chunk(
-                inference.state, xs_chunk, masks_chunk
-            )
+            chunk_results = self._chunk_jit(inference.state, xs_chunk, masks_chunk)
             all_results.append(chunk_results)
 
         # Concatenate all chunk results
@@ -501,52 +536,136 @@ class EncodingEvaluation(Evaluation):
         # Score on process 0 only, then broadcast
         if jax.process_index() == 0:
             assert original_x is not None
-            score = eval_data.score(
-                original_x, [eval_data.clean(i) for i in decoded_outputs]
+            score = eval_data._score(
+                original_x,
+                [eval_data.clean(i) for i in decoded_outputs],
+                reduce=reduce,
             )
         else:
-            score = None
-        score = multihost_utils.broadcast_one_to_all(jnp.array(score))
-        return float(score)
+            score = (
+                np.zeros(original_size, dtype=np.float32) if reduce == "none" else 0.0
+            )
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
+
+        if not return_intermediates:
+            return score
+
+        # No "action" notion for encoding evals — every real token is fair game.
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [
+            (xs_np[i], masks_np[i], masks_np[i]) for i in range(original_size)
+        ]
+        return score, intermediates
 
 
 class PerplexityEvaluation(Evaluation):
-    """Evaluation that computes dataset perplexity and returns 1/ppl (higher is better).
+    """Evaluation that computes dataset perplexity and returns ppl (lower is better).
 
     Runs a blockwise forward pass like EncodingEvaluation, computes the mean
-    negative log-likelihood over all non-padding tokens, and returns 1/perplexity.
+    negative log-likelihood over all non-padding tokens, and returns perplexity.
     """
+
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch = batch
+
+            y_batch = jnp.roll(x_batch, -1, axis=-1)
+            y_batch = y_batch.at[:, -1].set(-1)
+            y_batch = jnp.where(mask_batch == 0, -1, y_batch)
+
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+
+            logits_f32 = logits.astype(jnp.float32)
+            log_probs = jax.nn.log_softmax(logits_f32, axis=-1)
+
+            token_mask = y_batch != -1
+            y_safe = jnp.where(token_mask, y_batch, 0)
+
+            token_nll = -jnp.take_along_axis(
+                log_probs, y_safe[..., None], axis=-1
+            ).squeeze(-1)
+            token_nll = jnp.where(token_mask, token_nll, 0.0)
+
+            return None, jnp.stack(
+                [
+                    jnp.sum(token_nll, axis=-1),
+                    jnp.sum(token_mask, axis=-1).astype(jnp.float32),
+                ],
+                axis=-1,
+            )
+
+        _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
+        return jnp.reshape(stats, (-1, 2))
 
     @abstractmethod
     def get(self, indx: int) -> str:
         """Get input string at index."""
         ...
 
+    def score(
+        self, per_sample_nll: np.ndarray, per_sample_count: np.ndarray
+    ) -> List[float]:
+        """Per-sample perplexity (= exp(nll / max(count, 1))."""
+        nll = np.asarray(per_sample_nll, dtype=np.float64)
+        count = np.maximum(np.asarray(per_sample_count, dtype=np.float64), 1.0)
+        return list(np.exp(nll / count).astype(np.float32))
+
+    def _score(  # type: ignore[override]
+        self,
+        per_sample_nll: np.ndarray,
+        per_sample_count: np.ndarray,
+        reduce: str = "mean",
+    ) -> Any:
+        """Token-weighted aggregate ppl for mean/sum; per-sample ppl for none."""
+        if reduce == "none":
+            return np.asarray(
+                self.score(per_sample_nll, per_sample_count), dtype=np.float32
+            )
+        nll = float(np.asarray(per_sample_nll, dtype=np.float64).sum())
+        count = float(np.asarray(per_sample_count, dtype=np.float64).sum())
+        return float(np.exp(nll / max(count, 1.0)))
+
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            1/perplexity (higher is better)
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
-        original_size = len(eval_data)
+        indices = _select_indices(inference, len(eval_data))
+        original_size = len(indices)
 
         # Gather and encode all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            x = [eval_data.get(i) for i in range(original_size)]
+            x = [eval_data.get(i) for i in indices]
             _, (x,) = _pad_eval_inputs(batch_unit, x)
             encoded = encoding.encode_batch(x, allowed_special="all")
             encoded = [seq[: inference.block_size] for seq in encoded]
@@ -557,9 +676,12 @@ class PerplexityEvaluation(Evaluation):
         masks = multihost_utils.broadcast_one_to_all(masks)
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
+        xs_full = xs
+        masks_full = masks
+
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
 
@@ -580,73 +702,52 @@ class PerplexityEvaluation(Evaluation):
             masks, inference.mesh, data_pspec
         )
 
-        def evaluate_chunk(state: Any, xs_chunk: Any, masks_chunk: Any) -> Any:
-            """Compute total NLL and token count for a chunk of batches."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch = batch
-
-                # Compute next-token targets: shift x left by 1
-                y_batch = jnp.roll(x_batch, -1, axis=-1)
-                y_batch = y_batch.at[:, -1].set(-1)  # last position has no target
-                y_batch = jnp.where(mask_batch == 0, -1, y_batch)  # mask padding
-
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-
-                logits_f32 = logits.astype(jnp.float32)
-                log_probs = jax.nn.log_softmax(logits_f32, axis=-1)
-
-                token_mask = y_batch != -1
-                y_safe = jnp.where(token_mask, y_batch, 0)
-
-                token_nll = -jnp.take_along_axis(
-                    log_probs, y_safe[..., None], axis=-1
-                ).squeeze(-1)
-                token_nll = jnp.where(token_mask, token_nll, 0.0)
-
-                # Keep per-sample stats so padded examples can be dropped after gather.
-                return None, jnp.stack(
-                    [
-                        jnp.sum(token_nll, axis=-1),
-                        jnp.sum(token_mask, axis=-1).astype(jnp.float32),
-                    ],
-                    axis=-1,
-                )
-
-            _, stats = jax.lax.scan(reduce, None, (xs_chunk, masks_chunk))
-            # stats shape: (chunk_steps, batch_size, 2)
-            return jnp.reshape(stats, (-1, 2))
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(inference.state_sharding, data_sharding, data_sharding),
-            out_shardings=None,
-        )
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                ),
+                out_shardings=None,
+            )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
         all_stats = []
+
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} seq={} batches={}",
+                eval_data.name,
+                original_size,
+                xs.shape[-1],
+                num_batches,
+            )
 
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
             xs_chunk = xs[chunk_start:chunk_end]
             masks_chunk = masks[chunk_start:chunk_end]
 
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            chunk_stats = wrapped_evaluate_chunk(inference.state, xs_chunk, masks_chunk)
+            chunk_stats = self._chunk_jit(inference.state, xs_chunk, masks_chunk)
             all_stats.append(chunk_stats)
 
         # Concatenate all chunk stats: shape (total_local_examples, 2)
@@ -660,18 +761,95 @@ class PerplexityEvaluation(Evaluation):
         # Flatten process dimension and drop repeated pad examples.
         stats = jnp.reshape(stats, (-1, 2))
         stats = stats[:original_size]
+        stats_np = np.asarray(stats)
+        per_sample_nll = stats_np[:, 0]
+        per_sample_count = stats_np[:, 1]
 
-        # Compute global perplexity and return 1/ppl
-        total_nll = jnp.sum(stats[:, 0])
-        total_count = jnp.sum(stats[:, 1])
-        mean_nll = total_nll / jnp.maximum(total_count, 1.0)
-        ppl = jnp.exp(mean_nll)
-        score = multihost_utils.broadcast_one_to_all(1.0 / ppl)
-        return float(score)
+        # _score is deterministic from broadcast inputs; identical on every host.
+        score = eval_data._score(per_sample_nll, per_sample_count, reduce=reduce)
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
+
+        if not return_intermediates:
+            return score
+
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [
+            (xs_np[i], masks_np[i], masks_np[i]) for i in range(original_size)
+        ]
+        return score, intermediates
 
 
 class PerplexityComparisonEvaluation(Evaluation):
     """Evaluation using perplexity comparison for multiple-choice tasks."""
+
+    # See ``RolloutEvaluation`` — same compile-once-per-instance pattern.
+    _chunk_jit: Optional[Any] = None
+    _evaluator_ref: Optional[Any] = None
+
+    def _chunk_step(
+        self,
+        state: Any,
+        xs_chunk: Any,
+        masks_chunk: Any,
+        prefix_lens_chunk: Any,
+    ) -> Any:
+        inference = self._evaluator_ref
+        assert inference is not None, (
+            "_chunk_step called before __call__ set _evaluator_ref"
+        )
+
+        def reduce(_: Any, batch: Any) -> Any:
+            x_batch, mask_batch, prefix_len_batch = batch
+
+            y_batch = jnp.roll(x_batch, -1, axis=-1)
+            y_batch = y_batch.at[:, -1].set(0)
+
+            seq_len = x_batch.shape[-1]
+            num_real_tokens = jnp.sum(
+                mask_batch.astype(jnp.int32), axis=-1, keepdims=True
+            )
+            content_start = seq_len - num_real_tokens
+
+            seq_positions = jnp.arange(seq_len)[None, :]
+            prefix_end = content_start + prefix_len_batch[:, None]
+            is_padding_or_prefix = seq_positions < prefix_end
+            y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
+
+            logits, _, _ = inference.forward(
+                state,
+                state.params,
+                (x_batch, None, mask_batch),
+                None,
+                deterministic=True,
+            )
+
+            logits_f32 = logits.astype(jnp.float32)
+            logits_flat = logits_f32.reshape(-1, logits_f32.shape[-1])
+            targets_flat = y_batch.reshape(-1)
+
+            mask = targets_flat != -1
+            targets_masked = jnp.where(mask, targets_flat, 0)
+
+            log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
+            token_losses = -jnp.take_along_axis(
+                log_probs, targets_masked[:, None], axis=-1
+            ).squeeze(-1)
+            token_losses = jnp.where(mask, token_losses, 0.0)
+
+            token_losses = token_losses.reshape(x_batch.shape[0], x_batch.shape[1])
+            mask = mask.reshape(x_batch.shape[0], x_batch.shape[1])
+            per_sample_loss = jnp.sum(token_losses, axis=-1) / jnp.maximum(
+                jnp.sum(mask, axis=-1), 1.0
+            )
+
+            return None, per_sample_loss
+
+        _, losses = jax.lax.scan(
+            reduce, None, (xs_chunk, masks_chunk, prefix_lens_chunk)
+        )
+        return jnp.reshape(losses, (-1,))
 
     @abstractmethod
     def get(self, indx: int) -> Tuple[str, list[str], int]:
@@ -682,30 +860,29 @@ class PerplexityComparisonEvaluation(Evaluation):
         """
         ...
 
+    def score(self, correct_flags: List[float]) -> List[float]:
+        """Per-sample correctness (1.0 / 0.0)."""
+        return [float(c) for c in correct_flags]
+
     def __call__(
         self,
         inference: "InferenceJob[Any, M]",
         encoding: Any,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
         chunk_size: int = 200,
         **kwargs: Any,
-    ) -> float:
-        """Run evaluation.
-
-        Args:
-            inference: InferenceJob instance for running inference
-            encoding: Tokenizer with encode/encode_batch methods
-            chunk_size: Number of batches per JIT chunk (default 200)
-
-        Returns:
-            Accuracy score
-        """
+    ) -> Any:
+        """Run evaluation."""
         eval_data = self
         batch_unit = inference.replicas * inference.per_device_batch_size
+        indices = _select_indices(inference, len(eval_data))
+        n_samples = len(indices)
 
         # Gather all data on main process
         multihost_utils.sync_global_devices("eval_gather_all:pre")
         if jax.process_index() == 0:
-            all_data = [eval_data.get(i) for i in range(len(eval_data))]
+            all_data = [eval_data.get(i) for i in indices]
 
             # Flatten: create (prefix+continuation, sample_idx, continuation_idx, prefix_len)
             flattened_inputs = []
@@ -733,10 +910,10 @@ class PerplexityComparisonEvaluation(Evaluation):
             )
             encoded_inputs = [seq[: inference.block_size] for seq in encoded_inputs]
             xs, masks = inference.pad(encoded_inputs)
-            prefix_lengths_array = jnp.array(prefix_lengths, dtype=jnp.int32)
-            metadata_array = jnp.array(metadata, dtype=jnp.int32)
-            correct_indices_array = jnp.array([d[2] for d in all_data], dtype=jnp.int32)
-            original_flat_size_array = jnp.array(original_flat_size, dtype=jnp.int32)
+            prefix_lengths_array = np.asarray(prefix_lengths, dtype=np.int32)
+            metadata_array = np.asarray(metadata, dtype=np.int32)
+            correct_indices_array = np.asarray([d[2] for d in all_data], dtype=np.int32)
+            original_flat_size_array = np.asarray(original_flat_size, dtype=np.int32)
         else:
             xs, masks = None, None
             (
@@ -766,13 +943,16 @@ class PerplexityComparisonEvaluation(Evaluation):
         )
         multihost_utils.sync_global_devices("eval_gather_all:post")
 
+        xs_full = xs
+        masks_full = masks
+
         # Divide across processes
-        pieces_xs = jnp.array_split(xs, jax.process_count(), axis=0)
-        pieces_masks = jnp.array_split(masks, jax.process_count(), axis=0)
-        pieces_prefix_lens = jnp.array_split(
+        pieces_xs = np.array_split(xs, jax.process_count(), axis=0)
+        pieces_masks = np.array_split(masks, jax.process_count(), axis=0)
+        pieces_prefix_lens = np.array_split(
             prefix_lengths_array, jax.process_count(), axis=0
         )
-        pieces_metadata = jnp.array_split(metadata_array, jax.process_count(), axis=0)
+        pieces_metadata = np.array_split(metadata_array, jax.process_count(), axis=0)
 
         xs = pieces_xs[jax.process_index()]
         masks = pieces_masks[jax.process_index()]
@@ -799,85 +979,35 @@ class PerplexityComparisonEvaluation(Evaluation):
             prefix_lens_local, inference.mesh, prefix_lens_pspec
         )
 
-        def evaluate_chunk(
-            state: Any, xs_chunk: Any, masks_chunk: Any, prefix_lens_chunk: Any
-        ) -> Any:
-            """Compute per-sample loss only on continuation tokens for a chunk."""
-
-            def reduce(_: Any, batch: Any) -> Any:
-                x_batch, mask_batch, prefix_len_batch = batch
-
-                # Shift x to create y for next token prediction
-                y_batch = jnp.roll(x_batch, -1, axis=-1)
-                y_batch = y_batch.at[:, -1].set(0)
-
-                # With LEFT padding, content starts after padding
-                seq_len = x_batch.shape[-1]
-                num_real_tokens = jnp.sum(
-                    mask_batch.astype(jnp.int32), axis=-1, keepdims=True
-                )
-                content_start = seq_len - num_real_tokens
-
-                seq_positions = jnp.arange(seq_len)[None, :]
-                prefix_end = content_start + prefix_len_batch[:, None]
-                is_padding_or_prefix = seq_positions < prefix_end
-                y_batch = jnp.where(is_padding_or_prefix, -1, y_batch)
-
-                # Use inference's forward method - returns (logits, loss, meta)
-                logits, _, _ = inference.forward(
-                    state,
-                    state.params,
-                    (x_batch, None, mask_batch),
-                    None,
-                    deterministic=True,
-                )
-
-                # Compute cross-entropy loss per token
-                logits_f32 = logits.astype(jnp.float32)
-                logits_flat = logits_f32.reshape(-1, logits_f32.shape[-1])
-                targets_flat = y_batch.reshape(-1)
-
-                mask = targets_flat != -1
-                targets_masked = jnp.where(mask, targets_flat, 0)
-
-                log_probs = jax.nn.log_softmax(logits_flat, axis=-1)
-                token_losses = -jnp.take_along_axis(
-                    log_probs, targets_masked[:, None], axis=-1
-                ).squeeze(-1)
-                token_losses = jnp.where(mask, token_losses, 0.0)
-
-                # Average per sample
-                token_losses = token_losses.reshape(x_batch.shape[0], x_batch.shape[1])
-                mask = mask.reshape(x_batch.shape[0], x_batch.shape[1])
-                per_sample_loss = jnp.sum(token_losses, axis=-1) / jnp.maximum(
-                    jnp.sum(mask, axis=-1), 1.0
-                )
-
-                return None, per_sample_loss
-
-            _, losses = jax.lax.scan(
-                reduce, None, (xs_chunk, masks_chunk, prefix_lens_chunk)
+        # Cached chunk JIT — see RolloutEvaluation for rationale.
+        if self._chunk_jit is None:
+            self._evaluator_ref = inference
+            data_sharding = NamedSharding(inference.mesh, data_pspec)
+            prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
+            self._chunk_jit = jax.jit(
+                self._chunk_step,
+                in_shardings=(
+                    inference.state_sharding,
+                    data_sharding,
+                    data_sharding,
+                    prefix_lens_sharding,
+                ),
+                out_shardings=None,
             )
-            losses = jnp.reshape(losses, (-1,))
-            return losses
-
-        # JIT compile chunk function once
-        data_sharding = NamedSharding(inference.mesh, data_pspec)
-        prefix_lens_sharding = NamedSharding(inference.mesh, prefix_lens_pspec)
-        wrapped_evaluate_chunk = jax.jit(
-            evaluate_chunk,
-            in_shardings=(
-                inference.state_sharding,
-                data_sharding,
-                data_sharding,
-                prefix_lens_sharding,
-            ),
-            out_shardings=None,
-        )
 
         # Process in chunks with progress logging
         num_batches = xs.shape[0]
         all_losses = []
+
+        if jax.process_index() == 0:
+            logger.info(
+                "EVAL | {} | samples={} flat={} seq={} batches={}",
+                eval_data.name,
+                n_samples,
+                int(original_flat_size_array),
+                xs.shape[-1],
+                num_batches,
+            )
 
         for chunk_start in range(0, num_batches, chunk_size):
             chunk_end = min(chunk_start + chunk_size, num_batches)
@@ -885,15 +1015,20 @@ class PerplexityComparisonEvaluation(Evaluation):
             masks_chunk = masks[chunk_start:chunk_end]
             prefix_lens_chunk = prefix_lens_local[chunk_start:chunk_end]
 
-            # Log progress (only on main process)
-            if jax.process_index() == 0:
-                progress = (chunk_end / num_batches) * 100
+            if chunk_start == 0:
+                logger.debug(
+                    "EVAL | {} | tracing+compiling first chunk", eval_data.name
+                )
+            if jax.process_index() == 0 and num_batches > chunk_size:
                 logger.info(
-                    f"EVAL | {eval_data.name} - Processing batches {chunk_start + 1}-{chunk_end}/{num_batches} ({progress:.1f}%)"
+                    "EVAL | {} | chunk {}/{} ({:.0f}%)",
+                    eval_data.name,
+                    chunk_end,
+                    num_batches,
+                    (chunk_end / num_batches) * 100,
                 )
 
-            # Run chunk
-            chunk_losses = wrapped_evaluate_chunk(
+            chunk_losses = self._chunk_jit(
                 inference.state, xs_chunk, masks_chunk, prefix_lens_chunk
             )
             all_losses.append(chunk_losses)
@@ -930,10 +1065,8 @@ class PerplexityComparisonEvaluation(Evaluation):
                 sample_losses[sample_idx].append(losses[i])
                 sample_num_continuations[sample_idx] = int(num_conts)
 
-            # Evaluate complete samples only
-            correct = 0
-            total = 0
-
+            # Per-sample correctness
+            correct_flags: List[float] = []
             for sample_idx in sorted(sample_losses.keys()):
                 expected_conts = sample_num_continuations[sample_idx]
                 actual_conts = len(sample_losses[sample_idx])
@@ -945,22 +1078,38 @@ class PerplexityComparisonEvaluation(Evaluation):
                 pred = int(jnp.argmin(losses_for_sample))
                 correct_idx = int(correct_indices_array[sample_idx])
 
-                correct += int(pred == correct_idx)
-                total += 1
+                correct_flags.append(1.0 if pred == correct_idx else 0.0)
 
-            accuracy = correct / total if total > 0 else 0.0
+            score = eval_data._score(correct_flags, reduce=reduce)
         else:
-            accuracy = None
+            score = np.zeros(n_samples, dtype=np.float32) if reduce == "none" else 0.0
+        score = multihost_utils.broadcast_one_to_all(jnp.asarray(score))
+        score = np.asarray(score) if reduce == "none" else float(score)
 
-        accuracy = multihost_utils.broadcast_one_to_all(jnp.array(accuracy))
-        return float(accuracy)
+        if not return_intermediates:
+            return score
+
+        xs_np = np.asarray(xs_full)
+        masks_np = np.asarray(masks_full).astype(bool)
+        intermediates = [(xs_np[i], masks_np[i]) for i in range(original_flat_size)]
+        return score, intermediates
 
 
 @dataclass
 class EvaluatorConfig:
     """Configuration for Evaluator."""
 
-    evaluations: List[str] = field("eval/evaluations")
+    components: List[str] = field("eval/evaluations")
+    length: int = field("eval/length", default=-1)
+
+
+@dataclass
+class RLEvaluatorConfig:
+    """Configuration for RL trainers — list of evaluation components used as
+    rollout sources for on-policy learning."""
+
+    components: List[str] = field("training/rl/components", default_factory=list)
+    batch_size: float = field("training/batch_size", default=512)
 
 
 class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
@@ -977,24 +1126,16 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
     MODEL: type[M] = Module  # type: ignore[assignment]
     evaluations: List[Evaluation]
     encoding: Tokenizer
+    length: int
+    random: random.Random
 
     @classmethod
     def config(cls) -> List[Any]:
         return [EvaluatorConfig, TokenizerConfig]
 
-    def __init__(self, spec: ExecutionSpec):
-        """Direct __init__ not supported - use from_trainer() or from_checkpoint()."""
-        raise NotImplementedError(
-            f"Cannot instantiate {self.__class__.__name__} directly. "
-            "Use from_trainer() or from_checkpoint() instead."
-        )
-
     def _get_results_path(self) -> Path:
         """Get path for saving evaluation results."""
-        results_dir = self.spec.hardware.hosts[0].cluster.results_dir
-        project = self.spec.project or "general"
-        group = self.spec.group if self.spec.group else "default"
-        return Path(results_dir) / project / group / self.spec.name / "results.json"
+        return self.spec.result_path("results.json")
 
     @property
     def done(self) -> bool:
@@ -1002,11 +1143,19 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         return self._get_results_path().exists()
 
     @classmethod
-    def from_trainer(cls, trainer: "BaseTrainer[Any, Any]") -> "Evaluator[M]":
+    def from_trainer(
+        cls,
+        trainer: "BaseTrainer[Any, Any]",
+        config: Optional[Any] = None,
+    ) -> "Evaluator[M]":
         """Create Evaluator from trainer.
 
         Args:
             trainer: BaseTrainer instance to get inference state from
+            config: Optional config object whose ``.components`` field names
+                the evaluations to run. If None, hydrates ``EvaluatorConfig``
+                from the global config. Pass an ``RLEvaluatorConfig`` to
+                build a separate evaluator for RL rollouts.
 
         Returns:
             Evaluator instance ready to run evaluations
@@ -1015,10 +1164,18 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
         evaluator = super().from_trainer(trainer)
         evaluator.encoding = get_tokenizer()
+        evaluator.random = random.Random(0xC0FFEE)
 
-        cfg = configure(EvaluatorConfig)
+        if config is None:
+            config = configure(EvaluatorConfig)
+
+        if isinstance(config, RLEvaluatorConfig):
+            evaluator.length = int(config.batch_size)
+        else:
+            evaluator.length = config.length
+
         try:
-            evaluator.evaluations = [EVALUATIONS[name]() for name in cfg.evaluations]
+            evaluator.evaluations = [EVALUATIONS[name]() for name in config.components]
         except KeyError as e:
             raise ValueError(f"Unknown evaluation dataset: {e.args[0]}") from e
 
@@ -1026,49 +1183,99 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
 
     @classmethod
     def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
     ) -> Tuple["Evaluator[M]", Any]:
         """Create Evaluator from checkpoint.
 
         Args:
             suffix: Checkpoint suffix
             spec: ExecutionSpec with topology
+            runtime_cfg: Optional runtime config overlay
 
         Returns:
             (evaluator, config) tuple
         """
-        evaluator, cfg = super().from_checkpoint(suffix, spec)
+        evaluator, cfg = super().from_checkpoint(suffix, spec, runtime_cfg=runtime_cfg)
         with configuration(cfg):
             evaluator.encoding = get_tokenizer()
+            evaluator.length = configure(EvaluatorConfig).length
+        evaluator.random = random.Random(0xC0FFEE)
         return evaluator, cfg
 
     def rollout(
         self,
-        inputs: List[Union[str, ChatTemplate]],
+        inputs: List[Union[str, ChatTemplate, jax.Array, List[int]]],
         encoding: Optional[Tokenizer] = None,
         max_new_tokens: Optional[int] = None,
+        max_prompt_length: Optional[int] = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
-    ) -> List[Union[str, ChatTemplate]]:
+        return_type: Literal[
+            "decoded",
+            "indices",
+            "output_decoded",
+            "output_indices",
+            "raw_indices",
+        ] = "decoded",
+    ) -> Union[List[Union[str, ChatTemplate]], List[str], List[List[int]]]:
         return super().rollout(
             inputs,
             encoding if encoding is not None else self.encoding,
             max_new_tokens=max_new_tokens,
+            max_prompt_length=max_prompt_length,
             temperature=temperature,
             top_p=top_p,
             chunk_size=chunk_size,
+            return_type=return_type,
         )
 
-    def evaluate(self) -> dict[str, float]:
-        results: dict[str, float] = {}
+    def evaluate(
+        self,
+        reduce: str = "mean",
+        return_intermediates: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run all evaluations.
+
+        Args:
+            reduce: passed through to each evaluation. "mean"/"sum" → float per
+                evaluation; "none" → np.ndarray of per-sample scores.
+            return_intermediates: when True, also return the per-evaluation list
+                of (x, mask) rollouts (one inner list per evaluation).
+            **kwargs: forwarded to each evaluation's __call__ (e.g. temperature,
+                top_p, chunk_size).
+        """
+        results: dict[str, Any] = {}
+        all_intermediates: List[List[Tuple[np.ndarray, np.ndarray]]] = []
 
         for evaluation in self.evaluations:
             logger.info("EVAL | Running {}", evaluation.name)
-            score = evaluation(self, self.encoding)
+            if return_intermediates:
+                score, intermediates = evaluation(
+                    self,
+                    self.encoding,
+                    reduce=reduce,
+                    return_intermediates=True,
+                    **kwargs,
+                )
+                all_intermediates.append(intermediates)
+            else:
+                score = evaluation(
+                    self,
+                    self.encoding,
+                    reduce=reduce,
+                    return_intermediates=False,
+                    **kwargs,
+                )
             results[evaluation.name] = score
-            logger.info("EVAL | {} = {:.4f}", evaluation.name, score)
+            logger.info("EVAL | {} done", evaluation.name)
 
+        if return_intermediates:
+            return results, all_intermediates
         return results
 
     def run(self) -> None:
@@ -1086,11 +1293,8 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         logger.info("=" * 60)
 
         # Save results to JSON (only on main process)
-        if jax.process_index() == 0:
-            output_path = self._get_results_path()
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(output_path, "w") as f:
+        with self.spec.result("results.json", main_process_only=True) as f:
+            if f is not None:
                 json.dump(
                     {
                         "job": self.spec.name,
@@ -1101,4 +1305,4 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
                     f,
                     indent=2,
                 )
-            logger.info("EVAL | Results saved to {}", output_path)
+                logger.info("EVAL | Results saved to {}", Path(f.name))

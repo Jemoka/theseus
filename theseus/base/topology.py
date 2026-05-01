@@ -47,16 +47,21 @@ class Topology(BaseModel):
         Args:
             chip: The chip type being used.
             shard_into: Number of shards to divide the devices into for tensor parallelism.
-                        If None, defaults to local device count (shard evenly within each host).
+                        If None, defaults to 1 (data-parallel replicas by default).
                         The SPMD/data parallel axis is determined automatically.
 
         """
         devs = sorted(jax.devices(), key=lambda d: (d.process_index, d.id))
         local = jax.local_device_count()
 
-        # Default to sharding by local device count if not specified
         if shard_into is None:
-            shard_into = local
+            shard_into = 1
+        if shard_into <= 0:
+            raise ValueError(f"shard_into must be positive, got {shard_into}")
+        if local % shard_into != 0:
+            raise ValueError(
+                f"shard_into={shard_into} must divide local_device_count={local}"
+            )
 
         devices = np.array(devs).reshape(-1, local)
         devices = devices.reshape(-1, shard_into)

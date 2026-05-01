@@ -1,0 +1,68 @@
+architecture:
+  dtype:
+    param: float32
+    activation: bfloat16
+  rope: true
+  vocab_size: 100288
+  dropout: 0.0
+  bias: true
+  block_size: 2048
+  n_layers: 10
+  n_embd: 1664
+  n_head: 13
+  layer_norm_eps: 1.0e-05
+  intermediate_size: -1
+  moe:
+    experts: 8
+    experts_per_embd: 2
+    capacity_factor: 1.0
+    capacity_round_to: 128
+    implementation: base
+    bias_update_rate: 0.25
+    bias_smoothing: 1.0
+optimization:
+  lr: 0.0003
+  weight_decay: 0.1
+  warmup_pct: 0.01
+  decay_pct: 0.01
+  constant_pct: 0.02
+  schedule: cosine_rewarm
+  reset_optimizer: false
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens:
+  - 7000000000
+  - 7000000000
+  dataset:
+  - - name: fineweb
+      rate: 1.0
+      style: PMD
+  - - name: pes2o
+      rate: 1.0
+      style: PMD
+  validation: false
+  evaluate: true
+  validation_steps: 2048
+  skip_first_dataset_validation: false
+  fade:
+    overlap: 0.1
+    curve: cosine
+eval:
+  evaluations:
+  - fineweb_ppl
+  - pes2o_ppl
+  - pile_ppl
+  - tinystories_ppl
+logging:
+  report_interval: 32
+  checkpoint_interval: 2670
+  validation_interval: 1335
+  wandb: true
+  plots:
+    save: true
+job: continual/train/benchmark_moe
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1

@@ -222,16 +222,21 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
     def _cast_params(self, params: PyTree[jax.Array]) -> PyTree[jax.Array]:
         """Cast all params to the model's configured param dtype.
 
-        Uses jax.jit so the cast preserves each array's sharding; an eager
-        tree_map(astype) can silently move arrays to a single device.
+        Keep host-loaded parameters on host until ``_init_state`` applies the
+        intended mesh sharding. For already-sharded JAX arrays, preserve their
+        current sharding through the cast.
         """
-        target = jnp.dtype(self.model.param_dtype)
+        target = np.dtype(self.model.param_dtype)
 
-        @jax.jit
-        def _cast(p: PyTree[jax.Array]) -> PyTree[jax.Array]:
-            return jax.tree_util.tree_map(lambda x: x.astype(target), p)  # type: ignore[no-any-return]
+        def cast_leaf(x: Any) -> Any:
+            if isinstance(x, np.ndarray):
+                return x.astype(target, copy=False)
+            if isinstance(x, jax.Array):
+                y = x.astype(jnp.dtype(target))
+                return jax.device_put(y, x.sharding)
+            return x
 
-        return _cast(params)  # type: ignore[no-any-return]
+        return jax.tree_util.tree_map(cast_leaf, params)  # type: ignore[no-any-return]
 
     def _init_model(self) -> PyTree[jax.Array]:
         """Initialize model and random keys, return initial sharded params."""
@@ -425,7 +430,8 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         per = self.per_device_batch_size * self.local_replicas
 
         def _reshape(arr: np.ndarray) -> np.ndarray:
-            return arr.reshape(-1, per, arr.shape[-1])
+            usable = (arr.shape[0] // per) * per
+            return arr[:usable].reshape(-1, per, arr.shape[-1])
 
         return type_cast(PyTree[np.ndarray], jax.tree_util.tree_map(_reshape, batch))
 
@@ -504,7 +510,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         batch: PyTree[jax.Array],  # (S, B, T) each
         key: jax.Array,
         accumulate_steps: int,
-    ) -> Tuple[train_state.TrainState, jax.Array, Any]:
+    ) -> Tuple[train_state.TrainState, jax.Array, Any, jax.Array]:
         """Compute gradients over S micro-batches and apply one optimizer step.
 
         Args:
@@ -568,9 +574,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         # take the last micro-batch's metadata
         last_meta: Any = jax.tree_util.tree_map(lambda x: x[-1], metas)
 
+        grad_norm: jax.Array = optax.global_norm(grad_sum)
+
         state: PyTree[jax.Array] = state.apply_gradients(grads=grad_sum)  # type: ignore
 
-        return state, loss_sum, last_meta
+        return state, loss_sum, last_meta, grad_norm
 
     @classmethod
     def val_step(
@@ -680,13 +688,13 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             jax.Array,
             int,
         ],
-        Tuple[train_state.TrainState, jax.Array, Any],
+        Tuple[train_state.TrainState, jax.Array, Any, jax.Array],
     ]:
         data_shard = NamedSharding(self.mesh, P(None, Axis.BATCH, None))  # type: ignore
         train_step = jax.jit(
             self.train_step,
             in_shardings=(self.state_sharding, data_shard, None, None),
-            out_shardings=(self.state_sharding, None, None),
+            out_shardings=(self.state_sharding, None, None, None),
             donate_argnums=(0,),
         )
         return train_step
@@ -708,7 +716,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
             logger.debug("DATA | {} | PLACED", indx)
 
             self.dropout_key, subkey = jax_random.split(self.dropout_key)
-            self.state, loss, train_meta = train_step(
+            self.state, loss, train_meta, grad_norm = train_step(
                 self.state,
                 batch,
                 subkey,
@@ -734,6 +742,7 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                         * self.args.block_size
                     )
                     train_metrics["train/loss"] = loss_val
+                    train_metrics["train/grad_norm"] = float(jax.device_get(grad_norm))
                     train_metrics.update(jax.device_get(train_meta))
 
                     wandb.log(
@@ -784,26 +793,23 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 )  # so we don't ovelap with checkpoint
             ):
                 val_metrics = {}
-                score = None
 
                 if self.args.validate:
-                    val_score, metrics = valid_step(
+                    score, metrics = valid_step(
                         self.state, step=indx // self.accumulate_steps
                     )
-                    score = val_score
                     val_metrics.update(metrics)
+                else:
+                    # Keep eval scores out of checkpoint selection so evals whose
+                    # natural direction is lower-is-better (e.g. raw perplexity)
+                    # don't corrupt the "best" comparison.
+                    train_loss = float(loss)
+                    score = 1.0 / train_loss if train_loss > 0 else float("-inf")
+
                 if self.args.evaluate and self.inference is not None:
                     self.inference.state = self.state
                     eval_metrics = self.inference.evaluate()
-                    if len(eval_metrics) > 0:
-                        eval_score = sum(eval_metrics.values()) / len(eval_metrics)
-                        if score is None:
-                            score = eval_score
-                        else:
-                            score = (score + eval_score) / 2
-                        val_metrics.update(eval_metrics)
-                if score is None:
-                    score = float("-inf")
+                    val_metrics.update(eval_metrics)
 
                 val_metrics["train/tokens"] = (
                     ((indx + 1) // self.accumulate_steps)
@@ -862,11 +868,11 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
                 self.best_val_score_,
             )
 
-    def load(self, suffix: Path) -> None:
-        """load from a checkpoint, if available"""
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Load from a checkpoint at ``rel_path`` under checkpoints_dir."""
 
         old_state = self.state
-        state, metadata = self.get_tree_and_metadata(suffix, old_state)
+        state, metadata = self.get_tree_and_metadata_from_path(rel_path, old_state)
 
         self.state = state
         self.state = self.state.replace(params=self._cast_params(self.state.params))
@@ -897,13 +903,10 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         if self.main_process():
             logger.info(
                 "CHECKPOINT | loaded checkpoint from {} at step {}, best score {}",
-                suffix,
+                rel_path,
                 self.global_step_counter_,
                 self.best_val_score_,
             )
-
-    def restore(self, suffix: Path) -> None:
-        return self.load(suffix)  # this is to satisfy the restore API
 
     def run(self) -> None:
         """main entry point to run training, called on all nodes"""

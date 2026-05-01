@@ -79,10 +79,5 @@ class MTOBEval(RolloutEvaluation):
             return ""
         return assistant_msgs[0].strip().lower()
 
-    def score(self, ys: list[str], y_hats: list[str]) -> float:
-        """Use exact match for simplicity; chrF could be added later."""
-        results = [self.check(y, y_hat) for y, y_hat in zip(ys, y_hats)]
-        return sum(results) / len(results)
-
     def check(self, y: str, y_hat: str) -> bool:
         return y.strip().lower() == y_hat.strip().lower()

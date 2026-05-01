@@ -68,6 +68,8 @@ class ForkingAttention(RopeAttention):
             # cumulative_scores: (B, T) → broadcast to (B, T, H)
             k = k.at[:, :, :, -1].set(
                 jnp.repeat(cumulative_scores[:, :, None], k.shape[2], axis=2)
+                # such that we actually multiply by cumulative_scores in the attention computation
+                # and not cumulative_scores^(1/sqrt(d_head)).
             )
 
         return q, k, v
@@ -129,12 +131,18 @@ class ForkingAttention(RopeAttention):
         k: jax.Array,
         v: jax.Array,
         padding_mask: Optional[jax.Array] = None,
+        cache_max_len: Optional[int] = None,
     ) -> Tuple[jax.Array, jax.Array, Optional[jax.Array]]:
         """Update KV cache if active. k, v: (B, T, H, D).
+
+        Forking attention is a no-op cache: signature kept compatible with
+        ``SelfAttention._cached_kv`` so the base ``__call__`` path doesn't
+        break, but ``cache_max_len`` is unused here.
 
         Returns (k, v, cache_index_after_update) where cache_index is None
         when cache is not active (training mode).
         """
+        del cache_max_len
 
         return k, v, None
 
@@ -158,8 +166,10 @@ class ForkingAttention(RopeAttention):
         x: jax.Array,
         padding_mask: Optional[jax.Array] = None,
         deterministic: bool = False,
+        cache_max_len: Optional[int] = None,
         **kwargs: Any,
     ) -> jax.Array:
+        del cache_max_len  # forking attention has no KV cache
         B, T, C = x.shape
 
         q, k, v = self.project(x)
@@ -167,7 +177,12 @@ class ForkingAttention(RopeAttention):
         # For decode steps with cache, inject correct RoPE positions
         if self.has_variable("cache", "cache_index"):
             ci: Any = self.get_variable("cache", "cache_index")
-            kwargs = {**kwargs, "positions": jnp.arange(T) + ci}
+            kwargs = {**kwargs, "positions": self._cached_positions(T, ci)}
+        elif "positions" not in kwargs:
+            kwargs = {
+                **kwargs,
+                "positions": self._positions_from_padding(T, padding_mask),
+            }
 
         q, k, v = self.preprocess_qkv(q, k, v, **kwargs)
 

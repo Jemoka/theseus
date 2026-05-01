@@ -194,4 +194,4 @@ theseus configure my_model/train/pretrain run.yaml
 theseus run my-run run.yaml ./output
 ```
 
-See [Running Experiments](running.md) for the full workflow.
+See [Running Experiments](running.md) for the full workflow, or [The Job System](adding-analysis-job.md) for the full hierarchy, checkpoint protocol, and how to write analysis jobs or custom restorable jobs.

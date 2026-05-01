@@ -6,12 +6,12 @@ Returns 1/perplexity (higher is better).
 
 Provides per-language eval classes so each can be tracked independently
 across continual learning phases.  All ~90 CCAligned language pairs are
-registered as ``ccaligned_<lang>`` (e.g. ``ccaligned_fr_xx``).
+registered as ``ccaligned_<lang>_ppl`` (e.g. ``ccaligned_fr_xx_ppl``).
 """
 
 from theseus.data.datasets.ccaligned import CCAligned
 from theseus.evaluation import PerplexityEvaluation
-from theseus.registry import EVALUATIONS
+from theseus.registry import evaluation
 
 
 # All language codes available on statmt.org/cc-aligned/sentence-aligned/
@@ -145,7 +145,7 @@ class CCAlignedEval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return f"ccaligned_{self._lang.lower()}"
+        return f"ccaligned_{self._lang.lower()}_ppl"
 
     def __len__(self) -> int:
         return len(self.items)
@@ -161,9 +161,23 @@ def _make_lang_eval(lang: str) -> type[CCAlignedEval]:
 
 
 # Build a dict of lang_key -> eval class for all languages.
-# Registry keys are like "ccaligned_fr_xx", "ccaligned_de_de", etc.
+# Registry keys are like "ccaligned_fr_xx_ppl", "ccaligned_de_de_ppl", etc.
 CCALIGNED_EVALS: dict[str, type[CCAlignedEval]] = {
-    f"ccaligned_{lang.lower()}": _make_lang_eval(lang) for lang in CCALIGNED_LANGS
+    f"ccaligned_{lang.lower()}_ppl": _make_lang_eval(lang) for lang in CCALIGNED_LANGS
 }
 
-EVALUATIONS.update(CCALIGNED_EVALS)
+# Short aliases (e.g. "ccaligned_fr_ppl" -> CCAligned fr_XX) so eval names line up
+# with the on-disk tokenized suffix used by the training-side data configs
+# (configs/data/cl100k/ccaligned_{fr,de,zh}.yaml use suffix 'fr'/'de'/'zh').
+CCALIGNED_SHORT_ALIASES: dict[str, type[CCAlignedEval]] = {
+    f"ccaligned_{lang.split('_')[0].lower()}_ppl": cls
+    for lang, cls in (
+        (lang, CCALIGNED_EVALS[f"ccaligned_{lang.lower()}_ppl"])
+        for lang in CCALIGNED_LANGS
+    )
+}
+
+# Route every registration through the ``evaluation`` decorator so the
+# ``_ppl`` suffix guard fires on these too.
+for _key, _cls in {**CCALIGNED_EVALS, **CCALIGNED_SHORT_ALIASES}.items():
+    evaluation(_key)(_cls)

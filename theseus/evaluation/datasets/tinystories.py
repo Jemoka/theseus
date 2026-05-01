@@ -9,7 +9,7 @@ from theseus.evaluation import PerplexityEvaluation
 from theseus.registry import evaluation
 
 
-@evaluation("tinystories")
+@evaluation("tinystories_ppl")
 class TinyStoriesEval(PerplexityEvaluation):
     """Perplexity evaluation on TinyStories validation stories.
 
@@ -24,7 +24,7 @@ class TinyStoriesEval(PerplexityEvaluation):
 
     @property
     def name(self) -> str:
-        return "tinystories"
+        return "tinystories_ppl"
 
     def __len__(self) -> int:
         return len(self.ds)

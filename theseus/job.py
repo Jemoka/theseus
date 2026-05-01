@@ -1,7 +1,7 @@
 import random
 from pathlib import Path
 
-from abc import abstractmethod, abstractproperty
+from abc import abstractmethod
 from loguru import logger
 from typing import Generic, TypeVar, Dict, Any, Tuple, Type, Self, List, Union
 
@@ -41,10 +41,10 @@ class BasicJob(_BaseJob, Generic[C]):
         res: bool = jax.process_index() == 0
         return res
 
-    @abstractproperty
+    @property
     def done(self) -> bool:
         """Check if job is already complete (idempotency check)"""
-        raise NotImplementedError()
+        return False
 
     @abstractmethod
     def run(self) -> None:
@@ -82,50 +82,88 @@ class BasicJob(_BaseJob, Generic[C]):
         name: str = "local",
         project: str | None = None,
         group: str | None = None,
+        shard_into: int | None = None,
     ) -> Self:
         spec = ExecutionSpec.local(
             root_dir,
             name=name,
             project=project,
             group=group,
+            shard_into=shard_into,
         )
         return cls(spec)
 
 
 class CheckpointedJob(BasicJob[C], Generic[C]):
+    """Job with checkpoint save/load support.
+
+    Checkpoint path resolution
+    --------------------------
+    Paths are split into two parts:
+
+        checkpoints_dir / rel_path
+
+    where ``checkpoints_dir`` comes from the cluster config and ``rel_path``
+    is ``project/group/job_name/suffix``.
+
+    The ``*_from_path`` methods accept an arbitrary ``rel_path``, which lets
+    a job load/save checkpoints belonging to a *different* job.  The plain
+    ``get_tree_and_metadata`` / ``save_tree_and_metadata`` methods derive
+    ``rel_path`` from ``self.spec`` automatically — they exist for backwards
+    compatibility and are thin wrappers around the ``*_from_path`` variants.
+
+    ``_get_checkpoint_path`` is a legacy static helper used by external
+    callers (scripts, inference, RestoreableJob) that returns the full
+    absolute path.  It is kept for backwards compatibility.
+    """
+
     def __init__(self, spec: ExecutionSpec):
         super().__init__(spec)
         self.key = jax.random.PRNGKey(0)
 
+    # -- path helpers --------------------------------------------------
+
+    @staticmethod
+    def _get_checkpoints_dir(spec: ExecutionSpec) -> Path:
+        """Resolve the cluster's checkpoints directory for the current process."""
+        return spec.hardware.hosts[jax.process_index()].cluster.checkpoints_dir
+
+    @staticmethod
+    def _get_checkpoint_rel_path(spec: ExecutionSpec, suffix: str | Path) -> Path:
+        """Return ``project/group/name/suffix`` (no checkpoints_dir prefix)."""
+        project = spec.project or "general"
+        group = spec.group if spec.group else "default"
+        return Path(project) / group / spec.name / str(suffix)
+
     @staticmethod
     def _get_checkpoint_path(spec: ExecutionSpec, suffix: str | Path) -> Path:
+        """Full absolute path: ``checkpoints_dir/project/group/name/suffix``.
+
+        Kept for backwards compatibility with external callers.  Prefer the
+        ``*_from_path`` instance methods for new code.
         """
-        Compute checkpoint path based on process index, project, group, and job name.
+        return CheckpointedJob._get_checkpoints_dir(
+            spec
+        ) / CheckpointedJob._get_checkpoint_rel_path(spec, suffix)
 
-        Directory structure: checkpoints_dir/project/group/job_name/suffix/
-        - project: defaults to "misc" if None
-        - group: defaults to "default" if None or empty string
-        - job_name: required (self.spec.name)
-        - suffix: provided by caller (e.g., "step_1000", "final", or nested "best/model")
-        """
-        process_index = jax.process_index()
-        checkpoint_dir = spec.hardware.hosts[process_index].cluster.checkpoints_dir
+    # -- load ----------------------------------------------------------
 
-        # Handle project: use default "theseus" if None
-        project = spec.project or "general"
-
-        # Handle group: use "default" if None or empty string
-        group = spec.group if spec.group else "default"
-
-        # Build path: checkpoints_dir/project/group/job_name/suffix/
-        path = checkpoint_dir / project / group / spec.name / str(suffix)
-
-        return path
-
-    def get_tree_and_metadata(
-        self, suffix: str | Path, template_tree: PyTree[Any]
+    def get_tree_and_metadata_from_path(
+        self,
+        rel_path: str | Path,
+        template_tree: PyTree[Any],
+        partial: bool = False,
     ) -> Tuple[PyTree[Any], Dict[str, Any]]:
-        path = self._get_checkpoint_path(self.spec, suffix)
+        """Load tree and metadata from ``rel_path`` under checkpoints_dir.
+
+        Args:
+            rel_path: Relative path under checkpoints_dir.
+            template_tree: Template pytree for shape/sharding info.
+            partial: If True, only restore leaves present in ``template_tree``
+                and silently skip mismatched subtrees (e.g. optimizer state
+                when loading a trainer checkpoint into an inference template).
+        """
+        path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
 
         try:
             rng_state = np.load(path / "rng.npy", allow_pickle=True).item()
@@ -135,58 +173,73 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
         except EOFError:
             self.key = jax.random.PRNGKey(0)
 
-        # Load checkpoint using Orbax, preserving sharding from template.
-        # Convert template leaves to ShapeDtypeStruct with sharding so arrays
-        # restore directly onto the correct devices instead of landing on CPU.
-        checkpointer = ocp.StandardCheckpointer()
-
         def _to_sharded_struct(x: Any) -> Any:
             if isinstance(x, jax.Array):
                 return jax.ShapeDtypeStruct(x.shape, x.dtype, sharding=x.sharding)  # type: ignore
             return x
 
         sharded_target = jax.tree_util.tree_map(_to_sharded_struct, template_tree)
-        restored = checkpointer.restore(path / "checkpoint", target=sharded_target)
 
-        # Load metadata
+        if partial:
+            restore_args = jax.tree_util.tree_map(
+                lambda x: ocp.ArrayRestoreArgs(sharding=x.sharding)
+                if isinstance(x, jax.ShapeDtypeStruct) and x.sharding is not None
+                else ocp.RestoreArgs(),
+                sharded_target,
+            )
+            checkpointer = ocp.Checkpointer(ocp.PyTreeCheckpointHandler())
+            restored = checkpointer.restore(
+                path / "checkpoint",
+                args=ocp.args.PyTreeRestore(
+                    item=sharded_target,
+                    restore_args=restore_args,
+                    partial_restore=True,
+                ),
+            )
+        else:
+            checkpointer = ocp.StandardCheckpointer()
+            restored = checkpointer.restore(path / "checkpoint", target=sharded_target)
+
         with open(path / "config.json", "r") as df:
             data = json.load(df)
 
         return restored, data
 
-    def save_tree_and_metadata(
-        self, suffix: str | Path, tree: PyTree[Any], metadata: Dict[str, Any]
+    def get_tree_and_metadata(
+        self, suffix: str | Path, template_tree: PyTree[Any]
+    ) -> Tuple[PyTree[Any], Dict[str, Any]]:
+        """Load from this job's own checkpoint. Wrapper for backwards compat."""
+        return self.get_tree_and_metadata_from_path(
+            self._get_checkpoint_rel_path(self.spec, suffix), template_tree
+        )
+
+    # -- save ----------------------------------------------------------
+
+    def save_tree_and_metadata_from_path(
+        self, rel_path: str | Path, tree: PyTree[Any], metadata: Dict[str, Any]
     ) -> None:
-        path = self._get_checkpoint_path(self.spec, suffix)
+        """Save tree and metadata to ``rel_path`` under checkpoints_dir."""
+        path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
         logger.debug("CHECKPOINT | saving checkpoint at {}", path)
 
         multihost_utils.sync_global_devices("save:pre")
 
-        # Write directly to shared filesystem path (multi-host safe)
         if self.main_process():
             path.mkdir(parents=True, exist_ok=True)
             logger.debug("CHECKPOINT | created checkpoint directory")
 
-            # Save random state
             rng_state = {
                 "python_random": random.getstate(),
                 "numpy_random": np.random.get_state(),
-                "jax_random": int(self.key[0]),  # Save seed
+                "jax_random": int(self.key[0]),
             }
             np.save(path / "rng.npy", rng_state)  # type: ignore
             logger.debug("CHECKPOINT | saved random state")
 
-            # Save config
             with open(path / "config.json", "w") as df:
-                json.dump(
-                    metadata,
-                    df,
-                )
+                json.dump(metadata, df)
             logger.debug("CHECKPOINT | saved configuration")
 
-            # Save job spec (only JobSpec fields, not ExecutionSpec)
-            # Uses JobSpec.model_fields to be extensible - new fields added to JobSpec
-            # will automatically be included without modifying this code
             job_spec_data = {
                 field_name: getattr(self.spec, field_name)
                 for field_name in JobSpec.model_fields
@@ -195,7 +248,6 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
                 json.dump(job_spec_data, df)
             logger.debug("CHECKPOINT | saved job spec")
 
-            # Save current OmegaConf configuration as YAML
             cfg = current_config()
             if cfg is not None:
                 with open(path / "config.yaml", "w") as df:
@@ -204,14 +256,10 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
         multihost_utils.sync_global_devices("save:mid")
 
-        # Save checkpoint - convert host-local arrays to global arrays for multi-host
-        # This handles replicated scalars like 'step' that have SingleDeviceSharding
         checkpointer = ocp.StandardCheckpointer()
 
-        # Convert any host-local arrays to globally replicated arrays
         def make_global_array(x: PyTree[Any]) -> PyTree[Any]:
             if isinstance(x, jax.Array):
-                # If it's a host-local single-device array, make it globally replicated
                 if len(x.sharding.device_set) == 1:
                     broadcasted: PyTree[Any] = multihost_utils.broadcast_one_to_all(x)
                     return broadcasted
@@ -225,12 +273,38 @@ class CheckpointedJob(BasicJob[C], Generic[C]):
 
         multihost_utils.sync_global_devices("save:post")
 
+    def save_tree_and_metadata(
+        self, suffix: str | Path, tree: PyTree[Any], metadata: Dict[str, Any]
+    ) -> None:
+        """Save to this job's own checkpoint. Wrapper for backwards compat."""
+        self.save_tree_and_metadata_from_path(
+            self._get_checkpoint_rel_path(self.spec, suffix), tree, metadata
+        )
+
+    # -- metadata ----------------------------------------------------------
+    def get_metadata_from_path(self, rel_path: str | Path) -> Dict[str, Any]:
+        """Load metadata only from ``rel_path`` under checkpoints_dir."""
+        path = self._get_checkpoints_dir(self.spec) / Path(rel_path)
+        with open(path / "config.json", "r") as df:
+            data: Dict[str, Any] = json.load(df)
+        return data
+
+    def get_metadata(self, suffix: str | Path) -> Dict[str, Any]:
+        """Load metadata only from this job's own checkpoint. Wrapper for backwards compat."""
+        return self.get_metadata_from_path(
+            self._get_checkpoint_rel_path(self.spec, suffix)
+        )
+
 
 class RestoreableJob(CheckpointedJob[C], Generic[C]):
     @abstractmethod
-    def restore(self, suffix: Path) -> None:
-        """Restore job state from checkpoint with given suffix"""
+    def restore_from_path(self, rel_path: str | Path) -> None:
+        """Restore job state from ``rel_path`` under checkpoints_dir."""
         raise NotImplementedError()
+
+    def restore(self, suffix: str | Path) -> None:
+        """Restore from this job's own checkpoint. Wrapper for backwards compat."""
+        self.restore_from_path(self._get_checkpoint_rel_path(self.spec, suffix))
 
     def register(self, suffix: str | Path) -> None:
         """Register this checkpoint as the latest, for idempotent restore."""
@@ -250,37 +324,44 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         return path.read_text().strip()
 
     @classmethod
-    def from_checkpoint(
-        cls, suffix: str | Path, spec: ExecutionSpec
+    def from_checkpoint_path(
+        cls,
+        rel_path: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
     ) -> Tuple[Self, Any]:
-        """loads and instantiates a checkpointed job from disk
+        """Load and instantiate a checkpointed job from ``rel_path`` under checkpoints_dir.
 
         Args:
-            suffix: checkpoint suffix to restore from
+            rel_path: Relative path under checkpoints_dir
             spec: execution spec to use for locating checkpoint
+            runtime_cfg: config values from the current launch to overlay onto
+                the checkpoint config before job initialization
 
         Returns:
             Tuple[Self, Any]: restored job instance and configuration
         """
 
-        # use the current spec to identify paths
-        path = CheckpointedJob._get_checkpoint_path(spec, suffix)
+        path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
         logger.debug("CHECKPOINT | restoring checkpointed job at {}", path)
 
-        # Load job spec (only JobSpec fields, not ExecutionSpec)
-        # Uses JobSpec.model_fields to be extensible - new fields added to JobSpec
-        # will automatically be included without modifying this code
-        with open(path / "job.json", "r") as df:
-            job_spec_data = json.load(df)
-
-        # Create new ExecutionSpec with loaded JobSpec fields
-        for k, v in job_spec_data.items():
-            setattr(spec, k, v)
+        # Load job spec from checkpoint. When runtime_cfg is provided this is
+        # a new job restoring from someone else's checkpoint (--restore), so we
+        # keep the caller's spec identity (name, project, group).  Without
+        # runtime_cfg this is an idempotent resume of the *same* job, so we
+        # restore the original spec fields.
+        if runtime_cfg is None:
+            with open(path / "job.json", "r") as df:
+                job_spec_data = json.load(df)
+            for k, v in job_spec_data.items():
+                setattr(spec, k, v)
+            logger.debug("CHECKPOINT | restored job spec from checkpoint")
         new_spec_obj = spec
-        logger.debug("CHECKPOINT | restored job spec")
 
         # load config now from config.yaml
         cfg = OmegaConf.load(path / "config.yaml")
+        if runtime_cfg is not None:
+            cfg = OmegaConf.merge(cfg, runtime_cfg)
 
         # instantiate job within configuration context
         with configuration(cfg):
@@ -306,11 +387,25 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
                 job_cls = cls
 
             job = job_cls(new_spec_obj)
-            job.restore(Path(suffix))
+            job.restore_from_path(rel_path)
 
         logger.debug(f"CHECKPOINT | restored checkpointed job {new_spec_obj.name}")
 
         return job, cfg
+
+    @classmethod
+    def from_checkpoint(
+        cls,
+        suffix: str | Path,
+        spec: ExecutionSpec,
+        runtime_cfg: Any | None = None,
+    ) -> Tuple[Self, Any]:
+        """Load from this job's own checkpoint. Wrapper for backwards compat."""
+        return cls.from_checkpoint_path(
+            CheckpointedJob._get_checkpoint_rel_path(spec, suffix),
+            spec,
+            runtime_cfg=runtime_cfg,
+        )
 
     @classmethod
     def checkpoints(cls, spec: ExecutionSpec) -> List[str]:

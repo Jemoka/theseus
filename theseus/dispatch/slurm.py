@@ -39,7 +39,7 @@ def _scp_content(
         _backoff,
         _recover,
         _is_transient_error,
-        _MAX_RETRIES,
+        _MAX_ATTEMPTS,
     )
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
@@ -48,7 +48,7 @@ def _scp_content(
 
     try:
         last_result = None
-        for attempt in range(_MAX_RETRIES):
+        for attempt in range(_MAX_ATTEMPTS):
             # Apply rate limiting to avoid SSH connection throttling
             _rate_limit(host)
 
@@ -79,10 +79,10 @@ def _scp_content(
                 # Check for transient connection errors
                 if (
                     _is_transient_error(last_result.stderr)
-                    and attempt < _MAX_RETRIES - 1
+                    and attempt < _MAX_ATTEMPTS - 1
                 ):
                     logger.warning(
-                        f"SLURM | scp failed (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                        f"SLURM | scp failed (attempt {attempt + 1}/{_MAX_ATTEMPTS}), backing off..."
                     )
                     _backoff(host)
                     continue
@@ -95,16 +95,16 @@ def _scp_content(
                     stdout="",
                     stderr=f"scp timed out after {timeout}s",
                 )
-                if attempt < _MAX_RETRIES - 1:
+                if attempt < _MAX_ATTEMPTS - 1:
                     logger.warning(
-                        f"SLURM | scp timeout (attempt {attempt + 1}/{_MAX_RETRIES}), backing off..."
+                        f"SLURM | scp timeout (attempt {attempt + 1}/{_MAX_ATTEMPTS}), backing off..."
                     )
                     _backoff(host)
                     continue
                 return last_result
 
         return last_result or RunResult(
-            returncode=-1, stdout="", stderr="max retries exceeded"
+            returncode=-1, stdout="", stderr="max attempts exceeded"
         )
     finally:
         Path(local_path).unlink(missing_ok=True)
@@ -278,6 +278,8 @@ class SlurmJob:
                 mount_opts.append(f"--cache-size {self.juicefs_mount.cache_size}")
             if self.juicefs_mount.cache_dir:
                 mount_opts.append(f"--cache-dir {self.juicefs_mount.cache_dir}")
+            if self.juicefs_mount.all_squash:
+                mount_opts.append(f"--all-squash {self.juicefs_mount.all_squash}")
             opts_str = " ".join(mount_opts)
             juicefs_str = f"""
 MOUNT_POINT="${{THESEUS_DISPATCH_ROOT_OVERRIDE:-{self.juicefs_mount.mount_point}}}"
@@ -285,7 +287,7 @@ MOUNT_POINT="$(resolve_runtime_root_tokens "$MOUNT_POINT")"
 if ! mountpoint -q "$MOUNT_POINT"; then
     echo "[bootstrap] mounting JuiceFS at $MOUNT_POINT..."
     mkdir -p "$MOUNT_POINT"
-    juicefs mount --umask=000 -d {opts_str} {self.juicefs_mount.redis_url} "$MOUNT_POINT"
+    juicefs mount --umask=0000 -d {opts_str} {self.juicefs_mount.redis_url} "$MOUNT_POINT"
 fi
 # Track mount point for cleanup on exit/preemption
 JUICEFS_MOUNT_POINT="$MOUNT_POINT"

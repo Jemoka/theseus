@@ -1,0 +1,63 @@
+architecture:
+  dtype:
+    param: float32
+    activation: bfloat16
+  rope: true
+  vocab_size: 100288
+  dropout: 0.0
+  bias: true
+  block_size: 2048
+  n_layers: 16
+  n_embd: 1664
+  n_head: 13
+optimization:
+  lr: 0.0003
+  weight_decay: 0.1
+  warmup_pct: 0.01
+  decay_pct: 0.01
+  constant_pct: 0.02
+  schedule: wsd
+  reset_optimizer: false
+  lora:
+    rank: 16
+    alpha: 16.0
+    target_modules:
+    - kernel
+training:
+  batch_size: 512
+  per_device_batch_size: -1
+  tokens:
+  - 7000000000
+  - 7000000000
+  dataset:
+  - - name: fineweb
+      rate: 1.0
+      style: PMD
+  - - name: pes2o
+      rate: 1.0
+      style: PMD
+  validation: false
+  evaluate: true
+  validation_steps: 2048
+  skip_first_dataset_validation: false
+  fade:
+    overlap: 0.1
+    curve: cosine
+eval:
+  evaluations:
+  - fineweb_ppl
+  - pes2o_ppl
+  - pile_ppl
+  - tinystories_ppl
+logging:
+  report_interval: 32
+  checkpoint_interval: 2670
+  validation_interval: 1335
+  wandb: true
+  plots:
+    save: true
+job: continual/train/benchmark_lora
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 1

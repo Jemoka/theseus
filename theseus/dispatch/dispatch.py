@@ -104,6 +104,10 @@ def _serialize_hardware(result: HardwareResult) -> str:
                     "root": h.cluster.root,
                     "work": h.cluster.work,
                     "log": h.cluster.log,
+                    "data": h.cluster.data,
+                    "checkpoints": h.cluster.checkpoints,
+                    "results": h.cluster.results,
+                    "status": h.cluster.status,
                 },
                 "resources": {chip.name: count for chip, count in h.resources.items()},
             }
@@ -117,6 +121,8 @@ def _generate_bootstrap(
     cfg: DictConfig,
     hardware: HardwareResult,
     spec: JobSpec,
+    preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
 ) -> str:
     """Generate bootstrap.py script with embedded data."""
     template = BOOTSTRAP_TEMPLATE.read_text()
@@ -125,11 +131,14 @@ def _generate_bootstrap(
     config_yaml = OmegaConf.to_yaml(cfg)
     hardware_json = _serialize_hardware(hardware)
 
-    script = template.replace("__CONFIG_YAML__", config_yaml)
+    preload_block = "\n".join(f"import {m}" for m in (preload_modules or []))
+    script = template.replace("__PRELOAD_IMPORTS__", preload_block)
+    script = script.replace("__CONFIG_YAML__", config_yaml)
     script = script.replace("__HARDWARE_JSON__", hardware_json)
     script = script.replace("__JOB_NAME__", spec.name)
     script = script.replace("__PROJECT__", spec.project or "")
     script = script.replace("__GROUP__", spec.group or "")
+    script = script.replace("__RESTORE_PATH__", restore_path or "")
 
     return script
 
@@ -145,6 +154,8 @@ def _build_stages(
     cfgs: list[DictConfig],
     hardware: HardwareResult,
     spec: JobSpec,
+    preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
 ) -> tuple[dict[str, str], str]:
     """Build bootstrap .py files and command string for one or more stages.
 
@@ -159,7 +170,13 @@ def _build_stages(
     """
     n = len(cfgs)
     if n == 1:
-        content = _generate_bootstrap(cfgs[0], hardware, spec)
+        content = _generate_bootstrap(
+            cfgs[0],
+            hardware,
+            spec,
+            preload_modules=preload_modules,
+            restore_path=restore_path,
+        )
         return {"_bootstrap_dispatch.py": content}, "python _bootstrap_dispatch.py"
 
     bootstrap_pys: dict[str, str] = {}
@@ -168,7 +185,15 @@ def _build_stages(
         stage_name = f"{spec.name}_stage{i}"
         stage_spec = JobSpec(name=stage_name, project=spec.project, group=spec.group)
         filename = f"_bootstrap_dispatch_stage{i}.py"
-        content = _generate_bootstrap(cfg, hardware, stage_spec)
+        # Only apply restore to the first stage
+        stage_restore = restore_path if i == 1 else None
+        content = _generate_bootstrap(
+            cfg,
+            hardware,
+            stage_spec,
+            preload_modules=preload_modules,
+            restore_path=stage_restore,
+        )
         bootstrap_pys[filename] = content
         commands.append(f"python {filename}")
 
@@ -185,6 +210,7 @@ def dispatch(
     dirty: bool = False,
     check_availability: bool = True,
     mem: str | None = None,
+    cpu: str | None = None,
     timeout: float = 30.0,
     extra_uv_groups: list[str] | None = None,
     extra_cfgs: list[DictConfig] | None = None,
@@ -193,6 +219,9 @@ def dispatch(
     tpu_preemptible_override: bool | None = None,
     volcano_image_override: str | None = None,
     volcano_namespace_override: str | None = None,
+    preload_modules: list[str] | None = None,
+    restore_path: str | None = None,
+    env_overrides: dict[str, str] | None = None,
 ) -> SlurmResult | RunResult:
     """Dispatch a job to remote infrastructure.
 
@@ -272,11 +301,24 @@ def dispatch(
 
     # 4. Generate bootstrap script(s) (Python scripts that run the job stages)
     logger.debug(f"DISPATCH | generating {n_stages} bootstrap script(s)")
-    bootstrap_pys, command = _build_stages(all_cfgs, solve_result.result, spec)
+    bootstrap_pys, command = _build_stages(
+        all_cfgs,
+        solve_result.result,
+        spec,
+        preload_modules=preload_modules,
+        restore_path=restore_path,
+    )
 
     # 5. Submit based on host type
     uv_cache_dir = cluster_config.uv_dir
     cluster_env = _cluster_env(cluster_config)
+    # Merge host-level env (overrides cluster-level keys on collision),
+    # then CLI-supplied overrides on top (highest precedence).
+    host_env = getattr(solve_result.host_config, "env", None) or {}
+    if host_env:
+        cluster_env = {**cluster_env, **host_env}
+    if env_overrides:
+        cluster_env = {**cluster_env, **env_overrides}
     if isinstance(solve_result.host_config, VolcanoHostConfig):
         if cluster_config.mount:
             logger.warning(
@@ -299,6 +341,8 @@ def dispatch(
             volcano_namespace_override=volcano_namespace_override,
             uv_cache_dir=uv_cache_dir,
             cluster_env=cluster_env,
+            mem=mem,
+            cpu=cpu,
         )
 
     # Non-Volcano paths need work_dir, share_dir, and juicefs_mount
@@ -315,6 +359,7 @@ def dispatch(
             mount_point=cluster.root,
             cache_size=cluster_config.cache_size,
             cache_dir=cluster_config.cache_dir,
+            all_squash=cluster_config.all_squash,
         )
         logger.debug(f"DISPATCH | JuiceFS mount configured: {cluster.root}")
 
@@ -619,7 +664,9 @@ def _dispatch_plain(
     result = _launch_and_verify(
         run_cmd,
         verify_cmd="pgrep -f '_bootstrap.sh' > /dev/null 2>&1",
-        launcher=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
+        # Fire-and-forget: a single attempt only. The remote shell already
+        # spawned the bootstrap; any retry would multi-spawn it.
+        launcher=lambda cmd, t: run(cmd, ssh_alias, timeout=t, max_attempts=1),
         verifier=lambda cmd, t: run(cmd, ssh_alias, timeout=t),
         timeout=timeout,
         label=f"SSH '{ssh_alias}'",
@@ -652,6 +699,8 @@ def _dispatch_volcano(
     volcano_namespace_override: str | None = None,
     uv_cache_dir: str | None = None,
     cluster_env: dict[str, str] | None = None,
+    mem: str | None = None,
+    cpu: str | None = None,
 ) -> RunResult:
     """Dispatch job to a Kubernetes Volcano cluster.
 
@@ -674,6 +723,10 @@ def _dispatch_volcano(
         host_config = dataclasses.replace(
             host_config, namespace=volcano_namespace_override
         )
+    if mem:
+        host_config = dataclasses.replace(host_config, memory=mem)
+    if cpu:
+        host_config = dataclasses.replace(host_config, cpu=cpu)
 
     namespace = host_config.namespace
     kubeconfig = host_config.kubeconfig
@@ -1349,6 +1402,7 @@ def dispatch_repl(
     dirty: bool = False,
     check_availability: bool = True,
     mem: str | None = None,
+    cpu: str | None = None,
     timeout: float = 60.0,
     startup_timeout: float = 180.0,
     slurm_wait_timeout: float | None = None,
@@ -1384,6 +1438,7 @@ def dispatch_repl(
             mount_point=cluster.root,
             cache_size=cluster_config.cache_size,
             cache_dir=cluster_config.cache_dir,
+            all_squash=cluster_config.all_squash,
         )
 
     uv_cache_dir = cluster_config.uv_dir

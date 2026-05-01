@@ -212,14 +212,14 @@ def test_eval_registry() -> bool:
     from theseus.registry import EVALUATIONS
 
     expected = [
-        "ccaligned",
         "cfq",
         "clutrr",
         "longhealth",
         "mtob",
-        "pes2o",
-        "pg19",
-        "pile",
+        "ccaligned_fr_ppl",
+        "pes2o_ppl",
+        "pg19_ppl",
+        "pile_ppl",
         "mnli_ppl",
         "qqp_ppl",
         "sst2_ppl",

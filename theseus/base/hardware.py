@@ -14,6 +14,12 @@ class Cluster(BaseModel):
     root: str  # root directory of checkpoints, code, etc.
     work: str  # work directory (where mirrors will be copied)
     log: Optional[str] = None  # log directory (defaults to {work}/logs)
+    data: Optional[str] = None  # data directory (defaults to {root}/data)
+    checkpoints: Optional[str] = (
+        None  # checkpoints directory (defaults to {root}/checkpoints)
+    )
+    results: Optional[str] = None  # results directory (defaults to {root}/results)
+    status: Optional[str] = None  # status directory (defaults to {root}/status)
 
     @property
     def log_dir(self) -> str:
@@ -34,35 +40,31 @@ class Cluster(BaseModel):
 
     @property
     def data_dir(self) -> Path:
-        # make directory if not exist
-        data_dir = Path(self.root_dir) / "data"
-        if not data_dir.exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
+        data_dir = Path(self.data) if self.data else self.root_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
 
     @property
     def checkpoints_dir(self) -> Path:
-        # make directory if not exist
-        checkpoints_dir = Path(self.root_dir) / "checkpoints"
-        if not checkpoints_dir.exists():
-            checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        checkpoints_dir = (
+            Path(self.checkpoints)
+            if self.checkpoints
+            else self.root_dir / "checkpoints"
+        )
+        checkpoints_dir.mkdir(parents=True, exist_ok=True)
         return checkpoints_dir
 
     @property
     def results_dir(self) -> Path:
-        # make directory if not exist
-        data_dir = Path(self.root_dir) / "results"
-        if not data_dir.exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir
+        results_dir = Path(self.results) if self.results else self.root_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+        return results_dir
 
     @property
     def status_dir(self) -> Path:
-        # make directory if not exist
-        data_dir = Path(self.root_dir) / "status"
-        if not data_dir.exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir
+        status_dir = Path(self.status) if self.status else self.root_dir / "status"
+        status_dir.mkdir(parents=True, exist_ok=True)
+        return status_dir
 
 
 class ClusterMachine(BaseModel):
