@@ -912,9 +912,7 @@ class PerplexityComparisonEvaluation(Evaluation):
             xs, masks = inference.pad(encoded_inputs)
             prefix_lengths_array = np.asarray(prefix_lengths, dtype=np.int32)
             metadata_array = np.asarray(metadata, dtype=np.int32)
-            correct_indices_array = np.asarray(
-                [d[2] for d in all_data], dtype=np.int32
-            )
+            correct_indices_array = np.asarray([d[2] for d in all_data], dtype=np.int32)
             original_flat_size_array = np.asarray(original_flat_size, dtype=np.int32)
         else:
             xs, masks = None, None
