@@ -492,7 +492,7 @@ class EncodingEvaluation(Evaluation):
         all_results = []
 
         if jax.process_index() == 0:
-            logger.info(
+            logger.debug(
                 "EVAL | {} | samples={} seq={} batches={}",
                 eval_data.name,
                 original_size,
@@ -510,7 +510,7 @@ class EncodingEvaluation(Evaluation):
                     "EVAL | {} | tracing+compiling first chunk", eval_data.name
                 )
             if jax.process_index() == 0 and num_batches > chunk_size:
-                logger.info(
+                logger.debug(
                     "EVAL | {} | chunk {}/{} ({:.0f}%)",
                     eval_data.name,
                     chunk_end,
@@ -721,7 +721,7 @@ class PerplexityEvaluation(Evaluation):
         all_stats = []
 
         if jax.process_index() == 0:
-            logger.info(
+            logger.debug(
                 "EVAL | {} | samples={} seq={} batches={}",
                 eval_data.name,
                 original_size,
@@ -739,7 +739,7 @@ class PerplexityEvaluation(Evaluation):
                     "EVAL | {} | tracing+compiling first chunk", eval_data.name
                 )
             if jax.process_index() == 0 and num_batches > chunk_size:
-                logger.info(
+                logger.debug(
                     "EVAL | {} | chunk {}/{} ({:.0f}%)",
                     eval_data.name,
                     chunk_end,
@@ -1000,7 +1000,7 @@ class PerplexityComparisonEvaluation(Evaluation):
         all_losses = []
 
         if jax.process_index() == 0:
-            logger.info(
+            logger.debug(
                 "EVAL | {} | samples={} flat={} seq={} batches={}",
                 eval_data.name,
                 n_samples,
@@ -1020,7 +1020,7 @@ class PerplexityComparisonEvaluation(Evaluation):
                     "EVAL | {} | tracing+compiling first chunk", eval_data.name
                 )
             if jax.process_index() == 0 and num_batches > chunk_size:
-                logger.info(
+                logger.debug(
                     "EVAL | {} | chunk {}/{} ({:.0f}%)",
                     eval_data.name,
                     chunk_end,
@@ -1253,7 +1253,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         all_intermediates: List[List[Tuple[np.ndarray, np.ndarray]]] = []
 
         for evaluation in self.evaluations:
-            logger.info("EVAL | Running {}", evaluation.name)
+            logger.debug("EVAL | Running {}", evaluation.name)
             if return_intermediates:
                 score, intermediates = evaluation(
                     self,
@@ -1272,7 +1272,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
                     **kwargs,
                 )
             results[evaluation.name] = score
-            logger.info("EVAL | {} done", evaluation.name)
+            logger.debug("EVAL | {} done", evaluation.name)
 
         if return_intermediates:
             return results, all_intermediates

@@ -493,14 +493,14 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         self._last_raw_reward_mean = float(rewards.mean())
         self._last_raw_reward_max = float(rewards.max())
         if self.main_process():
-            logger.info(
+            logger.debug(
                 "PPO | raw_reward mean={:.3f} max={:.3f} (B={})",
                 self._last_raw_reward_mean,
                 self._last_raw_reward_max,
                 rewards.shape[0],
             )
             for name, arr in component_rewards_per_rollout.items():
-                logger.info(
+                logger.debug(
                     "PPO | component[{}] mean={:.3f} max={:.3f}",
                     name,
                     float(arr.mean()),
