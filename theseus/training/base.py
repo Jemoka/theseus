@@ -848,6 +848,9 @@ class BaseTrainer(RestoreableJob[C], Generic[C, M]):
         if self.main_process():
             self.plotter.close()
 
+    def log(self, values: Dict[str, Any]) -> None:
+        self.plotter.log(values, self.global_step_counter_ // self.accumulate_steps)
+
     def save(self, suffix: Path) -> None:
         """final save at the end of training"""
 
