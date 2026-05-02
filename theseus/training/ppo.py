@@ -191,6 +191,16 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
 
     # -- rollout collection ----------------------------------------------------
 
+    def _samples_per_prompt(self) -> int:
+        """How many rollouts to draw per unique prompt during a refill.
+
+        Default 1 (vanilla PPO). Subclasses that need group-relative semantics
+        (GRPO, RLOO) override this; the evaluator then replicates each selected
+        prompt index G times so the buffer arrives with G consecutive same-
+        prompt rollouts per slot.
+        """
+        return 1
+
     def _refill_buffer(self) -> None:
         """Run the RL evaluator and stage rollouts as (x, padding_mask,
         action_mask, reward) tuples on every host."""
@@ -211,6 +221,7 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             return_intermediates=True,
             temperature=cfg.sample_temperature,
             top_p=cfg.sample_top_p,
+            samples_per_prompt=self._samples_per_prompt(),
         )
         logger.debug("PPO | rollouts done; computing rewards")
 
@@ -255,6 +266,14 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # The scalarized reward has one row per rollout slot. Additional RL
         # components are reward channels for those slots; they are not appended
         # as extra training rows.
+        # ──────────────────────────────────────────────────────────────────
+        # ORDERING CONTRACT — DO NOT SHUFFLE `rollouts`, `rewards`, or
+        # `component_rewards_arr` past this point. They are co-indexed, and
+        # GRPO (via _samples_per_prompt) relies on them arriving as G
+        # consecutive same-prompt slots per group: [p0_s0..p0_s(G-1),
+        # p1_s0..p1_s(G-1), ...]. Any per-host or batch-level shuffle here
+        # silently turns group-relative z-scoring into noise.
+        # ──────────────────────────────────────────────────────────────────
         rollouts = rollouts_per_eval[0]
 
         # The selected rollout source should have uniform sequence length T
@@ -286,6 +305,12 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # each host to provide its UNIQUE shard, which _to_global will stitch
         # back into the global batch. Split here so each host's buffer holds
         # only its slice.
+        # WARNING: np.array_split returns CONTIGUOUS index ranges per host.
+        # Do not switch this to a strided/round-robin/shuffled split — GRPO's
+        # group_size G must divide each host's slice cleanly so groups are
+        # never cut across hosts. The B%G assertion in GRPO._smear_rewards
+        # is the backstop, but a strided split would *pass* the assertion
+        # while shattering same-prompt grouping. Keep it contiguous.
         n_hosts, host_idx = jax.process_count(), jax.process_index()
         my_indices = np.array_split(np.arange(len(rollouts)), n_hosts)[host_idx]
 
@@ -309,6 +334,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             )
             for i in my_indices
         ]
+        # `new_entries` is iterated in `my_indices` order (contiguous range);
+        # do not insert a shuffle/random.shuffle/np.random.permutation on this
+        # list — see the ORDERING CONTRACT comment above.
         self._rollout_buffer.extend(new_entries)
         logger.debug(
             "PPO | refill: B_global={} → host {}/{} got {} (T={}, action_tokens/sample={:.1f})",
@@ -451,6 +479,18 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
             )
             self._refill_buffer()
 
+        # ──────────────────────────────────────────────────────────────────
+        # ORDERING CONTRACT — DO NOT SHUFFLE `entries`.
+        # The buffer is FIFO and stores rollouts in the order produced by
+        # _refill_buffer, which (for GRPO and any other group-relative
+        # subclass) arrives as G consecutive same-prompt slots. Every
+        # downstream array in this batch (x, padding_mask, action_mask,
+        # old_log_probs, rewards, component_rewards) is co-indexed off
+        # `entries` and fed into _smear_rewards in the same order. Shuffling
+        # here turns GRPO's z-score into a no-op — silently. If you need
+        # randomization, do it BEFORE rollout collection (prompt sampling)
+        # or AFTER _smear_rewards has produced per-token rewards.
+        # ──────────────────────────────────────────────────────────────────
         entries = self._rollout_buffer[:bsz]
         self._rollout_buffer = self._rollout_buffer[bsz:]
 

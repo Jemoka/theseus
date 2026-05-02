@@ -227,6 +227,7 @@ class RolloutEvaluation(Evaluation):
         temperature: float = 0.0,
         top_p: float = 1.0,
         chunk_size: int = 200,
+        samples_per_prompt: int = 1,
         **kwargs: Any,
     ) -> Any:
         """Run evaluation.
@@ -260,13 +261,31 @@ class RolloutEvaluation(Evaluation):
 
         batch_unit = inference.replicas * inference.per_device_batch_size
         indices = _select_indices(inference, len(self))
+        if samples_per_prompt > 1:
+            # Replicate each selected index G times consecutively so callers
+            # (e.g. GRPO) get [p0_s0, p0_s1, ..., p0_s(G-1), p1_s0, ...]. The
+            # G copies of each prompt diverge at sampling time via temperature.
+            indices = [i for i in indices for _ in range(samples_per_prompt)]
         original_size = len(indices)
+
+        # ──────────────────────────────────────────────────────────────────
+        # ORDERING CONTRACT — DO NOT SHUFFLE.
+        # `indices` and every per-rollout array derived from it (x_raw, y_raw,
+        # encoded, rollout_inputs, raw_rollouts_np, decoded_results,
+        # intermediates) MUST stay in the order produced above. GRPO assumes
+        # the buffer arrives as G consecutive same-prompt rollouts per slot;
+        # any shuffle here silently breaks group-relative advantage z-scoring.
+        # If you need stochastic order, do it BEFORE _select_indices or AFTER
+        # the trainer has consumed the buffer — never in between.
+        # ──────────────────────────────────────────────────────────────────
 
         if jax.process_index() == 0:
             x_raw, y_raw = zip(*[self.get(i) for i in indices])
             x = list(x_raw)
             original_y = list(y_raw)
 
+            # _pad_eval_inputs only APPENDS (repeats the last item); preserves
+            # leading order. Do not change it to interleave/shuffle padding.
             _, (x, original_y) = _pad_eval_inputs(batch_unit, x, original_y)
 
             encoded = encoding.encode_batch(x, allowed_special="all")
@@ -333,6 +352,9 @@ class RolloutEvaluation(Evaluation):
 
             base_action_mask = positions >= prompt_max
 
+            # Built in dataset-index order — must match `indices` 1:1 so
+            # GRPO's same-prompt grouping holds. Do not reorder, sort, or
+            # shuffle this list.
             intermediates = []
             for i in range(original_size):
                 padding_mask = positions >= (prompt_max - prompt_lengths[i])

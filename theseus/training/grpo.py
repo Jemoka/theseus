@@ -36,6 +36,12 @@ class GRPOTrainer(PPOTrainer[M], Generic[M]):
         if self.main_process():
             logger.info("GRPO | group_size={}", self.grpo_config.group_size)
 
+    def _samples_per_prompt(self) -> int:
+        # Tells the rollout pipeline to draw `group_size` completions per prompt
+        # so the buffer arrives as [p0_s0..p0_s(G-1), p1_s0..p1_s(G-1), ...].
+        # Group-relative z-scoring below is only valid under that ordering.
+        return int(self.grpo_config.group_size)
+
     def _smear_rewards(
         self, rewards: np.ndarray, action_mask: np.ndarray, discount: float
     ) -> np.ndarray:
@@ -45,36 +51,47 @@ class GRPOTrainer(PPOTrainer[M], Generic[M]):
         standardizes within each group (z-score), then defers to PPO's reward-
         to-go smear for the per-token distribution.
 
-        If the batch size isn't a multiple of group_size, the trailing
-        rollouts fall back to plain (un-normalized) reward smearing.
+        ORDERING CONTRACT (load-bearing — read before touching anything that
+        produces or consumes `rewards`):
+          The reshape (-1, g) is only valid if `rewards[i*g : (i+1)*g]` are G
+          completions of the SAME prompt. That ordering is established by
+          _samples_per_prompt() → RolloutEvaluation duplicating each selected
+          index G times consecutively, and is preserved end-to-end by:
+            • RolloutEvaluation.__call__ (intermediates list built in index
+              order)
+            • Evaluator.evaluate (per-component intermediates list)
+            • PPOTrainer._refill_buffer (contiguous host split via
+              np.array_split; FIFO buffer extend)
+            • PPOTrainer.batch (FIFO slice of the buffer)
+          A shuffle anywhere along that path silently turns this z-score into
+          noise — the assertion below catches divisibility violations but
+          CANNOT detect a same-size shuffle. If you add a shuffle to any of
+          those call sites, override _samples_per_prompt to return 1 first.
         """
         g = self.grpo_config.group_size
         if g <= 1:
             return super()._smear_rewards(rewards, action_mask, discount)
 
         B = rewards.shape[0]
-        n_full = (B // g) * g
-        adv = np.empty_like(rewards)
-
-        if n_full > 0:
-            grouped = rewards[:n_full].reshape(-1, g)
-            mean = grouped.mean(axis=-1, keepdims=True)
-            std = grouped.std(axis=-1, keepdims=True)
-            adv[:n_full] = ((grouped - mean) / (std + 1e-8)).reshape(-1)
-            logger.debug(
-                "GRPO | normalized {} groups of {} (group_mean range [{:.3f},{:.3f}], group_std range [{:.3f},{:.3f}])",
-                n_full // g,
-                g,
-                float(mean.min()),
-                float(mean.max()),
-                float(std.min()),
-                float(std.max()),
+        if B % g != 0:
+            raise ValueError(
+                f"GRPO | batch size {B} not divisible by group_size {g}; "
+                f"check RLEvaluatorConfig.batch_size and accumulate_steps."
             )
 
-        if n_full < B:
-            # Trailing rollouts that don't form a full group: keep raw reward.
-            adv[n_full:] = rewards[n_full:]
-            logger.debug("GRPO | {} trailing rollouts left un-normalized", B - n_full)
+        grouped = rewards.reshape(-1, g)
+        mean = grouped.mean(axis=-1, keepdims=True)
+        std = grouped.std(axis=-1, keepdims=True)
+        adv = ((grouped - mean) / (std + 1e-8)).reshape(-1)
+        logger.debug(
+            "GRPO | normalized {} groups of {} (group_mean range [{:.3f},{:.3f}], group_std range [{:.3f},{:.3f}])",
+            B // g,
+            g,
+            float(mean.min()),
+            float(mean.max()),
+            float(std.min()),
+            float(std.max()),
+        )
 
         return super()._smear_rewards(adv, action_mask, discount)
 
