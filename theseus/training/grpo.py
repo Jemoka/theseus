@@ -54,14 +54,20 @@ class GRPOTrainer(PPOTrainer[M], Generic[M]):
         ORDERING CONTRACT (load-bearing — read before touching anything that
         produces or consumes `rewards`):
           The reshape (-1, g) is only valid if `rewards[i*g : (i+1)*g]` are G
-          completions of the SAME prompt. That ordering is established by
-          _samples_per_prompt() → RolloutEvaluation duplicating each selected
-          index G times consecutively, and is preserved end-to-end by:
+          completions of the SAME prompt of the SAME component. Groups are
+          intra-component: a group of G never crosses component boundaries
+          because each component runs samples_per_prompt=G independently in
+          RolloutEvaluation, producing N_i = (n_prompts_i * g) consecutive
+          G-blocks; PPOTrainer._refill_buffer concatenates components in order
+          (component 0's rollouts, then component 1's, ...), so the boundary
+          between components always lands on a G-aligned offset.
+          The ordering is established by _samples_per_prompt() → RolloutEvaluation
+          duplicating each selected index G times consecutively, and preserved by:
             • RolloutEvaluation.__call__ (intermediates list built in index
               order)
             • Evaluator.evaluate (per-component intermediates list)
-            • PPOTrainer._refill_buffer (contiguous host split via
-              np.array_split; FIFO buffer extend)
+            • PPOTrainer._refill_buffer (component-by-component concatenation;
+              contiguous host split via np.array_split; FIFO buffer extend)
             • PPOTrainer.batch (FIFO slice of the buffer)
           A shuffle anywhere along that path silently turns this z-score into
           noise — the assertion below catches divisibility violations but

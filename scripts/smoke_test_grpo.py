@@ -3,14 +3,11 @@
 
 Defines a trivial `high_number` evaluation: the reward is the integer parsed
 out of the model's decoded response (higher is better). Registers a tiny
-`grpo/smoke/high_number` job whose `reward` classmethod just forwards the
-parsed value. Runs a handful of training steps so the rollout → reward →
-GRPO-loss pipeline gets exercised end to end.
+`grpo/smoke/high_number` job. Runs a handful of training steps so the
+rollout → reward → GRPO-loss pipeline gets exercised end to end.
 """
 
-from typing import Any, Dict, List, Tuple
-
-import numpy as np
+from typing import Any, List, Tuple
 
 from theseus.quick import quick
 from theseus.registry import evaluation, job
@@ -65,12 +62,14 @@ class HighNumberEval(RolloutEvaluation):
 
 @job("grpo/smoke/high_number")
 class HighNumberGRPO(GRPOTrainer[Llama]):
-    """Smoke-test GRPO trainer: reward is the eval's parsed value."""
+    """Smoke-test GRPO trainer: reward is the eval's parsed value.
+
+    With a single RL component, the default ``reward_postprocess`` (identity)
+    already gives the per-rollout score from `high_number`'s scoring. No
+    override needed.
+    """
 
     MODEL = Llama
-
-    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
-        return np.asarray(evals["high_number"], dtype=np.float32)
 
 
 if __name__ == "__main__":
