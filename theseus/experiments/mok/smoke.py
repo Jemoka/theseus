@@ -10,6 +10,7 @@ from theseus.config import configure
 from theseus.training.base import BaseTrainerConfig
 from theseus.training.grpo import BackbonedGRPOTrainer, GRPOTrainer
 from theseus.experiments.mok.reward import mok_reward, MokConfig
+from theseus.experiments.mok.coord import coord_ascent_reward, CoordAscentConfig
 from theseus.registry import job, evaluation
 from theseus.data.datasets import ChatTemplate, ChatTurn
 from theseus.evaluation.base import RolloutEvaluation
@@ -230,3 +231,34 @@ class MoKGPT(GRPOTrainer[GPT]):
 
     def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
         return mok_reward(self, evals, configure(MokConfig))
+
+
+@job("qwen/rl/coord")
+class CoordAscentQwen(BackbonedGRPOTrainer):
+    """Coordinate-ascent baseline: zero advantage on samples already winning a non-active coord."""
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        return super()._config() + [CoordAscentConfig]
+
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
+        return coord_ascent_reward(self, evals, self.grpo_config.group_size)
+
+
+@job("gpt/rl/coord")
+class CoordAscentGPT(GRPOTrainer[GPT]):
+    """From-scratch GPT coordinate-ascent baseline."""
+
+    MODEL = GPT
+    CONFIG = BaseTrainerConfig
+
+    @classmethod
+    def _config(cls) -> List[Type[Any]]:
+        return super()._config() + [CoordAscentConfig]
+
+    @classmethod
+    def schedule(cls) -> optax._src.base.Schedule:
+        return "wsd"
+
+    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
+        return coord_ascent_reward(self, evals, self.grpo_config.group_size)
