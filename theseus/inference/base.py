@@ -9,6 +9,7 @@ from pathlib import Path
 import time
 from typing import (
     Any,
+    Dict,
     Tuple,
     Generic,
     Literal,
@@ -43,6 +44,7 @@ from theseus.data.tokenizer import (
     encode_chat_template,
     decode_chat_template,
 )
+from theseus.plot import Plotter
 
 if TYPE_CHECKING:
     from theseus.training.base import BaseTrainer
@@ -87,6 +89,10 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
     model: M
     _rollout_chunk_jit: Any
     _rollout_chunk_jit_key: tuple[int, float, float] | None
+    # Wired up by from_trainer so evals run on-policy (e.g. PPO/GRPO refills
+    # via Evaluator) can log per-channel reward stats. Stays None for inference
+    # jobs created without a trainer (from_checkpoint, raw inference).
+    plotter: Optional[Plotter] = None
 
     @property
     def done(self) -> bool:
@@ -97,6 +103,25 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         raise NotImplementedError(
             "InferenceJob cannot be run - use for inference only."
         )
+
+    def log(self, values: Dict[str, Any]) -> None:
+        """Log metric ``values`` through the attached plotter (if any).
+
+        Mirrors ``BaseTrainer.log`` so eval components can surface side metrics
+        without knowing whether they were instantiated from a trainer or a bare
+        checkpoint. No-op when plotter is None.
+
+        Step is taken from ``state.step`` (the optax optimizer-step counter,
+        incremented once per ``state.apply_gradients`` call). This matches
+        ``BaseTrainer.log``, which uses ``global_step_counter_ // accumulate_steps``
+        — one global-step bump (= ``accumulate_steps`` micro-batches) corresponds
+        to exactly one ``apply_gradients`` call, so the two counters are always
+        equal during training. Reading ``state.step`` does a device→host sync;
+        evals already run after a rollout barrier so the cost is negligible.
+        """
+        if self.plotter is None:
+            return
+        self.plotter.log(values, int(self.state.step))
 
     @staticmethod
     def forward(
@@ -183,6 +208,9 @@ class InferenceJob(RestoreableJob[C], Generic[C, M]):
         job.per_device_batch_size = trainer.per_device_batch_size
         job.block_size = trainer.args.block_size
         job.model = trainer.model
+        # Pull the trainer's plotter so on-policy evals can stream metrics
+        # through the same pipeline (wandb / plot files / step alignment).
+        job.plotter = getattr(trainer, "plotter", None)
 
         logger.debug(
             "INFERENCE | from_trainer replicas={} local_replicas={} per_device_batch_size={} block_size={}",

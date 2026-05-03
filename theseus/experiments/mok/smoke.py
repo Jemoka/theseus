@@ -141,6 +141,17 @@ class AlpacaGoldenGateEval(RolloutEvaluation):
         for i, (y, y_hat) in enumerate(zip(ys, y_hats)):
             channels[i, 0] = _golden_gate_score(y_hat)
             channels[i, 1] = _word_overlap(y, y_hat)
+        if self._evaluator_ref is not None:
+            self._evaluator_ref.log(
+                {
+                    f"{self.name}/channel/golden_gate_mean": float(
+                        channels[:, 0].mean()
+                    ),
+                    f"{self.name}/channel/alpaca_overlap_mean": float(
+                        channels[:, 1].mean()
+                    ),
+                }
+            )
         return cast(List[float], mok_reward(channels, self.mok_config).tolist())
 
 
@@ -234,6 +245,17 @@ class ArithmeticGoldenGateEval(RolloutEvaluation):
         for i, (y, y_hat) in enumerate(zip(ys, y_hats)):
             channels[i, 0] = _golden_gate_score(y_hat)
             channels[i, 1] = 1.0 if self.check(y, y_hat) else 0.0
+        if self._evaluator_ref is not None:
+            self._evaluator_ref.log(
+                {
+                    f"{self.name}/channel/golden_gate_mean": float(
+                        channels[:, 0].mean()
+                    ),
+                    f"{self.name}/channel/math_correct_mean": float(
+                        channels[:, 1].mean()
+                    ),
+                }
+            )
         return cast(List[float], mok_reward(channels, self.mok_config).tolist())
 
 

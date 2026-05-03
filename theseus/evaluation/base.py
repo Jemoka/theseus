@@ -245,6 +245,11 @@ class RolloutEvaluation(Evaluation):
         Returns:
             Evaluation score, or (score, intermediates) when return_intermediates.
         """
+        # Stash the inference handle so subclasses' score()/clean() can reach
+        # back to the trainer's plotter (via inference.log) for side metrics.
+        # Mirrors the pattern EncodingEvaluation uses for its chunk_jit cache.
+        self._evaluator_ref = inference
+
         batch_unit = inference.replicas * inference.per_device_batch_size
         indices = _select_indices(inference, len(self))
         original_size = len(indices)
