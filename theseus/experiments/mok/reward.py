@@ -1,6 +1,7 @@
-import numpy as np
-from typing import Any, Dict
 from dataclasses import dataclass
+
+import numpy as np
+
 from theseus.config import field
 
 
@@ -13,84 +14,55 @@ class MokConfig:
     eps_max: float = field("optimization/mok/eps_max", default=0.5)
 
 
-def sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1 / (1 + np.exp(-x))  # type: ignore
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))  # type: ignore[no-any-return]
 
 
 def mok_reward(
-    self: Any, evals: Dict[str, np.ndarray], config: MokConfig
+    scores: np.ndarray,
+    config: MokConfig,
+    progress: float = 1.0,
 ) -> np.ndarray:
-    """MoK reward placeholder: every rollout gets training-progress in [0, 1].
+    r"""MoK multi-objective scalarization. ``(N, k) -> (N,)``.
 
-    Suppose we have a reward vector $r \in \mathbb{R}^n$ and a corresponding weight vector
-     $w \in \mathbb{R}^n$. The most common method of reward scalarization for LLM fine-tuning
-    is to compute the weighted sum $r_{scalar} = r^{T}w$. 
+    Given per-rollout per-channel raw scores ``scores[n, i]``:
 
-    We propose an alternative approach to scalarization as follows. First, we scale each component
-    of $r$, so that $r \in [0,1]^{n}$. Next, we normalize the weights of $w$, such that $w \in [0,1]^{n}$
-    and $\sum_{i=1}^{n}w_i = 1$. Letting $r_w = w \odot r$, we define 
-    \\begin{equation}
-        \hat{r}_w = \left[
-        \\begin{array}{c}
-                r_{w1} \\\\
-                \\vdots \\\\
-                r_{wn} \\\\
-                1 - \sum_{i=1}^{n} r_{wi} \\\\
-        \end{array}
-    \\right]
-    \end{equation}
-    We can see that $\hat{r}_w$ defines a valid probability distribution, since for all $i$, $0 \leq r_iw_i \leq 1$ and $\sum_{i=1}^nr$. We then define 
-    \\begin{equation}
-        \hat{w} = 
-        \left[
-            \\begin{array}{c}
-                w_{1} - \\frac{\\varepsilon}{n} \\\\
-                \\vdots \\\\
-                w_{n} - \\frac{\\varepsilon}{n} \\\\
-                \\varepsilon
-            \end{array}
-        \\right]
-    \end{equation}
+      1. Squash each channel to ``[0, 1]`` via sigmoid.
+      2. Weight by ``config.weighting`` (renormalized to sum to 1) and append a
+         residual channel so each row defines a distribution over ``k+1``
+         categories::
 
-    For which the same properties hold. 
+            r̂_w = [w_1·r_1, ..., w_k·r_k, 1 - Σ_i w_i·r_i]
 
-    To scalarize our reward, we take the KL-divergence between $\hat{r}_w$ and $\hat{w}$: 
-    \\begin{equation}
-        r_{scalar} = -D_{KL}(\hat{r}_w \| \hat{w})
-    \end{equation}
+      3. Build the target distribution ``ŵ = [w_1·(1-ε), ..., w_k·(1-ε), ε]``.
+      4. Return the per-rollout reward ``-D_KL(r̂_w || ŵ)``. Higher is better.
 
-    Both counter and denominator are in micro-batch units (global_step_counter_
-    increments by accumulate_steps per optimizer step; total_batches =
-    total_steps * accumulate_steps), so micro-vs-batch is consistent.
+    ``progress ∈ [0, 1]`` linearly anneals ``ε`` from ``eps_max`` (early) to
+    ``eps_min`` (late). Defaults to ``1.0`` so callers without a training-
+    progress signal (e.g. eval pipelines) get ``ε = eps_min``.
     """
+    if scores.ndim != 2:
+        raise ValueError(f"mok_reward expects (N, k); got shape {scores.shape}.")
+    _, k = scores.shape
+    if len(config.weighting) != k:
+        raise ValueError(
+            f"MokConfig.weighting has {len(config.weighting)} entries but "
+            f"scores has {k} channels."
+        )
 
-    assert len(evals) == len(config.weighting), (
-        "Number of reward components must match number of weights"
+    s = _sigmoid(scores.astype(np.float32))
+    weights = np.asarray(config.weighting, dtype=np.float32)
+    weights = weights / weights.sum()
+
+    eps = float(config.eps_max - (config.eps_max - config.eps_min) * progress)
+
+    r_w = s * weights[None, :]  # (N, k)
+    residual = 1.0 - r_w.sum(axis=-1, keepdims=True)  # (N, 1)
+    r_w_hat = np.concatenate([r_w, residual], axis=-1)  # (N, k+1)
+    w_hat = np.concatenate([weights * (1.0 - eps), np.array([eps], dtype=np.float32)])
+
+    kl = np.sum(
+        r_w_hat * (np.log(r_w_hat + 1e-10) - np.log(w_hat[None, :] + 1e-10)),
+        axis=-1,
     )
-
-    # mock:
-    # evals =  {"chicken": np.array([1.4, 2.5, 3.1]), "egg": np.array([0.2, 0.3, 0.4])}
-    # config = MokConfig(weighting=[0.7, 0.3])
-
-    # first normalize
-    evals = {key: sigmoid(value) for key, value in evals.items()}  # scale to [0, 1]
-    total_weight = sum(config.weighting)
-    weights = np.array(config.weighting) / total_weight
-
-    # compute effective epsilon
-    progress = min(self.global_step_counter_ / max(self.total_batches, 1), 1.0)
-    eps = config.eps_max - (config.eps_max - config.eps_min) * progress
-
-    # compute r_w and w_hat
-    r_w = np.array(list(evals.values())) * weights[:, None]
-    r_w_hat = np.concatenate([r_w, 1 - r_w.sum(axis=0, keepdims=True)], axis=0)
-    w_hat = np.concatenate([weights * (1 - eps), [eps]])
-
-    # compute KL divergence
-    kl_div = np.sum(
-        r_w_hat * (np.log(r_w_hat + 1e-10) - np.log(w_hat[:, None] + 1e-10)), axis=0
-    )
-    # reward is negative KL divergence (we want to minimize divergence between r_w_hat and w_hat)
-    reward = -kl_div
-
-    return reward  # type: ignore
+    return -kl  # type: ignore[no-any-return]

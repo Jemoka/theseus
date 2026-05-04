@@ -10,9 +10,7 @@ Heads-up: this *will* be slow on CPU (≈500M params, fp32, autoregressive
 decode). Keep step counts tiny.
 """
 
-from typing import Any, Dict, List, Tuple
-
-import numpy as np
+from typing import Any, List, Tuple
 
 from theseus.quick import quick
 from theseus.registry import evaluation, job
@@ -63,10 +61,11 @@ class HighNumberQwenEval(RolloutEvaluation):
 
 @job("grpo/smoke/high_number_qwen")
 class HighNumberGRPOQwen(BackbonedGRPOTrainer):
-    """Backboned GRPO trainer: Qwen 2.5 0.5B + the digits-reward smoke task."""
+    """Backboned GRPO trainer: Qwen 2.5 0.5B + the digits-reward smoke task.
 
-    def reward(self, evals: Dict[str, np.ndarray]) -> np.ndarray:
-        return np.asarray(evals["high_number_qwen"], dtype=np.float32)
+    With a single RL component, the default ``reward_postprocess`` (identity)
+    already gives the per-rollout score from `high_number_qwen`'s scoring.
+    """
 
 
 if __name__ == "__main__":

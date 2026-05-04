@@ -200,6 +200,9 @@ class Plotter:
             raise err
         self.queue.put((plot_fn, step))
 
+    def log(self, values: Dict[str, Any], step: int) -> None:
+        self.plot(lambda: values, step)
+
     def submit(self, intermediates: Any, step: int) -> None:
         """Submit model intermediates for plotting (legacy API).
 
@@ -240,6 +243,12 @@ class Plotter:
             # Save to disk and log to wandb independently so a failure in
             # one path (e.g. a flaky wandb.log) doesn't skip the other.
             for name, fig in figures.items():
+                if isinstance(fig, (int, float)):
+                    try:
+                        wandb.log({name: fig}, step=step)
+                    except Exception as e:
+                        self.error = e
+                    continue
                 if self.save and self.save_dir:
                     try:
                         safe_name = re.sub(r"[^\w\-.]", "_", name)
