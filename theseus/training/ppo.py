@@ -719,8 +719,9 @@ class PPOTrainer(BaseTrainer[BaseTrainerConfig, M], Generic[M]):
         # Unlike the raw log-ratio (k1), k3 is always non-negative, so a
         # positive β actually penalizes divergence (k1 can flip sign on
         # sampled tokens and accidentally *reward* moving away from ref).
-        log_ratio_ref = (new_logp - ref_logp) * action_mask_f
+        log_ratio_ref = (ref_logp - new_logp) * action_mask_f  # log(π_ref/π_new)
         kl_per_tok = (jnp.exp(log_ratio_ref) - 1.0 - log_ratio_ref) * action_mask_f
+
         kl = kl_per_tok.sum() / n_actions
 
         loss = surrogate_loss + cstate.beta * kl
