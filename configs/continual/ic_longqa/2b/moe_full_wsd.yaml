@@ -7,9 +7,9 @@ architecture:
   dropout: 0.0
   bias: true
   block_size: 32768
-  n_layers: 14
-  n_embd: 2560
-  n_head: 20
+  n_layers: 26
+  n_embd: 1024
+  n_head: 8
   layer_norm_eps: 1.0e-05
   intermediate_size: -1
   moe:

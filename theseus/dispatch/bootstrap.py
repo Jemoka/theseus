@@ -536,7 +536,7 @@ def main():
                 # overrides (e.g. wandb=False from an autobatch probe).
                 # Merge the current launch config before instantiating the
                 # restored job so __init__ and restore() observe live values.
-                job, cfg = RestoreableJob.from_checkpoint(latest, spec, runtime_cfg=cfg)
+                job, cfg = RestoreableJob.from_checkpoint(latest, spec, runtime_cfg=cfg, resume=True)
 
                 with configuration(cfg):
                     job()

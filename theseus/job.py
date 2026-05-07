@@ -329,6 +329,7 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         rel_path: str | Path,
         spec: ExecutionSpec,
         runtime_cfg: Any | None = None,
+        resume: bool = False,
     ) -> Tuple[Self, Any]:
         """Load and instantiate a checkpointed job from ``rel_path`` under checkpoints_dir.
 
@@ -337,6 +338,13 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
             spec: execution spec to use for locating checkpoint
             runtime_cfg: config values from the current launch to overlay onto
                 the checkpoint config before job initialization
+            resume: If ``True``, this is an idempotent resume of the *same*
+                job (e.g. after preemption).  All saved spec fields —
+                including the wandb run ``id`` — are restored from the
+                checkpoint's ``job.json`` so that logging sessions can be
+                rejoined.  When ``False`` (the default), the caller's spec
+                identity is kept intact (useful for ``--restore`` which
+                loads weights from a different job's checkpoint).
 
         Returns:
             Tuple[Self, Any]: restored job instance and configuration
@@ -345,17 +353,18 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         path = CheckpointedJob._get_checkpoints_dir(spec) / Path(rel_path)
         logger.debug("CHECKPOINT | restoring checkpointed job at {}", path)
 
-        # Load job spec from checkpoint. When runtime_cfg is provided this is
-        # a new job restoring from someone else's checkpoint (--restore), so we
-        # keep the caller's spec identity (name, project, group).  Without
-        # runtime_cfg this is an idempotent resume of the *same* job, so we
-        # restore the original spec fields.
-        if runtime_cfg is None:
-            with open(path / "job.json", "r") as df:
-                job_spec_data = json.load(df)
-            for k, v in job_spec_data.items():
-                setattr(spec, k, v)
-            logger.debug("CHECKPOINT | restored job spec from checkpoint")
+        # When resuming the same job we restore all spec fields (name,
+        # project, group, id) so that wandb can rejoin the original run.
+        # When restoring from another job's checkpoint (resume=False) we
+        # keep the caller's spec identity untouched.
+        if resume or runtime_cfg is None:
+            job_json = path / "job.json"
+            if job_json.exists():
+                with open(job_json, "r") as df:
+                    job_spec_data = json.load(df)
+                for k, v in job_spec_data.items():
+                    setattr(spec, k, v)
+                logger.debug("CHECKPOINT | restored job spec from checkpoint")
         new_spec_obj = spec
 
         # load config now from config.yaml
@@ -399,12 +408,14 @@ class RestoreableJob(CheckpointedJob[C], Generic[C]):
         suffix: str | Path,
         spec: ExecutionSpec,
         runtime_cfg: Any | None = None,
+        resume: bool = False,
     ) -> Tuple[Self, Any]:
         """Load from this job's own checkpoint. Wrapper for backwards compat."""
         return cls.from_checkpoint_path(
             CheckpointedJob._get_checkpoint_rel_path(spec, suffix),
             spec,
             runtime_cfg=runtime_cfg,
+            resume=resume,
         )
 
     @classmethod

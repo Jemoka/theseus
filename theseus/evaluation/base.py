@@ -1214,6 +1214,7 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
         suffix: str | Path,
         spec: ExecutionSpec,
         runtime_cfg: Any | None = None,
+        resume: bool = False,
     ) -> Tuple["Evaluator[M]", Any]:
         """Create Evaluator from checkpoint.
 
@@ -1221,11 +1222,15 @@ class Evaluator(InferenceJob[EvaluatorConfig, M], Generic[M]):
             suffix: Checkpoint suffix
             spec: ExecutionSpec with topology
             runtime_cfg: Optional runtime config overlay
+            resume: If ``True``, restore spec identity (including wandb id)
+                from the checkpoint for idempotent job resumption.
 
         Returns:
             (evaluator, config) tuple
         """
-        evaluator, cfg = super().from_checkpoint(suffix, spec, runtime_cfg=runtime_cfg)
+        evaluator, cfg = super().from_checkpoint(
+            suffix, spec, runtime_cfg=runtime_cfg, resume=resume
+        )
         with configuration(cfg):
             evaluator.encoding = get_tokenizer()
             evaluator.length = configure(EvaluatorConfig).length

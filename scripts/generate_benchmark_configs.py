@@ -103,26 +103,32 @@ ARCH_SPECS = {
         },
     },
     "moe": {
+        # MoE dimensions are chosen so that *total* params (all experts)
+        # approximate the dense-equivalent budget and *active* params
+        # (top-2 of 8 experts + shared attention) are ~1/3 of total.
+        #   700m ≈ 720M total / 266M active
+        #   1b   ≈ 1.04B total / 360M active
+        #   2b   ≈ 1.96B total / 649M active
         "700m": {
-            "n_layers": 10,
-            "n_embd": 1664,
-            "n_head": 13,
+            "n_layers": 16,
+            "n_embd": 768,
+            "n_head": 6,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
         },
         "1b": {
-            "n_layers": 10,
-            "n_embd": 2048,
-            "n_head": 16,
+            "n_layers": 24,
+            "n_embd": 768,
+            "n_head": 6,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
         },
         "2b": {
-            "n_layers": 14,
-            "n_embd": 2560,
-            "n_head": 20,
+            "n_layers": 26,
+            "n_embd": 1024,
+            "n_head": 8,
             "layer_norm_eps": 1.0e-05,
             "intermediate_size": -1,
             "moe": dict(_MOE_CFG),
