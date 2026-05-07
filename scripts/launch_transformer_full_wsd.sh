@@ -24,7 +24,7 @@ if [[ "${1:-}" == "--dry" ]]; then
 fi
 
 COMMON="--cluster bonete --chip b200 -n 4 --n_shards 1 --cpu 32 --mem 256G -p continual"
-EXTRA="training.per_device_batch_size=8"
+EXTRA="training.per_device_batch_size=4"
 
 run_cmd() {
     echo "+ $*"
