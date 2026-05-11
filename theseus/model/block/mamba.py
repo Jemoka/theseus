@@ -145,26 +145,30 @@ class MambaBlock(Module):
         )
 
         # Short depthwise convolution on x
-        self.conv_weight = self.param(
+        self.conv_weight: jax.Array = self.param(
             "conv_weight",
-            nn.initializers.normal(stddev=0.02),
+            nn.with_partitioning(
+                nn.initializers.normal(stddev=0.02),
+                (None, Axes.N_SSM.value),
+            ),
             (self.d_conv, d_inner),
             self._param_dtype,
-        )
-        self.conv_bias = self.param(
+        )  # type: ignore
+        self.conv_bias: jax.Array = self.param(
             "conv_bias",
-            nn.initializers.zeros,
+            nn.with_partitioning(
+                nn.initializers.zeros,
+                (Axes.N_SSM.value,),
+            ),
             (d_inner,),
             self._param_dtype,
-        )
+        )  # type: ignore
 
         # Learnable log(A) for each head — initialized to log of small negative values
-        # A controls state decay rate
+        # A controls state decay rate; stored as log|A| so exp is always positive
         self.A_log = self.param(
             "A_log",
-            lambda key, shape: jnp.log(
-                0.5 + jnp.arange(shape[0], dtype=jnp.float32) * 0.5 / shape[0]
-            ),
+            lambda key, shape: jnp.log(jnp.arange(1, shape[0] + 1, dtype=jnp.float32)),
             (n_heads,),
         )
 
@@ -175,6 +179,17 @@ class MambaBlock(Module):
             (n_heads,),
             self._param_dtype,
         )
+
+        # D: direct skip connection from conv output to SSM output (one per channel)
+        self.D: jax.Array = self.param(
+            "D",
+            nn.with_partitioning(
+                nn.initializers.ones,
+                (Axes.N_SSM.value,),
+            ),
+            (d_inner,),
+            self._param_dtype,
+        )  # type: ignore
 
         # Output projection
         self.out_proj = nn.Dense(
@@ -281,10 +296,10 @@ class MambaBlock(Module):
         ssm_flat = ssm_in_heads.transpose(0, 3, 1, 2)  # (B, head_dim, T, n_heads)
         ssm_flat = ssm_flat.reshape(batch * head_dim, seq_len, n_heads)
 
-        A_tiled = jnp.tile(A_f32, (head_dim, 1, 1))  # (B*head_dim, T, H)
-        dt_tiled = jnp.tile(dt_f32, (head_dim, 1, 1))  # (B*head_dim, T, H)
-        B_tiled = jnp.tile(B_f32, (head_dim, 1, 1, 1))  # (B*head_dim, T, G, N)
-        C_tiled = jnp.tile(C_f32, (head_dim, 1, 1, 1))  # (B*head_dim, T, G, N)
+        A_tiled = jnp.repeat(A_f32, head_dim, axis=0)  # (B*head_dim, T, H)
+        dt_tiled = jnp.repeat(dt_f32, head_dim, axis=0)  # (B*head_dim, T, H)
+        B_tiled = jnp.repeat(B_f32, head_dim, axis=0)  # (B*head_dim, T, G, N)
+        C_tiled = jnp.repeat(C_f32, head_dim, axis=0)  # (B*head_dim, T, G, N)
 
         y_flat = _selective_scan(A_tiled, B_tiled, C_tiled, dt_tiled, ssm_flat)
         # y_flat: (B*head_dim, T, n_heads)
@@ -293,6 +308,9 @@ class MambaBlock(Module):
         y = y.transpose(0, 2, 3, 1)  # (B, T, n_heads, head_dim)
         y = y.reshape(batch, seq_len, d_inner)  # (B, T, d_inner)
         y = y.astype(x.dtype)
+
+        # D skip connection: direct path from conv output to SSM output
+        y = y + self.D.astype(y.dtype) * ssm_in
 
         # Gate and output
         y = y * jax.nn.silu(gate)

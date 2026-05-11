@@ -4,9 +4,9 @@ A pure selective state space model following the Mamba-2 architecture
 (Dao & Gu, 2024).  No positional embeddings — position information
 is implicit in the SSM recurrent state.
 
-Inherits GPT's ``loss``, ``unembed``, and ``__call__`` (the
-embed → decode → unembed → loss pipeline is identical).  Only
-``setup``, ``embed``, and ``decode`` differ.
+Inherits GPT's ``loss`` and ``unembed``.  Overrides ``__call__`` to drop
+the block-size assertion (SSMs have no fixed context-length limit), and
+overrides ``setup``, ``embed``, and ``decode`` for SSM-specific structure.
 """
 
 import jax
@@ -27,8 +27,8 @@ class Mamba(GPT):
     """Mamba-2 language model — SSM-only, no attention.
 
     Overrides GPT's setup/embed/decode to use MambaBlock layers
-    and skip positional embeddings.  ``loss``, ``unembed``, and
-    ``__call__`` are inherited unchanged.
+    and skip positional embeddings.  ``loss`` and ``unembed`` are
+    inherited unchanged.
     """
 
     # Override defaults for SSM-typical depth
@@ -39,7 +39,6 @@ class Mamba(GPT):
         return [
             (Axes.VOCAB.value, None),
             (Axes.N_EMBD.value, None),
-            (Axes.N_EMBD_FF.value, Axis.SHARD),
             (Axes.N_SSM.value, Axis.SHARD),
         ]
 
@@ -62,7 +61,6 @@ class Mamba(GPT):
 
         self.drop = nn.Dropout(rate=self.dropout)
         self.blocks = [configure(MambaBlock) for _ in range(self.n_layers)]
-        # Use RMSNorm (not LayerNorm) — matches Mamba-2 convention
         self.ln_f = configure(RMSNorm)
 
     def embed(self, idx: jax.Array, deterministic: bool = False, **kwargs: Any) -> Any:
@@ -82,8 +80,19 @@ class Mamba(GPT):
             x = block(x, padding_mask=padding_mask, deterministic=deterministic)
         return x
 
-    def unembed(self, x: jax.Array) -> Any:
-        # Override to use RMSNorm (self.ln_f is RMSNorm, not LayerNorm)
-        x = self.ln_f(x)
-        logits = jnp.einsum("bth,vh->btv", x, self.wte.astype(self._activation_dtype))
-        return logits
+    def __call__(
+        self,
+        idx: jax.Array,
+        targets: Optional[jax.Array] = None,
+        padding_mask: Optional[jax.Array] = None,
+        deterministic: bool = False,
+        **kwargs: Any,
+    ) -> Tuple[jax.Array, Optional[jax.Array]]:
+        # SSMs have no fixed context-length limit — skip the block_size assertion.
+        x = self.embed(idx, deterministic, **kwargs)
+        x = self.decode(
+            x, padding_mask=padding_mask, deterministic=deterministic, **kwargs
+        )
+        logits = self.unembed(x)
+        loss = self.loss(logits, targets) if targets is not None else None
+        return logits, loss

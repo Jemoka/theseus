@@ -9,7 +9,6 @@ are new; ``embed`` and ``decode`` are minor overrides.
 """
 
 import jax
-import jax.numpy as jnp
 import flax.linen as nn
 
 from typing import Any, List, Optional, Tuple, Type
@@ -97,9 +96,3 @@ class Hybrid(GPT):
 
         # Use RMSNorm for final layer norm (consistent with Mamba layers)
         self.ln_f = configure(RMSNorm)
-
-    def unembed(self, x: jax.Array) -> Any:
-        # Override to use RMSNorm (self.ln_f is RMSNorm, not LayerNorm)
-        x = self.ln_f(x)
-        logits = jnp.einsum("bth,vh->btv", x, self.wte.astype(self._activation_dtype))
-        return logits
