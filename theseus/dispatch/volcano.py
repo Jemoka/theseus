@@ -277,6 +277,19 @@ def render_volcano_job(
     else:
         rendered = rendered.replace("  __LABELS__\n", "")
 
+    # Propagate submission labels onto the pod template so pod affinity
+    # (below) can match them across jobs from the same submitter.
+    if host_config.labels:
+        pod_meta_lines = ["metadata:", "  labels:"]
+        for k, v in host_config.labels.items():
+            pod_meta_lines.append(f'    {k}: "{v}"')
+        rendered = rendered.replace(
+            "__POD_METADATA__",
+            "\n        ".join(pod_meta_lines),
+        )
+    else:
+        rendered = rendered.replace("        __POD_METADATA__\n", "")
+
     # Priority class
     if host_config.priority_class:
         rendered = rendered.replace(
@@ -324,6 +337,31 @@ def render_volcano_job(
         )
     else:
         rendered = rendered.replace("          __TOLERATIONS__\n", "")
+
+    # Pod affinity: prefer co-locating pods sharing the submission labels
+    # onto the same node, so e.g. two 4-GPU jobs pack onto one 8-GPU node
+    # instead of scattering. "preferred" (not "required") because the
+    # first job has no sibling pod to match against — a hard rule would
+    # deadlock it.
+    if host_config.labels:
+        aff_lines = [
+            "affinity:",
+            "  podAffinity:",
+            "    preferredDuringSchedulingIgnoredDuringExecution:",
+            "      - weight: 100",
+            "        podAffinityTerm:",
+            "          labelSelector:",
+            "            matchLabels:",
+        ]
+        for k, v in host_config.labels.items():
+            aff_lines.append(f'              {k}: "{v}"')
+        aff_lines.append("          topologyKey: kubernetes.io/hostname")
+        rendered = rendered.replace(
+            "__AFFINITY__",
+            "\n          ".join(aff_lines),
+        )
+    else:
+        rendered = rendered.replace("          __AFFINITY__\n", "")
 
     # Resources
     resource_lines = []

@@ -19,6 +19,7 @@ spec:
         - event: TaskCompleted
           action: CompleteJob
       template:
+        __POD_METADATA__
         spec:
           schedulerName: volcano
           __PRIORITY_CLASS__
@@ -26,6 +27,7 @@ spec:
           restartPolicy: Never
           __NODE_SELECTOR__
           __TOLERATIONS__
+          __AFFINITY__
           containers:
             - name: worker
               image: __IMAGE__
