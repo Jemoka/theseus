@@ -1,9 +1,11 @@
 """Mamba-2 selective state space block.
 
-Implements the Mamba-2 architecture (Dao & Gu, 2024) using the
-Structured State Space Duality (SSD) formulation.  The selective
-scan is computed via ``jax.lax.associative_scan`` for efficient
-parallel execution on accelerators.
+Implements the Mamba-2 architecture (Dao & Gu, 2024) via its **State Space
+Duality (SSD)** chunked-matmul algorithm: the recurrence is split along T
+into chunks of size ``Q``, with attention-style dense matmuls inside each
+chunk and a much shorter associative scan over chunk-boundary states.  This
+keeps activation memory at ``O(B·T·H·N/Q + B·n_chunks·H·N·P)`` and turns
+the inner loop into tensor-core-friendly GEMMs.
 """
 
 import math
@@ -19,67 +21,183 @@ from theseus.model.layers.rmsnorm import RMSNorm
 from theseus.model.module import Module
 
 
-def _selective_scan(
-    A: jax.Array,
-    B: jax.Array,
-    C: jax.Array,
-    dt: jax.Array,
-    x: jax.Array,
+def _ssd_scan(
+    A: jax.Array,        # (B, T, H) — log of diagonal state decay (negative)
+    B: jax.Array,        # (B, T, G, N) — SSM input projection
+    C: jax.Array,        # (B, T, G, N) — SSM output projection
+    dt: jax.Array,       # (B, T, H) — input-dependent time step (post softplus)
+    x: jax.Array,        # (B, T, H, P) — gated input, P = head_dim channels
+    *,
+    chunk_size: int = 64,
 ) -> jax.Array:
-    """Parallel selective scan via associative scan.
+    """Mamba-2 SSD (State Space Duality) chunked-matmul selective scan.
+
+    Implements the recurrence
+        state[t] = exp(A[t] * dt[t]) * state[t-1] + B[t] * dt[t] * x[t]
+        y[t]     = C[t] · state[t]
+    where ``state`` lives in R^N per head and ``x`` has ``P = head_dim``
+    independent channels per head that share ``A``, ``B``, ``C``, ``dt``.
+
+    The recurrence is computed in two halves:
+
+    * **Intra-chunk** — for each chunk of length ``Q``, build the (Q, Q)
+      lower-triangular decay matrix ``L[i, j] = prod_{k=j+1..i} a[k]`` and
+      compute ``y_intra = einsum(L · ⟨C, B⟩ · dt, x)``.  Pure GEMMs.
+    * **Inter-chunk** — accumulate each chunk's input-driven state
+      contribution and decay across chunk boundaries via a length-``T/Q``
+      ``jax.lax.associative_scan``, then add the carryover to ``y`` inside
+      each chunk via another einsum with ``C``.
 
     Args:
-        A: (b, T, H)         — log of diagonal state decay
-        B: (b, T, G, N)      — input-to-state projection (SSM B matrix)
-        C: (b, T, G, N)      — state-to-output projection (SSM C matrix)
-        dt: (b, T, H)        — input-dependent time step (after softplus)
-        x: (b, T, H)         — gated input
+        A:  ``(B, T, H)`` log decay per head; expected negative.
+        B:  ``(B, T, G, N)`` input projection (``G`` groups share across
+            ``n_heads // G`` heads each).
+        C:  ``(B, T, G, N)`` output projection.
+        dt: ``(B, T, H)`` per-head time step (must be ≥ 0).
+        x:  ``(B, T, H, P)`` gated input channels.
+
+    Keyword Args:
+        chunk_size: ``Q``. ``T`` is zero-padded to a multiple of this if
+            necessary; padded positions contribute nothing because ``dt``
+            and ``x`` are zero there.  Standard choices are 64 or 128.
 
     Returns:
-        y: (b, T, H)         — scan output
-
-    Where b = batch, H = n_heads, N = d_state, G = n_groups.
-    Each head belongs to one group: head i -> group (i * G // H).
+        ``y`` of shape ``(B, T, H, P)``.
     """
-    batch, seq_len, n_heads = x.shape
+    batch, seq_len, n_heads, P = x.shape
     n_groups = B.shape[2]
-    heads_per_group = n_heads // n_groups
+    N = B.shape[3]
+    assert n_heads % n_groups == 0, (
+        f"n_heads ({n_heads}) must be divisible by n_groups ({n_groups})"
+    )
+    Hg = n_heads // n_groups  # heads per group
+    G = n_groups
+    Q = chunk_size
 
-    # Discretize: A_bar = exp(A * dt), B_bar = B * dt * x
-    # A is log-space, so A_bar = exp(A * dt)
-    A_bar = jnp.exp(A * dt)  # (B, T, H)
+    # Pad T up to a multiple of Q.  dt and x are zero-padded so padded
+    # positions contribute nothing to either the within-chunk matmul or the
+    # chunk-final state (the trailing outputs are sliced off at the end).
+    pad_len = (-seq_len) % Q
+    if pad_len:
+        A = jnp.pad(A, ((0, 0), (0, pad_len), (0, 0)))
+        B = jnp.pad(B, ((0, 0), (0, pad_len), (0, 0), (0, 0)))
+        C = jnp.pad(C, ((0, 0), (0, pad_len), (0, 0), (0, 0)))
+        dt = jnp.pad(dt, ((0, 0), (0, pad_len), (0, 0)))
+        x = jnp.pad(x, ((0, 0), (0, pad_len), (0, 0), (0, 0)))
+    T_pad = seq_len + pad_len
+    n_chunks = T_pad // Q
 
-    # Expand B to per-head: (B, T, G, N) -> (B, T, H, N)
-    B_expanded = jnp.repeat(B, heads_per_group, axis=2)  # (B, T, H, N)
-    C_expanded = jnp.repeat(C, heads_per_group, axis=2)  # (B, T, H, N)
+    A_c = A.reshape(batch, n_chunks, Q, n_heads)
+    B_c = B.reshape(batch, n_chunks, Q, G, N)
+    C_c = C.reshape(batch, n_chunks, Q, G, N)
+    dt_c = dt.reshape(batch, n_chunks, Q, n_heads)
+    x_c = x.reshape(batch, n_chunks, Q, n_heads, P)
 
-    # B_bar * x: (B, T, H, N) * (B, T, H, 1) -> (B, T, H, N)
-    Bu = B_expanded * (dt[..., None] * x[..., None])  # (B, T, H, N)
+    # Cumulative log decay within each chunk (inclusive).
+    log_a = A_c * dt_c                          # (B, c, Q, H)
+    cum_log_a = jnp.cumsum(log_a, axis=2)       # (B, c, Q, H), sum_{k=0..i}
+    chunk_log_decay = cum_log_a[:, :, -1, :]    # (B, c, H), full-chunk decay
 
-    # Associative scan operator: each element is (a, b) where
-    #   a = A_bar (decay), b = Bu (input contribution)
-    # Combine: (a1, b1) * (a2, b2) = (a1*a2, a2*b1 + b2)
-    def _binary_op(
+    # Causal decay matrix
+    #   L[c, i, j, h] = exp(cum_log_a[c, i, h] - cum_log_a[c, j, h])  for j ≤ i
+    #                = 0                                              otherwise
+    # We mask the upper triangle in log-space before exp so we never compute
+    # exp of a large positive number (which would overflow in float32 for
+    # long chunks).
+    log_diff = cum_log_a[:, :, :, None, :] - cum_log_a[:, :, None, :, :]
+    causal = jnp.tril(jnp.ones((Q, Q), dtype=jnp.bool_))[None, None, :, :, None]
+    L = jnp.exp(jnp.where(causal, log_diff, -jnp.inf))  # (B, c, Q, Q, H)
+
+    # ---- Intra-chunk ---------------------------------------------------
+    # CB[c, i, j, g] = ⟨C[c, i, g, :], B[c, j, g, :]⟩
+    CB = jnp.einsum("bcign,bcjgn->bcijg", C_c, B_c)  # (B, c, Q, Q, G)
+
+    # Reshape the head axis as (G, Hg) so heads inherit their group's B/C.
+    L_rs = L.reshape(batch, n_chunks, Q, Q, G, Hg)
+    dt_rs = dt_c.reshape(batch, n_chunks, Q, G, Hg)
+    x_rs = x_c.reshape(batch, n_chunks, Q, G, Hg, P)
+
+    # y_intra[c, i, g, h, p] = sum_j L[c, i, j, g, h] · CB[c, i, j, g]
+    #                                · dt[c, j, g, h] · x[c, j, g, h, p]
+    y_intra = jnp.einsum(
+        "bcijGH,bcijG,bcjGH,bcjGHp->bciGHp",
+        L_rs, CB, dt_rs, x_rs,
+    )
+
+    # ---- Per-chunk state contribution ---------------------------------
+    # decay_to_end[c, j, h] = prod_{k=j+1..Q-1} a[c, k, h]
+    #                      = exp(chunk_log_decay[c, h] - cum_log_a[c, j, h])
+    decay_to_end = jnp.exp(chunk_log_decay[:, :, None, :] - cum_log_a)
+    decay_to_end_rs = decay_to_end.reshape(batch, n_chunks, Q, G, Hg)
+
+    # state_local[c, g, h, n, p]
+    #   = sum_j decay_to_end[c, j, g, h] · dt[c, j, g, h]
+    #           · B[c, j, g, n] · x[c, j, g, h, p]
+    state_local = jnp.einsum(
+        "bcjGH,bcjGH,bcjGn,bcjGHp->bcGHnp",
+        decay_to_end_rs, dt_rs, B_c, x_rs,
+    )
+
+    # ---- Inter-chunk associative scan over chunk states ---------------
+    # Linear recurrence over chunks:
+    #   state[c] = chunk_decay[c] * state[c-1] + state_local[c],  state[-1] = 0.
+    chunk_decay = jnp.exp(chunk_log_decay).reshape(batch, n_chunks, G, Hg)
+
+    def scan_op(
         left: Tuple[jax.Array, jax.Array],
         right: Tuple[jax.Array, jax.Array],
     ) -> Tuple[jax.Array, jax.Array]:
-        a_l, b_l = left
-        a_r, b_r = right
-        return (a_l * a_r, a_r[..., None] * b_l + b_r)
+        d_l, s_l = left
+        d_r, s_r = right
+        # combine(left, right): "left happens first, right after".
+        return (d_l * d_r, d_r[..., None, None] * s_l + s_r)
 
-    # A_bar needs shape (B, T, H) for decay, Bu is (B, T, H, N)
-    # We need A_bar broadcast: (B, T, H) for the product, (B, T, H, 1) for b update
-    decays, states = jax.lax.associative_scan(
-        _binary_op,
-        (A_bar, Bu),
-        axis=1,  # scan along sequence dimension
+    _, state_at_end = jax.lax.associative_scan(
+        scan_op, (chunk_decay, state_local), axis=1
+    )  # state_at_end[c] is the state after processing chunk c.
+
+    # state_at_start[c] = state_at_end[c-1]; state_at_start[0] = 0.
+    state_at_start = jnp.concatenate(
+        [jnp.zeros_like(state_at_end[:, :1]), state_at_end[:, :-1]],
+        axis=1,
     )
-    # states: (B, T, H, N) — hidden state at each timestep
 
-    # Output: y = C * state, summed over state dim
-    y = jnp.sum(states * C_expanded, axis=-1)  # (B, T, H)
+    # ---- Inter-chunk contribution to y --------------------------------
+    # decay_from_start[c, i, h] = prod_{k=0..i} a[c, k, h] = exp(cum_log_a)
+    decay_from_start = jnp.exp(cum_log_a).reshape(batch, n_chunks, Q, G, Hg)
 
+    # y_inter[c, i, g, h, p] = decay_from_start[c, i, g, h]
+    #                          · sum_n C[c, i, g, n] · state_at_start[c, g, h, n, p]
+    y_inter = jnp.einsum(
+        "bciGH,bciGn,bcGHnp->bciGHp",
+        decay_from_start, C_c, state_at_start,
+    )
+
+    # ---- Combine, reshape, slice off padding --------------------------
+    y = (y_intra + y_inter).reshape(batch, T_pad, n_heads, P)
+    if pad_len:
+        y = y[:, :seq_len]
     return y
+
+
+def _selective_scan(
+    A: jax.Array,        # (B, T, H)
+    B: jax.Array,        # (B, T, G, N)
+    C: jax.Array,        # (B, T, G, N)
+    dt: jax.Array,       # (B, T, H)
+    x: jax.Array,        # (B, T, H)
+    *,
+    chunk_size: int = 64,
+) -> jax.Array:
+    """Single-channel wrapper around :func:`_ssd_scan`.
+
+    Accepts scalar-per-head ``x`` of shape ``(B, T, H)`` (the historic
+    Mamba-1 / Mamba-Triton signature), adds a unit channel dim, runs the
+    SSD scan, and squeezes it off.  Kept as a stable public surface for
+    tests and any external callers; new code should call ``_ssd_scan``
+    directly with multi-channel ``x``.
+    """
+    return _ssd_scan(A, B, C, dt, x[..., None], chunk_size=chunk_size)[..., 0]
 
 
 class MambaBlock(Module):
@@ -277,36 +395,21 @@ class MambaBlock(Module):
         A = -jnp.exp(self.A_log.astype(jnp.float32))  # (n_heads,)
         A = A[None, None, :]  # (1, 1, n_heads)
 
-        # Reshape ssm_in to per-head: (B, T, d_inner) -> (B, T, n_heads)
-        # We sum over head_dim to reduce to one scalar per head
+        # Per-head channels: (B, T, d_inner) -> (B, T, n_heads, head_dim).
+        # SSD treats head_dim as independent channels that share A/B/C/dt
+        # within a head — no batch-axis tiling required.
         head_dim = d_inner // n_heads
         ssm_in_heads = ssm_in.reshape(batch, seq_len, n_heads, head_dim)
 
-        # Run selective scan in float32 for stability
+        # Run the SSD selective scan in float32 for stability.
         A_f32 = jnp.broadcast_to(A, (batch, seq_len, n_heads)).astype(jnp.float32)
         dt_f32 = dt.astype(jnp.float32)
         B_f32 = B.astype(jnp.float32)
         C_f32 = C.astype(jnp.float32)
+        x_f32 = ssm_in_heads.astype(jnp.float32)
 
-        # The selective scan operates on (batch, T, n_heads) — one scalar per
-        # head.  But our input has head_dim values per head.  We tile the batch
-        # dimension by head_dim so each head_dim slice gets its own independent
-        # scan, then reshape back.  This avoids vmap (which would prevent XLA
-        # from fusing the scans) and keeps a single associative_scan call.
-        ssm_flat = ssm_in_heads.transpose(0, 3, 1, 2)  # (B, head_dim, T, n_heads)
-        ssm_flat = ssm_flat.reshape(batch * head_dim, seq_len, n_heads)
-
-        A_tiled = jnp.repeat(A_f32, head_dim, axis=0)  # (B*head_dim, T, H)
-        dt_tiled = jnp.repeat(dt_f32, head_dim, axis=0)  # (B*head_dim, T, H)
-        B_tiled = jnp.repeat(B_f32, head_dim, axis=0)  # (B*head_dim, T, G, N)
-        C_tiled = jnp.repeat(C_f32, head_dim, axis=0)  # (B*head_dim, T, G, N)
-
-        y_flat = _selective_scan(A_tiled, B_tiled, C_tiled, dt_tiled, ssm_flat)
-        # y_flat: (B*head_dim, T, n_heads)
-
-        y = y_flat.reshape(batch, head_dim, seq_len, n_heads)
-        y = y.transpose(0, 2, 3, 1)  # (B, T, n_heads, head_dim)
-        y = y.reshape(batch, seq_len, d_inner)  # (B, T, d_inner)
+        y = _ssd_scan(A_f32, B_f32, C_f32, dt_f32, x_f32)  # (B, T, H, head_dim)
+        y = y.reshape(batch, seq_len, d_inner)
         y = y.astype(x.dtype)
 
         # D skip connection: direct path from conv output to SSM output

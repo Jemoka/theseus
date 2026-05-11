@@ -60,7 +60,16 @@ class Mamba(GPT):
         )  # type: ignore
 
         self.drop = nn.Dropout(rate=self.dropout)
-        self.blocks = [configure(MambaBlock) for _ in range(self.n_layers)]
+        # nn.remat wraps each block with gradient checkpointing: the scan inside
+        # MambaBlock materializes (B*head_dim, T, n_heads, d_state) float32 state
+        # tensors (~8 GB per layer at this config), and keeping all 32 layers'
+        # intermediates resident for backward would exceed the 95 GB H100.
+        # static_argnums=(3,) keeps `deterministic` a Python bool — Flax's remat
+        # offsets argnums by 1 to skip `self`, so (3,) maps to position 3 of
+        # (self, x, padding_mask, deterministic). Without this, the dropout
+        # branch in MambaBlock raises TracerBoolConversionError.
+        RematMambaBlock = nn.remat(MambaBlock, static_argnums=(3,))
+        self.blocks = [configure(RematMambaBlock) for _ in range(self.n_layers)]
         self.ln_f = configure(RMSNorm)
 
     def embed(self, idx: jax.Array, deterministic: bool = False, **kwargs: Any) -> Any:
@@ -77,7 +86,10 @@ class Mamba(GPT):
         **kwargs: Any,
     ) -> Any:
         for block in self.blocks:
-            x = block(x, padding_mask=padding_mask, deterministic=deterministic)
+            # Positional call so `deterministic` lines up with nn.remat's
+            # static_argnums and stays a Python bool through tracing (Flax
+            # remat only honors static_argnums for positional args, not kwargs).
+            x = block(x, padding_mask, deterministic)
         return x
 
     def __call__(
