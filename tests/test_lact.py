@@ -140,7 +140,11 @@ class TestFastWeightPrimitives:
         assert l1 < l0, f"GD did not decrease inner loss: {l0:.4f} → {l1:.4f}"
 
     def test_muon_newton_schulz_singular_values_near_one(self):
-        """Muon should normalize all singular values toward 1."""
+        """Muon's quintic with (a,b,c)=(3.4445,-4.7750,2.0315) is designed to
+        converge fast to a steady-state band of roughly [0.68, 1.13] — not to
+        exactly 1.  Check that band, plus a much stronger property: the largest
+        singular value of M was 5× the input's Frobenius norm and the smallest
+        was tiny, yet the output's spread shrinks to ≤ 0.5."""
         from theseus.model.layers.lact import muon_newton_schulz
 
         key = jax.random.PRNGKey(7)
@@ -149,9 +153,13 @@ class TestFastWeightPrimitives:
             M = jax.random.normal(key, shape) * 5.0
             X = muon_newton_schulz(M, n_iters=5)
             s = np.asarray(jnp.linalg.svd(X, compute_uv=False))
-            # All singular values should be within ~0.1 of 1.0.
-            assert np.all(np.abs(s - 1.0) < 0.15), (
-                f"shape={shape}: singular values {s} not close to 1"
+            # Steady-state band of the Muon quintic.
+            assert np.all(np.abs(s - 1.0) < 0.4), (
+                f"shape={shape}: singular values {s} not in Muon band"
+            )
+            # Spread (max - min) is the meaningful "near orthogonal" check.
+            assert s.max() - s.min() < 0.5, (
+                f"shape={shape}: spread {s.max()-s.min():.3f} too wide"
             )
 
     def test_chunked_b_eq_T_matches_single_step(self):
@@ -287,19 +295,20 @@ class TestLaCTBlock:
             block = configure(LaCTBlock)
             key = jax.random.PRNGKey(0)
             x = jax.random.normal(key, (2, 16, 64))
-            params = block.init(jax.random.PRNGKey(1), x)
+            # init returns all collections (params + cache from SWA);
+            # backward only over "params" — cache has int32 vars grad rejects.
+            params = block.init(jax.random.PRNGKey(1), x)["params"]
 
             def loss_fn(p):
-                return block.apply(p, x, deterministic=True).mean()
+                return block.apply({"params": p}, x, deterministic=True).mean()
 
             g = jax.grad(loss_fn)(params)
             leaves = jax.tree_util.tree_leaves(g)
             assert all(jnp.all(jnp.isfinite(l)) for l in leaves)
 
             # Slow fast-weight params must have non-zero gradient.
-            inner_params = g["params"]
             for name in ("W1_0", "W2_0", "W3_0"):
-                grad_leaf = inner_params[name]
+                grad_leaf = g[name]
                 # Unwrap if Flax partitions wraps the gradient.
                 if hasattr(grad_leaf, "value"):
                     grad_leaf = grad_leaf.value
@@ -308,7 +317,7 @@ class TestLaCTBlock:
                     "non-differentiable"
                 )
 
-            eta_grad = inner_params["eta_head"]["kernel"]
+            eta_grad = g["eta_head"]["kernel"]
             if hasattr(eta_grad, "value"):
                 eta_grad = eta_grad.value
             assert jnp.any(jnp.abs(eta_grad) > 1e-8), (
@@ -362,11 +371,11 @@ class TestLaCTModel:
             key = jax.random.PRNGKey(0)
             idx = jnp.zeros((2, 16), dtype=jnp.int32)
             targets = jnp.ones((2, 16), dtype=jnp.int32)
-            params = model.init(key, idx)
+            params = model.init(key, idx)["params"]
 
             def loss_fn(p):
                 _, loss = model.apply(
-                    p, idx, targets=targets, deterministic=True
+                    {"params": p}, idx, targets=targets, deterministic=True
                 )
                 return loss
 
@@ -395,13 +404,13 @@ class TestLaCTModel:
             toks = jax.random.randint(data_key, (B, T + 1), 0, vocab)
             idx, targets = toks[:, :-1], toks[:, 1:]
 
-            params = model.init(init_key, idx)
+            params = model.init(init_key, idx)["params"]
             tx = optax.adam(1e-3)
             opt_state = tx.init(params)
 
             def loss_fn(p):
                 _, loss = model.apply(
-                    p, idx, targets=targets, deterministic=True
+                    {"params": p}, idx, targets=targets, deterministic=True
                 )
                 return loss
 

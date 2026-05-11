@@ -170,6 +170,7 @@ class LaCTBlock(Module):
         )
         return batch_broadcast(W_single, batch_size)
 
+    @nn.compact
     def _ttt(self, x: jax.Array, padding_mask: Optional[jax.Array]) -> jax.Array:
         B, T, _ = x.shape
         Q = self.q_proj(x)
