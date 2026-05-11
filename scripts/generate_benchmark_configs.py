@@ -134,6 +134,73 @@ ARCH_SPECS = {
             "moe": dict(_MOE_CFG),
         },
     },
+    "lact": {
+        # LaCT (arXiv:2505.23884): SWA + chunked-TTT fast-weight SwiGLU.
+        # Sized to match transformer parameter counts at the same n_embd /
+        # n_layers; fw_inter_size = n_embd keeps the per-block fast-weight
+        # state at ~3·d² (paper's smaller regime, ~20% of params).  Sliding
+        # window matches the chunk size so SWA fully covers a chunk's worth
+        # of context without bleeding into the next.  The TTT chunk_size
+        # is 2048 for normal-block-size splits and is overridden to the
+        # IC long-context block_size in build_config.
+        "700m": {
+            "n_layers": 16,
+            "n_embd": 1664,
+            "n_head": 13,
+            "n_kv_head": -1,
+            "rope_theta": 1e6,
+            "partial_rotary_factor": 1.0,
+            "attn_dropout": 0.0,
+            "attention_bias": True,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "fw_inter_size": 1664,
+            "ttt_chunk_size": 2048,
+            "ttt_optimizer": "muon",
+            "ttt_momentum": 0.9,
+            "ttt_apply_then_update": True,
+            "use_sliding_window": True,
+            "sliding_window": 512,
+        },
+        "1b": {
+            "n_layers": 16,
+            "n_embd": 2048,
+            "n_head": 16,
+            "n_kv_head": -1,
+            "rope_theta": 1e6,
+            "partial_rotary_factor": 1.0,
+            "attn_dropout": 0.0,
+            "attention_bias": True,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "fw_inter_size": 2048,
+            "ttt_chunk_size": 2048,
+            "ttt_optimizer": "muon",
+            "ttt_momentum": 0.9,
+            "ttt_apply_then_update": True,
+            "use_sliding_window": True,
+            "sliding_window": 512,
+        },
+        "2b": {
+            "n_layers": 24,
+            "n_embd": 2560,
+            "n_head": 20,
+            "n_kv_head": -1,
+            "rope_theta": 1e6,
+            "partial_rotary_factor": 1.0,
+            "attn_dropout": 0.0,
+            "attention_bias": True,
+            "layer_norm_eps": 1.0e-05,
+            "intermediate_size": -1,
+            "fw_inter_size": 2560,
+            "ttt_chunk_size": 2048,
+            "ttt_optimizer": "muon",
+            "ttt_momentum": 0.9,
+            "ttt_apply_then_update": True,
+            "use_sliding_window": True,
+            "sliding_window": 512,
+        },
+    },
 }
 
 # Chinchilla-optimal token budgets
@@ -152,6 +219,8 @@ JOB_MAP = {
     ("hybrid", "lora"): "continual/train/benchmark_hybrid_lora",
     ("moe", "full"): "continual/train/benchmark_moe",
     ("moe", "lora"): "continual/train/benchmark_moe_lora",
+    ("lact", "full"): "continual/train/benchmark_lact",
+    ("lact", "lora"): "continual/train/benchmark_lact_lora",
 }
 
 # ======================================================================
@@ -399,6 +468,16 @@ def build_config(
         architecture.pop("rope", None)
         architecture.pop("bias", None)
 
+    # LaCT: cap the TTT chunk size at block_size so the chunked scan never
+    # has to pad-then-discard more than one chunk's worth of zeros.  For the
+    # ic_lengthgen long-context split (block_size=32768) this stays at 2048
+    # → 16 chunks; for the normal 2048 splits it auto-collapses to a single
+    # chunk per sequence.
+    if arch == "lact":
+        architecture["ttt_chunk_size"] = min(
+            architecture.get("ttt_chunk_size", 2048), architecture["block_size"]
+        )
+
     # Optimization section
     optimization = {
         "lr": 0.0003,
@@ -484,7 +563,7 @@ DS_CG_SPLITS = [
 ]
 IC_SPLITS = ["ic_injected", "ic_longqa", "ic_lengthgen"]
 
-ARCHITECTURES = ["transformer", "mamba", "hybrid", "moe"]
+ARCHITECTURES = ["transformer", "mamba", "hybrid", "moe", "lact"]
 OPTIMS = ["full", "lora"]
 SCHEDULES_LIST = ["wsd", "cosine_rewarm", "wsd_reset"]
 SCALES = ["700m", "1b", "2b"]

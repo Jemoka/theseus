@@ -22,11 +22,11 @@ from theseus.model.module import Module
 
 
 def _ssd_scan(
-    A: jax.Array,        # (B, T, H) — log of diagonal state decay (negative)
-    B: jax.Array,        # (B, T, G, N) — SSM input projection
-    C: jax.Array,        # (B, T, G, N) — SSM output projection
-    dt: jax.Array,       # (B, T, H) — input-dependent time step (post softplus)
-    x: jax.Array,        # (B, T, H, P) — gated input, P = head_dim channels
+    A: jax.Array,  # (B, T, H) — log of diagonal state decay (negative)
+    B: jax.Array,  # (B, T, G, N) — SSM input projection
+    C: jax.Array,  # (B, T, G, N) — SSM output projection
+    dt: jax.Array,  # (B, T, H) — input-dependent time step (post softplus)
+    x: jax.Array,  # (B, T, H, P) — gated input, P = head_dim channels
     *,
     chunk_size: int = 64,
 ) -> jax.Array:
@@ -94,9 +94,9 @@ def _ssd_scan(
     x_c = x.reshape(batch, n_chunks, Q, n_heads, P)
 
     # Cumulative log decay within each chunk (inclusive).
-    log_a = A_c * dt_c                          # (B, c, Q, H)
-    cum_log_a = jnp.cumsum(log_a, axis=2)       # (B, c, Q, H), sum_{k=0..i}
-    chunk_log_decay = cum_log_a[:, :, -1, :]    # (B, c, H), full-chunk decay
+    log_a = A_c * dt_c  # (B, c, Q, H)
+    cum_log_a = jnp.cumsum(log_a, axis=2)  # (B, c, Q, H), sum_{k=0..i}
+    chunk_log_decay = cum_log_a[:, :, -1, :]  # (B, c, H), full-chunk decay
 
     # Causal decay matrix
     #   L[c, i, j, h] = exp(cum_log_a[c, i, h] - cum_log_a[c, j, h])  for j ≤ i
@@ -121,7 +121,10 @@ def _ssd_scan(
     #                                · dt[c, j, g, h] · x[c, j, g, h, p]
     y_intra = jnp.einsum(
         "bcijGH,bcijG,bcjGH,bcjGHp->bciGHp",
-        L_rs, CB, dt_rs, x_rs,
+        L_rs,
+        CB,
+        dt_rs,
+        x_rs,
     )
 
     # ---- Per-chunk state contribution ---------------------------------
@@ -135,7 +138,10 @@ def _ssd_scan(
     #           · B[c, j, g, n] · x[c, j, g, h, p]
     state_local = jnp.einsum(
         "bcjGH,bcjGH,bcjGn,bcjGHp->bcGHnp",
-        decay_to_end_rs, dt_rs, B_c, x_rs,
+        decay_to_end_rs,
+        dt_rs,
+        B_c,
+        x_rs,
     )
 
     # ---- Inter-chunk associative scan over chunk states ---------------
@@ -170,7 +176,9 @@ def _ssd_scan(
     #                          · sum_n C[c, i, g, n] · state_at_start[c, g, h, n, p]
     y_inter = jnp.einsum(
         "bciGH,bciGn,bcGHnp->bciGHp",
-        decay_from_start, C_c, state_at_start,
+        decay_from_start,
+        C_c,
+        state_at_start,
     )
 
     # ---- Combine, reshape, slice off padding --------------------------
@@ -181,11 +189,11 @@ def _ssd_scan(
 
 
 def _selective_scan(
-    A: jax.Array,        # (B, T, H)
-    B: jax.Array,        # (B, T, G, N)
-    C: jax.Array,        # (B, T, G, N)
-    dt: jax.Array,       # (B, T, H)
-    x: jax.Array,        # (B, T, H)
+    A: jax.Array,  # (B, T, H)
+    B: jax.Array,  # (B, T, G, N)
+    C: jax.Array,  # (B, T, G, N)
+    dt: jax.Array,  # (B, T, H)
+    x: jax.Array,  # (B, T, H)
     *,
     chunk_size: int = 64,
 ) -> jax.Array:

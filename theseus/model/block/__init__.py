@@ -1,5 +1,6 @@
 from .block import Block
 from .forking import ThoughtBlock, ForkingBlock
+from .lact import LaCTBlock
 from .mamba import MambaBlock
 from .qwen import QwenDecoderBlock
 from .llama import LlamaDecoderBlock
@@ -11,6 +12,7 @@ __all__ = [
     "Block",
     "ThoughtBlock",
     "ForkingBlock",
+    "LaCTBlock",
     "MambaBlock",
     "QwenDecoderBlock",
     "LlamaDecoderBlock",

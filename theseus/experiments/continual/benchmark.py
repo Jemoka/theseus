@@ -25,7 +25,9 @@ from loguru import logger
 from theseus.config import field, configure
 from theseus.base import PyTree, Topology, ExecutionSpec
 from theseus.registry import job
-from theseus.model.models import GPT, Mamba, Hybrid, MoEGPT
+from theseus.evaluation.base import Evaluator
+from theseus.inference.ttt import TTTInferenceJob
+from theseus.model.models import GPT, LaCT, Mamba, Hybrid, MoEGPT
 from theseus.model.module import Module
 from theseus.experiments.continual.abcd import (
     ABCDBaseTrainer,
@@ -324,6 +326,29 @@ class BenchmarkMoE(BenchmarkBaseTrainer[BenchmarkConfig, MoEGPT]):
     CONFIG = BenchmarkConfig
 
 
+class _TTTBenchmarkEvaluator(TTTInferenceJob, Evaluator[Any]):
+    """Continual-benchmark evaluator that mutates fast_weights during rollouts.
+
+    MRO: ``_TTTBenchmarkEvaluator → TTTInferenceJob → Evaluator → InferenceJob``,
+    so ``forward`` (which auto-threads the ``fast_weights`` collection) comes
+    from ``TTTInferenceJob`` and the rest of the evaluator surface comes from
+    ``Evaluator``.
+    """
+
+    pass
+
+
+@job("continual/train/benchmark_lact")
+class BenchmarkLaCT(BenchmarkBaseTrainer[BenchmarkConfig, LaCT]):
+    MODEL = LaCT
+    CONFIG = BenchmarkConfig
+
+    def evaluator(self) -> "_TTTBenchmarkEvaluator":
+        return type_cast(
+            "_TTTBenchmarkEvaluator", _TTTBenchmarkEvaluator.from_trainer(self)
+        )
+
+
 # ======================================================================
 # Registered Jobs: LoRA (3)
 # ======================================================================
@@ -351,3 +376,14 @@ class BenchmarkHybridLoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, Hybrid])
 class BenchmarkMoELoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, MoEGPT]):
     MODEL = MoEGPT
     CONFIG = BenchmarkLoRAConfig
+
+
+@job("continual/train/benchmark_lact_lora")
+class BenchmarkLaCTLoRA(BenchmarkLoRABaseTrainer[BenchmarkLoRAConfig, LaCT]):
+    MODEL = LaCT
+    CONFIG = BenchmarkLoRAConfig
+
+    def evaluator(self) -> "_TTTBenchmarkEvaluator":
+        return type_cast(
+            "_TTTBenchmarkEvaluator", _TTTBenchmarkEvaluator.from_trainer(self)
+        )

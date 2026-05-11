@@ -15,3 +15,4 @@ class Axes(Enum):
     N_SCRATCH = "n_scratch"
     BLOCK_SIZE = "block_size"
     N_SSM = "n_ssm"
+    N_FW = "n_fw"
