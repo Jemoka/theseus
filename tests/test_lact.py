@@ -85,6 +85,37 @@ def _lact_config_ctx(**overrides: Any):
 
 
 # ---------------------------------------------------------------------------
+# Mask causality — load-bearing for the full LaCT model
+# ---------------------------------------------------------------------------
+
+
+class TestSlidingMaskCausality:
+    """SWA in LaCTBlock relies on ``sliding_window_mask`` being causal.
+
+    A previous version had ``dist = idx[None,:] - idx[:,None]`` (key - query),
+    which produced a future-only mask: query at position i attended to keys
+    [i, i+window-1]. With targets shifted by 1, this lets the next-token
+    target leak directly into the prediction, collapsing training loss to
+    near zero on real data. The test below would have caught that the moment
+    it landed.
+    """
+
+    def test_sliding_window_mask_is_causal(self):
+        from theseus.model.masks import sliding_window_mask
+
+        T, W = 8, 3
+        m = np.asarray(sliding_window_mask(T, W)[0, 0])
+        # No upper-triangular True (no attention to future).
+        assert np.all(m == np.tril(m)), (
+            "sliding_window_mask leaks future tokens:\n" + str(m.astype(int))
+        )
+        # Each query sees at most ``W`` past keys (including itself).
+        assert np.all(m.sum(axis=1) <= W)
+        # Diagonal must be True (self-attention).
+        assert np.all(np.diag(m))
+
+
+# ---------------------------------------------------------------------------
 # Fast-weight primitives
 # ---------------------------------------------------------------------------
 

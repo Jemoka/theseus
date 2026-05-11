@@ -9,9 +9,16 @@ def causal_mask(seq_len: int) -> jnp.ndarray:
 
 
 def sliding_window_mask(seq_len: int, window: int) -> jnp.ndarray:
-    """Sliding window causal mask (1,1,T,T)."""
+    """Sliding window causal mask (1,1,T,T).
+
+    Query at row ``i`` attends to keys ``j`` with ``i - window < j <= i``
+    (i.e. the last ``window`` past tokens, inclusive of self). The previous
+    sign of ``dist`` flipped this into a future-only mask, which silently
+    leaked target tokens into LaCT's SWA sublayer and collapsed the loss
+    near zero.
+    """
     idx = jnp.arange(seq_len)
-    dist = idx[None, :] - idx[:, None]
+    dist = idx[:, None] - idx[None, :]  # query - key
     mask = (dist >= 0) & (dist < window)
     return mask[None, None, :, :]
 
