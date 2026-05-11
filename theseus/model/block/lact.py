@@ -77,12 +77,16 @@ class LaCTBlock(Module):
         self.ln_b = configure(LayerNorm)
 
         # TTT layer projections — single-head; Q/K/V live at model dim.
-        kernel_axes = (Axes.N_EMBD.value, Axes.N_EMBD.value)
+        # Output axis is None (replicated) so the kernel doesn't repeat the
+        # N_EMBD logical name on both dims (Flax forbids that), and so the
+        # contraction inside ``apply_fw`` with W1/W2/W3 (which use N_EMBD on
+        # their contracted axis) doesn't require an all-gather to align.
+        qkv_axes = (Axes.N_EMBD.value, None)
         self.q_proj = nn.Dense(
             d,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), kernel_axes
+                jax.nn.initializers.normal(stddev=0.02), qkv_axes
             ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
@@ -91,7 +95,7 @@ class LaCTBlock(Module):
             d,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), kernel_axes
+                jax.nn.initializers.normal(stddev=0.02), qkv_axes
             ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
@@ -100,7 +104,7 @@ class LaCTBlock(Module):
             d,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), kernel_axes
+                jax.nn.initializers.normal(stddev=0.02), qkv_axes
             ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
@@ -148,7 +152,8 @@ class LaCTBlock(Module):
             d,
             use_bias=self.bias,
             kernel_init=nn.with_partitioning(
-                jax.nn.initializers.normal(stddev=0.02), kernel_axes
+                jax.nn.initializers.normal(stddev=0.02),
+                (None, Axes.N_EMBD.value),
             ),
             param_dtype=self._param_dtype,
             dtype=self._activation_dtype,
