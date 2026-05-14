@@ -6,7 +6,7 @@ architecture:
   dtype:
     param: float32
     activation: bfloat16
-  block_size: 32768  # max so pg19_32k_ppl / ic_injected can run
+  block_size: 2048
 tokenizer:
   backend: huggingface
   name: Qwen/Qwen2.5-1.5B-Instruct
@@ -14,7 +14,7 @@ tokenizer:
     use_fast: true
     use_remote_code: false
 training:
-  per_device_batch_size: 1  # 32k context — keep small
+  per_device_batch_size: 20
 eval:
   length: -1
   evaluations:
@@ -39,17 +39,7 @@ eval:
     # cg_safety
     - mmlu
     - squad
-    # ic_injected
-    - pile_injected_ppl
-    # ic_longqa
-    - longhealth
-    # ic_lengthgen
-    - pg19_2k_ppl
-    - pg19_4k_ppl
-    - pg19_8k_ppl
-    - pg19_16k_ppl
-    - pg19_32k_ppl
 request:
-  chip: h200
-  min_chips: 4
-  n_shards: 4
+  chip: h100
+  min_chips: 2
+  n_shards: 1

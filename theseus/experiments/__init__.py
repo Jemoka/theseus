@@ -10,3 +10,5 @@ from .models.gpt_neox import PretrainGPTNeoX, FinetuneBackboneGPTNeoX  # noqa: F
 
 from .continual import *  # noqa: F401, F403
 from .mok import *  # noqa: F401, F403
+
+from .benchmark import *  # noqa: F401, F403

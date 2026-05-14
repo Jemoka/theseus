@@ -297,7 +297,7 @@ class RolloutEvaluation(Evaluation):
             encoded = [seq[:prompt_max] for seq in encoded]
             prompt_lengths = [len(seq) for seq in encoded]
 
-            rollout_inputs = [jnp.asarray(seq, dtype=jnp.int32) for seq in encoded]
+            rollout_inputs = encoded
         else:
             original_y = None
             prompt_lengths = None
