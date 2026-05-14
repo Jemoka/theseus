@@ -14,7 +14,7 @@ tokenizer:
     use_fast: true
     use_remote_code: false
 training:
-  per_device_batch_size: 16
+  per_device_batch_size: 20
 eval:
   length: -1
   evaluations:
