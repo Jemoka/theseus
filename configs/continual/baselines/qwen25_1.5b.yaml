@@ -1,0 +1,55 @@
+job: backbone/evaluate
+architecture:
+  backbone:
+    implementation: qwen
+    weights: Qwen/Qwen2.5-1.5B-Instruct
+  dtype:
+    param: float32
+    activation: bfloat16
+  block_size: 32768  # max so pg19_32k_ppl / ic_injected can run
+tokenizer:
+  backend: huggingface
+  name: Qwen/Qwen2.5-1.5B-Instruct
+  huggingface:
+    use_fast: true
+    use_remote_code: false
+training:
+  per_device_batch_size: 1  # 32k context — keep small
+eval:
+  length: -1
+  evaluations:
+    # ds_nlu
+    - mnli
+    - qqp
+    - sst2
+    - siqa
+    # ds_domain
+    - fineweb_ppl
+    - pes2o_ppl
+    - pile_ppl
+    - tinystories_ppl
+    # ds_multilingual
+    - ccaligned_fr_ppl
+    - ccaligned_de_ppl
+    - ccaligned_zh_ppl
+    # cg_grammar
+    - mtob
+    # cg_cfq
+    - cfq
+    # cg_safety
+    - mmlu
+    - squad
+    # ic_injected
+    - pile_injected_ppl
+    # ic_longqa
+    - longhealth
+    # ic_lengthgen
+    - pg19_2k_ppl
+    - pg19_4k_ppl
+    - pg19_8k_ppl
+    - pg19_16k_ppl
+    - pg19_32k_ppl
+request:
+  chip: h200
+  min_chips: 4
+  n_shards: 4
