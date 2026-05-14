@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, List
+from typing import Any, List, Union
 
 import flax
 import jax
@@ -11,7 +11,8 @@ from loguru import logger
 
 from theseus.base import ExecutionSpec, PyTree
 from theseus.config import configure, field
-from theseus.data.tokenizer import get_tokenizer
+from theseus.data.datasets import ChatTemplate, ChatTurn
+from theseus.data.tokenizer import get_tokenizer, TokenizerConfig
 from theseus.inference.base import InferenceJob
 from theseus.model.models.base import GPT
 from theseus.model.module import Module
@@ -26,6 +27,7 @@ class ChatConfig:
     max_new_tokens: int = field("inference/max_new_tokens", default=256)
     temperature: float = field("inference/temperature", default=0.8)
     top_p: float = field("inference/top_p", default=0.9)
+    system_prompt: str = field("inference/system_prompt", default="")
 
 
 @job("gpt/debug/chat/continuation")
@@ -34,24 +36,37 @@ class Chat(InferenceJob[ChatConfig, GPT]):
 
     @classmethod
     def config(cls) -> List[Any]:
-        return [ChatConfig]
+        return [ChatConfig, TokenizerConfig]
+
+    def _generate(
+        self, tok: Any, inp: Union[str, ChatTemplate]
+    ) -> tuple[List[int], str]:
+        [gen_ids] = self.rollout(
+            [inp],
+            tok,
+            max_new_tokens=self.args.max_new_tokens,
+            temperature=self.args.temperature,
+            top_p=self.args.top_p,
+            return_type="output_indices",
+        )
+        eot = tok.eot_token
+        if eot in gen_ids:
+            gen_ids = gen_ids[: gen_ids.index(eot)]
+        return gen_ids, tok.decode(gen_ids)
+
+    def _banner(self, mode: str) -> None:
+        logger.info(
+            "CHAT | ready  mode={}  max_new_tokens={}  temperature={}  top_p={}",
+            mode,
+            self.args.max_new_tokens,
+            self.args.temperature,
+            self.args.top_p,
+        )
+        print(f"\n--- chat:{mode} (ctrl-c to quit) ---\n")
 
     def run(self) -> None:
-        tok = get_tokenizer()
-
-        max_new = self.args.max_new_tokens
-        temp = self.args.temperature
-        top_p = self.args.top_p
-
-        logger.info(
-            "CHAT | ready  max_new_tokens={}  temperature={}  top_p={}",
-            max_new,
-            temp,
-            top_p,
-        )
-        print("\n--- chat (ctrl-c to quit) ---\n")
-
-        eot = tok.eot_token
+        tok = get_tokenizer(configure(TokenizerConfig))
+        self._banner("continuation")
 
         while True:
             try:
@@ -63,20 +78,50 @@ class Chat(InferenceJob[ChatConfig, GPT]):
             if not prompt.strip():
                 continue
 
-            [gen_ids] = self.rollout(
-                [prompt],
-                tok,
-                max_new_tokens=max_new,
-                temperature=temp,
-                top_p=top_p,
-                return_type="output_indices",
-            )
-
-            if eot in gen_ids:
-                gen_ids = gen_ids[: gen_ids.index(eot)]
-
-            print(tok.decode(gen_ids))
+            _, text = self._generate(tok, prompt)
+            print(text)
             print()
+
+
+class TurnsRunMixin:
+    """Provides a turns-mode ``run`` that drives a chat-encoded conversation.
+
+    Routes ChatTemplate inputs through the active tokenizer's chat-template
+    API (HuggingFace ``apply_chat_template``, or ChatML for tiktoken) via
+    ``rollout``. The mixin assumes ``self`` provides ``_generate``,
+    ``_banner``, and an ``args.system_prompt`` config field — i.e. it is
+    mixed onto a ``Chat`` (or ``Chat`` subclass) instance.
+    """
+
+    def run(self) -> None:
+        tok = get_tokenizer()
+        self._banner("turns")  # type: ignore[attr-defined]
+
+        system_prompt: str = self.args.system_prompt  # type: ignore[attr-defined]
+        history: ChatTemplate = []
+        if system_prompt:
+            history.append(ChatTurn(role="system", message=system_prompt))
+
+        while True:
+            try:
+                prompt = input("> ")
+            except (EOFError, KeyboardInterrupt):
+                print("\nbye")
+                break
+
+            if not prompt.strip():
+                continue
+
+            history.append(ChatTurn(role="user", message=prompt))
+            _, text = self._generate(tok, history)  # type: ignore[attr-defined]
+            print(text)
+            print()
+            history.append(ChatTurn(role="assistant", message=text.strip()))
+
+
+@job("gpt/debug/chat/turns")
+class ChatTurns(TurnsRunMixin, Chat):
+    pass
 
 
 @job("backbone/debug/chat/continuation")
@@ -87,7 +132,7 @@ class ChatPretrained(Chat):
 
     @classmethod
     def config(cls) -> List[Any]:
-        return [ChatConfig, BackboneConfig, ModelDtypeConfig]
+        return [ChatConfig, BackboneConfig, ModelDtypeConfig, TokenizerConfig]
 
     def __init__(self, spec: ExecutionSpec) -> None:
         super().__init__(spec)
@@ -138,3 +183,8 @@ class ChatPretrained(Chat):
             return x
 
         return jax.tree_util.tree_map(cast_leaf, params)
+
+
+@job("backbone/debug/chat/turns")
+class ChatTurnsPretrained(TurnsRunMixin, ChatPretrained):
+    pass
