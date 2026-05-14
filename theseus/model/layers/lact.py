@@ -69,7 +69,8 @@ def inner_loss(W: FastWeights, k: jax.Array, v: jax.Array, eta: jax.Array) -> ja
 
     Args:
         W: FastWeights for this sequence.
-        k, v: (b, d) keys / values for ``b`` tokens.
+        k: (b, d) keys for ``b`` tokens.
+        v: (b, d) values for ``b`` tokens.
         eta: (b,) per-token inner learning rates (zero on padded positions).
 
     Returns:
@@ -213,9 +214,11 @@ def chunked_update_and_apply_single(
     """Run the chunked TTT inner loop for one sequence.
 
     Args:
-        W0, M0: initial fast weights and momentum (typically the slow params and zeros).
-        K, V, Q: (T, d) tensors.  Q is the query, K/V the key/value the chunk's
-            inner loss is computed against.
+        W0: initial fast weights (typically the slow params).
+        M0: initial momentum (zeros when ``optimizer == "gd"``).
+        K: (T, d) keys the chunk's inner loss is computed against.
+        V: (T, d) values the chunk's inner loss is computed against.
+        Q: (T, d) queries.
         eta: (T,) per-token learning rates.  Pre-zero padded positions before calling.
         chunk_size: tokens per inner-loop chunk (``b`` in the paper).
         optimizer: ``"gd"`` | ``"momentum"`` | ``"muon"``.
@@ -278,10 +281,16 @@ def chunked_update_and_apply(
     """Batched wrapper around ``chunked_update_and_apply_single``.
 
     Args:
-        W0, M0: batched FastWeights / FastMomentum with leading batch axis.
-        K, V, Q: (B, T, d).
-        eta: (B, T).
-        Other args: see ``chunked_update_and_apply_single``.
+        W0: batched initial FastWeights with leading batch axis.
+        M0: batched initial FastMomentum with leading batch axis.
+        K: (B, T, d) keys.
+        V: (B, T, d) values.
+        Q: (B, T, d) queries.
+        eta: (B, T) per-token learning rates.
+        chunk_size: see ``chunked_update_and_apply_single``.
+        optimizer: see ``chunked_update_and_apply_single``.
+        beta: see ``chunked_update_and_apply_single``.
+        apply_then_update: see ``chunked_update_and_apply_single``.
 
     Returns:
         ``(out (B, T, d), W_final (B, ...), M_final (B, ...))``.

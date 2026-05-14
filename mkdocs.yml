@@ -69,6 +69,7 @@ markdown_extensions:
 
 nav:
   - Getting Started: index.md
+  - Launch Commands: launch_commands.md
   - Tutorials:
     - Overview: Tutorials/index.md
     - Running Experiments:
@@ -84,6 +85,7 @@ nav:
       - Experiment: Tutorials/adding-experiment.md
       - Dataset: Tutorials/adding-dataset.md
       - Evaluation: Tutorials/adding-evaluation.md
+      - Analysis Job: Tutorials/adding-analysis-job.md
   - Design:
     - Overview: Design/index.md
     - Dispatch Infrastructure: Design/dispatch.md
