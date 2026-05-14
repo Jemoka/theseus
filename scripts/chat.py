@@ -40,7 +40,7 @@ class Chat(InferenceJob[ChatConfig, GPT]):
             temp,
             top_p,
         )
-        print("\n--- scratchbubbles chat (ctrl-c to quit) ---\n")
+        print("\n--- chat (ctrl-c to quit) ---\n")
 
         eot = tok.eot_token
 
