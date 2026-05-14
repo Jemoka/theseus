@@ -42,4 +42,4 @@ eval:
 request:
   chip: h100
   min_chips: 2
-  n_shards: 2
+  n_shards: 1
