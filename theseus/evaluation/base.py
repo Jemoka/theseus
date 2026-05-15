@@ -326,7 +326,7 @@ class RolloutEvaluation(Evaluation):
         eot_token = getattr(encoding, "eot_token", None)
         if eot_token is not None:
             generated_rows = [
-                row[: row.index(eot_token) + 1] if eot_token in row else row
+                row[: row.index(eot_token)] if eot_token in row else row
                 for row in generated_rows
             ]
         decoded_results = encoding.decode_batch(generated_rows)
