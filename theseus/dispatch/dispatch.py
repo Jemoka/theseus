@@ -763,7 +763,67 @@ def _dispatch_volcano(
     )
     script = job.to_script()
 
-    # 2. Snapshot code and ship everything to PVC via a single helper vcjob
+    from rich.console import Console
+    from rich.prompt import Confirm
+
+    def _check_and_prompt_existing(label: str) -> RunResult | None:
+        """Return a RunResult error if the job exists and the user declines replacement, else None."""
+        existing = volcano_mod.get_job_status(
+            job_name=job_name,
+            namespace=namespace,
+            kubeconfig=kubeconfig,
+            context=context,
+        )
+        if existing is None:
+            return None
+        phase = existing.get("status", {}).get("state", {}).get("phase", "Unknown")
+        _console = Console()
+        _console.print()
+        _console.print(
+            f"[yellow]Volcano Job [bold]'{job_name}'[/bold] already exists "
+            f"in namespace [bold]'{namespace}'[/bold] (phase: [bold]{phase}[/bold]).[/yellow]"
+        )
+        _console.print(
+            "[yellow]Volcano does not allow patching immutable fields on an existing job.[/yellow]"
+        )
+        if label:
+            _console.print(f"[yellow]({label})[/yellow]")
+        _console.print()
+        replace = Confirm.ask(
+            "[bold]Delete the existing job and submit a new one?[/bold]",
+            default=False,
+        )
+        if not replace:
+            _console.print("[red]Aborted.[/red]")
+            return RunResult(
+                returncode=1,
+                stdout="",
+                stderr=(
+                    f"Volcano Job '{job_name}' already exists (phase: {phase}). "
+                    f"User chose not to replace it."
+                ),
+            )
+        _console.print(f"[cyan]Deleting existing Volcano Job '{job_name}'...[/cyan]")
+        del_result = volcano_mod.delete_job(
+            job_name=job_name,
+            namespace=namespace,
+            kubeconfig=kubeconfig,
+            context=context,
+        )
+        if not del_result.ok:
+            logger.error(
+                f"DISPATCH | failed to delete existing job: {del_result.stderr}"
+            )
+            return del_result
+        _console.print(f"[green]Deleted '{job_name}'. Proceeding...[/green]")
+        return None
+
+    # 2. Check for an existing job before incurring the cost of shipping to PVC
+    check_result = _check_and_prompt_existing("")
+    if check_result is not None:
+        return check_result
+
+    # 3. Snapshot code and ship everything to PVC via a single helper vcjob
     logger.debug(
         f"DISPATCH | shipping code + bootstrap to PVC '{host_config.pvc_name}' (dirty={dirty})"
     )
@@ -818,58 +878,10 @@ def _dispatch_volcano(
         cluster_env=cluster_env,
     )
 
-    # 5. Check for existing job and bail if one already exists
-    existing = volcano_mod.get_job_status(
-        job_name=job_name,
-        namespace=namespace,
-        kubeconfig=kubeconfig,
-        context=context,
-    )
-    if existing is not None:
-        phase = existing.get("status", {}).get("state", {}).get("phase", "Unknown")
-
-        from rich.console import Console
-        from rich.prompt import Confirm
-
-        _console = Console()
-        _console.print()
-        _console.print(
-            f"[yellow]Volcano Job [bold]'{job_name}'[/bold] already exists "
-            f"in namespace [bold]'{namespace}'[/bold] (phase: [bold]{phase}[/bold]).[/yellow]"
-        )
-        _console.print(
-            "[yellow]Volcano does not allow patching immutable fields on an existing job.[/yellow]"
-        )
-        _console.print()
-
-        replace = Confirm.ask(
-            "[bold]Delete the existing job and submit a new one?[/bold]",
-            default=False,
-        )
-        if not replace:
-            _console.print("[red]Aborted.[/red]")
-            return RunResult(
-                returncode=1,
-                stdout="",
-                stderr=(
-                    f"Volcano Job '{job_name}' already exists (phase: {phase}). "
-                    f"User chose not to replace it."
-                ),
-            )
-
-        _console.print(f"[cyan]Deleting existing Volcano Job '{job_name}'...[/cyan]")
-        del_result = volcano_mod.delete_job(
-            job_name=job_name,
-            namespace=namespace,
-            kubeconfig=kubeconfig,
-            context=context,
-        )
-        if not del_result.ok:
-            logger.error(
-                f"DISPATCH | failed to delete existing job: {del_result.stderr}"
-            )
-            return del_result
-        _console.print(f"[green]Deleted '{job_name}'. Submitting new job...[/green]")
+    # 5. Re-check: a concurrent submission may have created the job while we were shipping
+    check_result = _check_and_prompt_existing("job appeared during PVC shipping")
+    if check_result is not None:
+        return check_result
 
     # 6. Submit via kubectl apply
     logger.info(f"DISPATCH | submitting Volcano Job '{job_name}'")
